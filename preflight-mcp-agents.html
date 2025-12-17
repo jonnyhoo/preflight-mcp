@@ -1,0 +1,347 @@
+<html>
+  
+  <head>
+    <meta charset="utf-8">
+  </head>
+  
+  <body>
+    <h2>Preflight-MCP（项目前置“证据包”生成器）— 对话结论版说明书（Agent 可直接照做）</h2>
+
+    <blockquote>
+      <p>目标：以后不需要重复这段对话。任何 agent 只要读这份文档，就能理解：我们要做什么、怎么做、怎么用、怎么避免幻觉、怎么更新。
+        <br />选型结论：<strong>npm + TypeScript + stdio</strong>（发布到 npm，mcp-hub 用 stdio
+        安装运行）。</p>
+    </blockquote>
+    <hr />
+    
+<h2>0. 一句话解释（给人类和 agent 的直觉）</h2>
+
+    <p>你要做一个自己托管的 MCP 服务：<code>preflight-mcp</code>。
+      <br />它的作用不是“替你思考”，而是<strong>把外部开源仓库/依赖文档抓下来，做成可复用、可搜索、可追溯的“证据包（bundle）”</strong>。
+      <br
+      />agent 之后只需要在这个证据包里查证据并引用，就不会跑偏、不会凭空猜。</p>
+    <hr />
+    
+<h2>1. 需求（来自对话的最终确认）</h2>
+
+    
+<h3>必选项</h3>
+
+    <ul>
+      <li><strong>Transport</strong>：stdio（mcp-hub 安装运行）</li>
+      <li><strong>发布方式</strong>：npm（TypeScript 实现），未来可能做 Python 版本（pypi）</li>
+      <li><strong>分析对象</strong>：外部开源参考仓库（GitHub）</li>
+      <li><strong>索引范围</strong>：文档 + 代码（全文搜索）</li>
+      <li><strong>概览策略</strong>：S2（允许生成 overview，但<strong>每句话必须有证据引用</strong>；没证据就写“未发现/未知”）</li>
+      <li><strong>更新能力</strong>：支持手动更新（一个命令刷新已存在 bundle），并可选“用时自动检查更新”</li>
+    </ul>
+    
+<h3>你想达到的效果（关键）</h3>
+
+    <ul>
+      <li>资料包要“像 deepwiki / agents.md / context7 那样”让 agent 秒懂</li>
+      <li>重点：<strong>不幻觉、不脑补、所有结论据实（可追溯到原文证据）</strong>
+      </li>
+    </ul>
+    <hr />
+    
+<h2>2. 为什么不做“把 GitMCP / deepwiki-mcp / Context7 直接合成一个代理 MCP”？</h2>
+
+    <p>你想要的是“项目前置资料包”，不是“把所有底层工具都暴露出来”。</p>
+    <p><strong>代理型聚合</strong>会迫使你处理：</p>
+    <ul>
+      <li>多 transport（stdio / SSE / streamable HTTP）会话与流式</li>
+      <li>工具命名冲突、schema 差异、行为差异</li>
+      <li>进度/长任务/错误一致性</li>
+    </ul>
+    <p>对你的目标不划算。</p>
+    <p><strong>我们做的是“编排型聚合”</strong>：对外只提供少量高层工具 + 一套可读的 resources。</p>
+    <hr />
+    
+<h2>3. 外部来源怎么用（A 方案的真实含义）</h2>
+
+    <p>你确认的 A 方案：<code>preflight-mcp</code> 会对外网发请求获取公开资料，然后把资料存进你自己的 bundle。</p>
+    <p>三类来源（按用途）：</p>
+    <ol>
+      <li><strong>GitHub（核心）</strong>：抓 repo 的 README/docs/关键配置/部分源码；也用来判断 repo
+        是否更新（commit 是否变化）</li>
+      <li><strong>deepwiki（可选增强）</strong>：如果你提供 deepwiki URL，则抓 deepwiki 页面并转 Markdown
+        作为补充材料</li>
+      <li><strong>Context7（可选增强）</strong>：用于“依赖/框架文档片段”，但要认清：它有免费档，但通常<strong>会有限流/配额</strong>（所以必须缓存、去重、退避）</li>
+    </ol>
+    <blockquote>
+      <p>关键策略：无论从哪抓来的内容，<strong>都落到 bundle 里</strong>，以后 agent 主要读 bundle，而不是每次重抓。</p>
+    </blockquote>
+    <hr />
+    
+<h2>4. “不幻觉”的工程实现：把 bundle 做成“证据卷宗”</h2>
+
+    <p>要让 agent 不跑偏，核心不是“写更漂亮的总结”，而是建立<strong>证据链</strong>：</p>
+    
+<h3>4.1 三层结构（强烈建议固定下来）</h3>
+
+    <ol>
+      <li>
+        <p><strong>Raw Evidence（原始证据）</strong>
+          <br />原样保存抓到的文件：README、docs、配置文件、源码片段等</p>
+        <ul>
+          <li>不改写</li>
+          <li>记录来源（repo、commit、路径）</li>
+          <li>每个文件算 hash（防篡改/防变化）</li>
+        </ul>
+      </li>
+      <li>
+        <p><strong>Normalized Evidence（可读证据）</strong>
+          <br />把 raw 中适合阅读/检索的内容规范化（例如统一换行/编码/markdown），但仍然不“总结”。
+          <br />同时维护从 normalized 回到 raw 的映射（至少能定位到文件与行号/范围）。</p>
+      </li>
+      <li>
+        <p><strong>Agent Guides（给 agent 的导航与规则）</strong> 
+        </p>
+        <ul>
+          <li><code>START_HERE.md</code>：从哪读起、目录、常用入口</li>
+          <li><code>AGENTS.md</code>：强规则（必须遵守）</li>
+          <li><code>OVERVIEW.md</code>：S2 概览（每条都带 evidence）</li>
+        </ul>
+      </li>
+    </ol>
+    
+<h3>4.2 AGENTS.md（必须有，且要强硬）</h3>
+
+    <p>建议把以下规则写死（可直接复制到 bundle 的 <code>AGENTS.md</code>）：</p>
+    <ul>
+      <li><strong>只能依据本 bundle 的资源回答</strong>
+      </li>
+      <li><strong>每个结论必须附 Evidence（文件 + 行号范围 / 片段）</strong>
+      </li>
+      <li><strong>找不到证据就必须明确说“资料包中未找到”</strong>，并建议下一步（search / update / expand
+        scope）</li>
+      <li>禁止“推测/猜测/大概率/应该是”这类没有证据的措辞</li>
+    </ul>
+    <hr />
+    
+<h2>5. MCP 对外接口（建议的最小工具集 + Resources）</h2>
+
+    
+<h3>5.1 MCP Tools（对外给 agent 调用的“动作”）</h3>
+
+    <p>建议最少 4 个工具（够用且清晰）：</p>
+    <ol>
+      <li><code>preflight_create_bundle</code>
+      </li>
+    </ol>
+    <ul>
+      <li>输入：repo 列表（GitHub / deepwiki）、（可选）libraries、topics、索引参数、抓取限制</li>
+      <li>输出：<code>bundleId</code> + 若干 resource links（START_HERE/AGENTS/OVERVIEW/manifest）</li>
+    </ul>
+    <ol>
+      <li><code>preflight_update_bundle</code>
+      </li>
+    </ol>
+    <ul>
+      <li>输入：<code>bundleId</code> + 更新策略（check-only / update）、（可选）force、（可选）reindex</li>
+      <li>输出：更新结果（哪些 repo 更新了、旧/新 commit、更新时间）+ resource links</li>
+    </ul>
+    <ol>
+      <li><code>preflight_search_bundle</code>
+      </li>
+    </ol>
+    <ul>
+      <li>输入：<code>bundleId</code> + query + scope（docs/code/all）+ limit</li>
+      <li>输出：命中列表，每条都包含：
+        <ul>
+          <li>文件路径（bundle 内）</li>
+          <li>行号范围</li>
+          <li>原文片段（snippet）</li>
+          <li>可打开的 resource uri（让 agent 直接点开看原文）</li>
+        </ul>
+      </li>
+    </ul>
+    <ol>
+      <li><code>preflight_verify_claim</code>（强烈建议）</li>
+    </ol>
+    <ul>
+      <li>输入：<code>bundleId</code> + claim（一句话断言）</li>
+      <li>输出：
+        <ul>
+          <li>找到的最相关证据片段（带定位），或</li>
+          <li>明确“未找到证据”</li>
+        </ul>
+      </li>
+    </ul>
+    <blockquote>
+      <p>这工具非常适合把 agent 的“脑补冲动”掐断：先验证再回答。</p>
+    </blockquote>
+    
+<h3>5.2 MCP Resources（对外给 agent “阅读证据”的入口）</h3>
+
+    <p>核心就是把 bundle 内文件用资源 URI 暴露出去，例如：</p>
+    <ul>
+      <li><code>preflight://bundle/&lt;bundleId&gt;/START_HERE.md</code>
+      </li>
+      <li><code>preflight://bundle/&lt;bundleId&gt;/AGENTS.md</code>
+      </li>
+      <li><code>preflight://bundle/&lt;bundleId&gt;/OVERVIEW.md</code>
+      </li>
+      <li><code>preflight://bundle/&lt;bundleId&gt;/manifest.json</code>
+      </li>
+      <li><code>preflight://bundle/&lt;bundleId&gt;/repos/&lt;owner&gt;/&lt;repo&gt;/...</code>
+      </li>
+    </ul>
+    <p>资源要写好 <code>title/description</code>，因为 MCP 规范强调 description 能帮助模型理解资源用途（相当于“提示词”但更可靠）。</p>
+    <hr
+    />
+    
+<h2>6. Bundle 目录结构（建议固定格式，方便 TS/Python 双实现）</h2>
+
+    <p>一个 bundle 是一个文件夹（或可打包为 zip），结构建议如下：</p>
+    <ul>
+      <li><code>manifest.json</code>（机器可读：输入、repo 列表、commit、抓取时间、索引版本、配置）</li>
+      <li><code>START_HERE.md</code>
+      </li>
+      <li><code>AGENTS.md</code>
+      </li>
+      <li><code>OVERVIEW.md</code>（S2：所有条目都带 evidence）</li>
+      <li><code>repos/&lt;owner&gt;/&lt;repo&gt;/</code>
+        <ul>
+          <li><code>meta.json</code>（该 repo 的 commit、抓取时间、来源、统计）</li>
+          <li><code>raw/</code>（原始证据：原文件）</li>
+          <li><code>norm/</code>（规范化证据：适合阅读/索引）</li>
+        </ul>
+      </li>
+      <li><code>libraries/</code>（可选：Context7 输出落地到这里，按 libraryId/topic/page 存）</li>
+      <li><code>indexes/</code>（全文索引数据：docs + code）</li>
+      <li><code>logs/</code>（可选：抓取/索引日志）</li>
+    </ul>
+    <blockquote>
+      <p>未来 Python 版只要遵守同一 bundle 格式，就能无缝复用你已有的资料包。</p>
+    </blockquote>
+    <hr />
+    
+<h2>7. 全文索引（轻量，但必须“可定位、可复核”）</h2>
+
+    <p>你要索引“文档 + 代码”，但要保证 agent 不幻觉，就必须做到：</p>
+    <ul>
+      <li>搜索结果返回 <strong>snippet + 行号范围</strong>（不是只返回文件名）</li>
+      <li>最好能生成 GitHub permalink（带 commit SHA + 行号），用于“外部复核”（可选）</li>
+    </ul>
+    <p>实现上建议两层策略：</p>
+    <ul>
+      <li><strong>索引层</strong>：建立全文索引（轻量、可增量）</li>
+      <li><strong>读取层</strong>：真正引用时，始终以 bundle 文件原文为准（避免索引和原文不一致）</li>
+    </ul>
+    <p>索引要默认排除：</p>
+    <ul>
+      <li><code>node_modules/</code>, <code>dist/</code>, <code>build/</code>, <code>.git/</code>,
+        大体积二进制文件等
+        <br />并设置上限：</li>
+      <li>单文件最大字节数、总索引字节数、最大文件数（防止仓库过大把你打爆）</li>
+    </ul>
+    <hr />
+    
+<h2>8. 更新机制（你要的“一个命令就更新它”）</h2>
+
+    
+<h3>8.1 手动更新（最核心）</h3>
+
+    <p><code>preflight_update_bundle(bundleId)</code> 做：</p>
+    <ol>
+      <li>对 bundle 里的每个 repo 检查远端最新 commit（或 tag/branch HEAD）</li>
+      <li>对比 <code>manifest.json</code> / <code>repos/*/meta.json</code> 记录的旧 commit</li>
+      <li>若变化：
+        <ul>
+          <li>拉取更新（只抓需要的文件/范围）</li>
+          <li>更新 raw/norm</li>
+          <li>重建索引（或增量更新）</li>
+          <li>重新生成 <code>OVERVIEW.md</code>（仍需每条带证据）</li>
+        </ul>
+      </li>
+    </ol>
+    
+<h3>8.2 “用时自动更新”（不需要常驻守护进程）</h3>
+
+    <p>因为 stdio server 通常不是常驻，你可以做一个“懒更新”策略：</p>
+    <ul>
+      <li>在 <code>preflight_search_bundle</code> / <code>preflight_verify_claim</code> 支持参数：<code>ensureFresh: true</code> 或 <code>maxAgeHours</code>
+      </li>
+      <li>如果 bundle 太久没更新：先 check commit，必要时触发更新，再执行搜索/验证</li>
+    </ul>
+    <p>这满足“像自动更新一样好用”，但实现简单。</p>
+    <hr />
+    
+<h2>9. 运行与发布（npm/TS 的落地方式）</h2>
+
+    
+<h3>9.1 发布形态</h3>
+
+    <ul>
+      <li>npm 包：<code>preflight-mcp</code>（名字你定）</li>
+      <li>stdio 启动：<code>npx -y preflight-mcp</code>（或 <code>@scope/preflight-mcp</code>）</li>
+      <li>配置通过环境变量/参数：
+        <ul>
+          <li>bundle 存储目录</li>
+          <li>GitHub token（可选，用于提高 rate limit）</li>
+          <li>Context7 API key（可选）</li>
+          <li>并发/超时/重试</li>
+          <li>ignore 规则、索引上限等</li>
+        </ul>
+      </li>
+    </ul>
+    
+<h3>9.2 mcp-hub 配置（示意）</h3>
+
+<pre><code class="language-json">{
+  "mcpServers": {
+    "preflight": {
+      "command": "npx",
+      "args": ["-y", "preflight-mcp"],
+      "env": {
+        "PREFLIGHT_STORAGE_DIR": "/data/preflight-bundles",
+        "GITHUB_TOKEN": "…(optional)…",
+        "CONTEXT7_API_KEY": "…(optional)…"
+      }
+    }
+  }
+}
+</code></pre>
+
+    <hr />
+    
+<h2>10. Python 版本复用指南（避免你以后再对话）</h2>
+
+    <p>如果你未来要做 <code>preflight-mcp</code> 的 Python 版，<strong>只要保持以下不变</strong>：</p>
+    <ol>
+      <li>MCP 工具名与输入/输出 schema（create/update/search/verify）</li>
+      <li>Resource URI 方案（<code>preflight://bundle/...</code>）</li>
+      <li>Bundle 目录结构与 manifest 字段</li>
+      <li>“S2 overview 必须带证据引用”的规则</li>
+    </ol>
+    <p>这样 TS 版生成的 bundle，Python 版照样能读、能搜、能更新（反之亦然）。</p>
+    <hr />
+    
+<h2>11. Agent 的标准使用流程（真正“秒懂”的操作顺序）</h2>
+
+    <p>当 agent 需要理解某个项目（bundleId 已存在）时，必须按这个顺序：</p>
+    <ol>
+      <li>打开 <code>preflight://bundle/&lt;bundleId&gt;/AGENTS.md</code> 并遵守</li>
+      <li>打开 <code>preflight://bundle/&lt;bundleId&gt;/START_HERE.md</code> 获取导航</li>
+      <li>读 <code>OVERVIEW.md</code>（只把它当索引/线索，不当最终真相）</li>
+      <li>遇到具体问题 → <code>preflight_search_bundle</code> 找原文证据</li>
+      <li>下结论前 → <code>preflight_verify_claim</code>（可选但推荐）</li>
+      <li>如果证据过旧 → <code>preflight_update_bundle</code>
+      </li>
+    </ol>
+    <hr />
+    
+<h2>12. 索引实现选择（已确认）</h2>
+
+    <p>你选择：<strong>SQLite FTS（FTS5）</strong>。</p>
+    <p>要求：</p>
+    <ul>
+      <li>搜索结果必须返回 <em>片段 + 行号范围 + 可打开资源 URI</em>
+      </li>
+      <li>实际引用必须能回到 bundle 原文证据（可复核）</li>
+    </ul>
+  </body>
+
+</html>

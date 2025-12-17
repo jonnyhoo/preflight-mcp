@@ -1,0 +1,15 @@
+node_modules/
+dist/
+
+# Smoke test output
+.preflight-test-bundles/
+.preflight-test-bundles-c7/
+
+# Default bundle storage (if pointed inside repo)
+.preflight-mcp/
+
+# Logs
+*.log
+
+# npm pack
+preflight-mcp-*.tgz
