@@ -1,6 +1,8 @@
 # preflight-mcp
 
-一个 MCP (Model Context Protocol) **stdio** 服务器，为外部 GitHub 仓库创建**基于证据的、可复用的 "bundle" 包**。
+> [English](./README.md) | **中文**
+
+一个 MCP (Model Context Protocol) **stdio** 服务器
 
 ## 📦 Bundle 包含内容
 
