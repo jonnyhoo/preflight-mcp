@@ -10,9 +10,9 @@ Each bundle contains:
 - Agent-facing entry files: `START_HERE.md`, `AGENTS.md`, and `OVERVIEW.md` (factual-only, with evidence pointers)
 
 ## What you get
-- **10 Tools** to create/update/search/verify/read/analyze bundles
-- **AI-powered analysis** with static facts extraction and LLM summaries
-- **Evidence-based validation** to detect hallucinations
+- **10 Tools** to create/update/search/verify/read bundles
+- **Static facts extraction** via `analysis/FACTS.json` (non-LLM)
+- **Evidence-based verification** to reduce hallucinations
 - **Resources** to read bundle files via `preflight://...` URIs
 - **Multi-path mirror backup** for cloud storage redundancy
 - **Resilient storage** with automatic failover when mounts are unavailable
@@ -98,18 +98,14 @@ Optional parameters:
 - `ensureFresh`: If true, check if bundle needs update before searching.
 - `maxAgeHours`: Max age in hours before triggering auto-update (default: 24).
 
-### `preflight_analyze_bundle`
-Generate or regenerate AI analysis for a bundle.
-- Triggers: "analyze this bundle", "generate analysis", "分析bundle"
+### `preflight_search_by_tags`
+Search across multiple bundles filtered by tags (line-based SQLite FTS5).
+- Triggers: "search in MCP bundles", "search in all bundles", "在MCP项目中搜索", "搜索所有agent"
 
-Parameters:
-- `bundleId`: Bundle ID to analyze
-- `mode`: Analysis mode - `quick` (static only) or `deep` (static + LLM)
-- `regenerate`: If true, regenerate analysis even if it exists
-
-Generates:
-- **FACTS.json**: Static analysis (languages, frameworks, dependencies, entry points)
-- **AI_SUMMARY.md**: LLM-generated summary with architecture overview and usage guide (deep mode only)
+Optional parameters:
+- `tags`: Filter bundles by tags (e.g., `["mcp", "agents"]`)
+- `scope`: Search scope (`docs`, `code`, or `all`)
+- `limit`: Max total hits across all bundles
 
 ### `preflight_verify_claim`
 Find evidence for a claim/statement in bundle.
@@ -138,11 +134,8 @@ Examples:
 - `PREFLIGHT_MAX_FILE_BYTES`: max bytes per file (default: 512 KiB)
 - `PREFLIGHT_MAX_TOTAL_BYTES`: max bytes per repo ingest (default: 50 MiB)
 
-### Analysis (NEW)
-- `PREFLIGHT_ANALYSIS_MODE`: Analysis mode - `none`, `quick`, or `deep` (default: `quick`)
-- `PREFLIGHT_LLM_PROVIDER`: LLM provider - `none`, `openai`, or `context7` (default: `none`)
-- `OPENAI_API_KEY`: OpenAI API key (required for `deep` mode with `openai` provider)
-- `OPENAI_MODEL`: OpenAI model (default: `gpt-4o-mini`)
+### Analysis
+- `PREFLIGHT_ANALYSIS_MODE`: Static analysis mode - `none` or `quick` (default: `quick`). Generates `analysis/FACTS.json`.
 
 ### GitHub & Context7
 - `GITHUB_TOKEN`: optional; used for GitHub API/auth patterns (currently not required for public repos)
@@ -156,8 +149,7 @@ Inside a bundle directory:
 - `AGENTS.md`
 - `OVERVIEW.md`
 - `indexes/search.sqlite3`
-- **`analysis/FACTS.json`** (NEW - static analysis)
-- **`analysis/AI_SUMMARY.md`** (NEW - LLM analysis)
+- **`analysis/FACTS.json`** (static analysis)
 - `repos/<owner>/<repo>/raw/...`
 - `repos/<owner>/<repo>/norm/...`
 - `deepwiki/<owner>/<repo>/norm/index.md` (DeepWiki sources)

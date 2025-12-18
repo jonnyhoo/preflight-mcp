@@ -97,20 +97,6 @@ try {
 
   console.log('list_bundles:', listRes.structuredContent);
 
-  // Test preflight_analyze_bundle
-  const analyzeRes = await client.callTool({
-    name: 'preflight_analyze_bundle',
-    arguments: { bundleId, mode: 'quick', regenerate: false },
-  });
-
-  console.log('analyze_bundle:', analyzeRes.content?.[0]?.type === 'text' ? 'OK' : 'ERROR');
-  if (analyzeRes.content?.[0]?.type === 'text') {
-    const txt = analyzeRes.content[0].text;
-    if (!txt.includes('FACTS.json') && !txt.includes('analysis')) {
-      throw new Error('Expected analysis output');
-    }
-  }
-
   console.log('OK');
 } finally {
   await client.close().catch(() => undefined);

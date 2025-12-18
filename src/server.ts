@@ -1,5 +1,4 @@
 import fs from 'node:fs/promises';
-import path from 'node:path';
 
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -16,11 +15,9 @@ import {
   listBundles,
   updateBundle,
 } from './bundle/service.js';
-import { generateAndSaveAnalysis } from './bundle/llm-analysis.js';
-import { readFacts } from './bundle/facts.js';
 import { readManifest } from './bundle/manifest.js';
 import { safeJoin, toBundleFileUri } from './mcp/uris.js';
-import { searchIndex, type SearchScope } from './search/sqliteFts.js';
+import { searchIndex, verifyClaimInIndex, type SearchScope, type EvidenceType } from './search/sqliteFts.js';
 import { logger } from './logging/logger.js';
 
 const CreateRepoInputSchema = z.union([
@@ -37,8 +34,8 @@ const CreateRepoInputSchema = z.union([
 
 const CreateBundleInputSchema = {
   repos: z.array(CreateRepoInputSchema).min(1).describe('Repositories to ingest into the bundle.'),
-  libraries: z.array(z.string()).optional().describe('Optional library names for Context7 (not implemented yet).'),
-  topics: z.array(z.string()).optional().describe('Optional topics for Context7 (not implemented yet).'),
+  libraries: z.array(z.string()).optional().describe('Optional library names for Context7 docs ingestion.'),
+  topics: z.array(z.string()).optional().describe('Optional Context7 topic filters (limits fetched docs).'),
 };
 
 const UpdateBundleInputSchema = {
@@ -61,6 +58,13 @@ const SearchBundleInputSchema = {
   limit: z.number().int().min(1).max(200).default(30).describe('Max number of hits.'),
   ensureFresh: z.boolean().optional().describe('If true, check if bundle needs update before searching.'),
   maxAgeHours: z.number().optional().describe('Max age in hours before triggering auto-update (requires ensureFresh).'),
+};
+
+const SearchByTagsInputSchema = {
+  query: z.string().describe('Search query across bundles.'),
+  tags: z.array(z.string()).optional().describe('Filter by tags (e.g., ["mcp", "agents"]). Searches only matching bundles.'),
+  scope: z.enum(['docs', 'code', 'all']).default('all').describe('Search scope.'),
+  limit: z.number().int().min(1).max(200).default(50).describe('Max total hits across all bundles.'),
 };
 
 const VerifyClaimInputSchema = {
@@ -89,11 +93,6 @@ const ReadFileInputSchema = {
   file: z.string().default('OVERVIEW.md').describe('File path relative to bundle root. Common files: OVERVIEW.md, START_HERE.md, AGENTS.md, manifest.json, or any repo file like repos/owner/repo/norm/README.md'),
 };
 
-const AnalyzeBundleInputSchema = {
-  bundleId: z.string().describe('Bundle ID to analyze.'),
-  mode: z.enum(['quick', 'deep']).default('quick').describe('Analysis mode: quick (static only) or deep (static + LLM).'),
-  regenerate: z.boolean().default(false).describe('If true, regenerate analysis even if it already exists.'),
-};
 
 export async function startServer(): Promise<void> {
   const cfg = getConfig();
@@ -192,19 +191,91 @@ export async function startServer(): Promise<void> {
     'preflight_list_bundles',
     {
       title: 'List bundles',
-      description: 'List all preflight bundles. Use when: "show bundles", "what bundles exist", "list repos", "show my knowledge bases", "what have I indexed", "查看bundle", "有哪些bundle", "列出仓库".',
-      inputSchema: ListBundlesInputSchema,
+      description: 'List all preflight bundles with metadata. Use when: "show bundles", "what bundles exist", "list repos", "show my knowledge bases", "what have I indexed", "查看bundle", "有哪些bundle", "列出仓库".',
+      inputSchema: {
+        filterByTag: z.string().optional().describe('Filter by tag (e.g., "mcp", "agents", "web-scraping")'),
+        groupByCategory: z.boolean().default(false).describe('Group bundles by auto-detected categories'),
+      },
       outputSchema: {
-        bundles: z.array(z.string()),
+        bundles: z.array(
+          z.object({
+            bundleId: z.string(),
+            displayName: z.string().optional(),
+            description: z.string().optional(),
+            tags: z.array(z.string()).optional(),
+            primaryLanguage: z.string().optional(),
+            category: z.string().optional(),
+            repoCount: z.number(),
+          })
+        ),
+        grouped: z.record(z.string(), z.array(z.string())).optional(),
       },
       annotations: {
         readOnlyHint: true,
       },
     },
-    async () => {
+    async (args) => {
       const effectiveDir = await getEffectiveStorageDir(cfg);
       const ids = await listBundles(effectiveDir);
-      const out = { bundles: ids };
+      
+      // Read manifests for each bundle
+      const bundlesWithMeta: Array<{
+        bundleId: string;
+        displayName?: string;
+        description?: string;
+        tags?: string[];
+        primaryLanguage?: string;
+        category?: string;
+        repoCount: number;
+      }> = [];
+
+      for (const id of ids) {
+        try {
+          const paths = getBundlePathsForId(effectiveDir, id);
+          const manifest = await readManifest(paths.manifestPath);
+          
+          // Import getCategoryFromTags dynamically
+          const { getCategoryFromTags } = await import('./bundle/tagging.js');
+          const category = manifest.tags ? getCategoryFromTags(manifest.tags) : 'uncategorized';
+          
+          bundlesWithMeta.push({
+            bundleId: id,
+            displayName: manifest.displayName,
+            description: manifest.description,
+            tags: manifest.tags,
+            primaryLanguage: manifest.primaryLanguage,
+            category,
+            repoCount: manifest.repos.length,
+          });
+        } catch {
+          // Skip bundles with missing/corrupt manifests
+        }
+      }
+
+      // Filter by tag if specified
+      let filtered = bundlesWithMeta;
+      if (args.filterByTag) {
+        filtered = bundlesWithMeta.filter(
+          (b) => b.tags && b.tags.includes(args.filterByTag!)
+        );
+      }
+
+      // Group by category if requested
+      let grouped: Record<string, string[]> | undefined;
+      if (args.groupByCategory) {
+        grouped = {};
+        for (const bundle of filtered) {
+          const cat = bundle.category || 'uncategorized';
+          if (!grouped[cat]) grouped[cat] = [];
+          grouped[cat]!.push(bundle.bundleId);
+        }
+      }
+
+      const out = {
+        bundles: filtered,
+        grouped,
+      };
+      
       return {
         content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
         structuredContent: out,
@@ -592,6 +663,115 @@ export async function startServer(): Promise<void> {
   );
 
   server.registerTool(
+    'preflight_search_by_tags',
+    {
+      title: 'Search by tags',
+      description: 'Search across multiple bundles filtered by tags. Use when: "search in MCP bundles", "find in all agent repos", "search web-scraping tools", "在MCP项目中搜索", "搜索所有agent".',
+      inputSchema: SearchByTagsInputSchema,
+      outputSchema: {
+        query: z.string(),
+        tags: z.array(z.string()).optional(),
+        scope: z.enum(['docs', 'code', 'all']),
+        totalBundlesSearched: z.number(),
+        hits: z.array(
+          z.object({
+            bundleId: z.string(),
+            bundleName: z.string().optional(),
+            kind: z.enum(['doc', 'code']),
+            repo: z.string(),
+            path: z.string(),
+            lineNo: z.number(),
+            snippet: z.string(),
+            uri: z.string(),
+          })
+        ),
+      },
+      annotations: {
+        readOnlyHint: true,
+      },
+    },
+    async (args) => {
+      const effectiveDir = await getEffectiveStorageDir(cfg);
+      const allBundleIds = await listBundles(effectiveDir);
+      
+      // Filter bundles by tags if specified
+      let targetBundleIds: string[] = allBundleIds;
+      if (args.tags && args.tags.length > 0) {
+        targetBundleIds = [];
+        for (const id of allBundleIds) {
+          try {
+            const paths = getBundlePathsForId(effectiveDir, id);
+            const manifest = await readManifest(paths.manifestPath);
+            if (manifest.tags && args.tags.some((t) => manifest.tags!.includes(t))) {
+              targetBundleIds.push(id);
+            }
+          } catch {
+            // Skip bundles with errors
+          }
+        }
+      }
+
+      // Search each bundle and collect results
+      const allHits: Array<{
+        bundleId: string;
+        bundleName?: string;
+        kind: 'doc' | 'code';
+        repo: string;
+        path: string;
+        lineNo: number;
+        snippet: string;
+        uri: string;
+      }> = [];
+
+      for (const bundleId of targetBundleIds) {
+        try {
+          const paths = getBundlePathsForId(effectiveDir, bundleId);
+          const manifest = await readManifest(paths.manifestPath);
+          
+          const bundleHits = searchIndex(
+            paths.searchDbPath,
+            args.query,
+            args.scope as SearchScope,
+            args.limit
+          );
+
+          for (const hit of bundleHits) {
+            allHits.push({
+              bundleId,
+              bundleName: manifest.displayName,
+              kind: hit.kind,
+              repo: hit.repo,
+              path: hit.path,
+              lineNo: hit.lineNo,
+              snippet: hit.snippet,
+              uri: toBundleFileUri({ bundleId, relativePath: hit.path }),
+            });
+
+            if (allHits.length >= args.limit) break;
+          }
+
+          if (allHits.length >= args.limit) break;
+        } catch {
+          // Skip bundles with search errors
+        }
+      }
+
+      const out = {
+        query: args.query,
+        tags: args.tags,
+        scope: args.scope,
+        totalBundlesSearched: targetBundleIds.length,
+        hits: allHits.slice(0, args.limit),
+      };
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
+        structuredContent: out,
+      };
+    }
+  );
+
+  server.registerTool(
     'preflight_search_bundle',
     {
       title: 'Search bundle',
@@ -662,125 +842,20 @@ export async function startServer(): Promise<void> {
   );
 
   server.registerTool(
-    'preflight_analyze_bundle',
-    {
-      title: 'Analyze bundle',
-      description: 'Generate or regenerate AI analysis for a bundle. Use when: "analyze this bundle", "generate analysis", "create AI summary", "分析bundle", "生成分析报告".',
-      inputSchema: AnalyzeBundleInputSchema,
-      outputSchema: {
-        bundleId: z.string(),
-        mode: z.enum(['quick', 'deep']),
-        generated: z.boolean(),
-        factsPath: z.string().optional(),
-        summaryPath: z.string().optional(),
-        error: z.string().optional(),
-      },
-      annotations: {
-        openWorldHint: true,
-      },
-    },
-    async (args) => {
-      const effectiveDir = await getEffectiveStorageDir(cfg);
-      const exists = await bundleExists(effectiveDir, args.bundleId);
-      if (!exists) {
-        throw new Error(`Bundle not found: ${args.bundleId}`);
-      }
-
-      const paths = getBundlePathsForId(effectiveDir, args.bundleId);
-      const factsPath = path.join(paths.rootDir, 'analysis', 'FACTS.json');
-      const summaryPath = path.join(paths.rootDir, 'analysis', 'AI_SUMMARY.md');
-
-      try {
-        // Check if analysis already exists
-        const factsExist = await fs.access(factsPath).then(() => true).catch(() => false);
-        const summaryExist = await fs.access(summaryPath).then(() => true).catch(() => false);
-
-        if (!args.regenerate && factsExist && (args.mode === 'quick' || summaryExist)) {
-          const out = {
-            bundleId: args.bundleId,
-            mode: args.mode,
-            generated: false,
-            factsPath: factsExist ? factsPath : undefined,
-            summaryPath: summaryExist ? summaryPath : undefined,
-          };
-          return {
-            content: [{ type: 'text', text: `Analysis already exists. Use regenerate=true to force regeneration.\n${JSON.stringify(out, null, 2)}` }],
-            structuredContent: out,
-          };
-        }
-
-        // Read manifest to get repo info
-        const manifest = await readManifest(paths.manifestPath);
-        
-        // Prepare files list (simplified - we'll just note that analysis was triggered)
-        // In a real scenario, we'd re-read the actual files or use cached data
-        // Log analysis action (messages go to stderr via logger)
-        const action = args.regenerate ? 'Regenerating' : 'Generating';
-        logger.debug(`${action} ${args.mode} analysis for bundle ${args.bundleId}`);
-
-        // For deep mode, trigger LLM analysis
-        if (args.mode === 'deep') {
-          // Check if FACTS.json exists, if not we need static analysis first
-          if (!factsExist || args.regenerate) {
-            const out = {
-              bundleId: args.bundleId,
-              mode: args.mode,
-              generated: false,
-              error: 'Static analysis (FACTS.json) not found. Cannot run deep analysis without facts. Please run static analysis first by updating the bundle.',
-            };
-            return {
-              content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
-              structuredContent: out,
-              isError: true,
-            };
-          }
-
-          // Generate LLM analysis
-          await generateAndSaveAnalysis({
-            cfg,
-            bundleRoot: paths.rootDir,
-          });
-        }
-
-        const out = {
-          bundleId: args.bundleId,
-          mode: args.mode,
-          generated: true,
-          factsPath: args.mode === 'quick' || factsExist ? factsPath : undefined,
-          summaryPath: args.mode === 'deep' ? summaryPath : undefined,
-        };
-
-        return {
-          content: [{ type: 'text', text: `Analysis generated successfully.\n${JSON.stringify(out, null, 2)}` }],
-          structuredContent: out,
-        };
-      } catch (err) {
-        const out = {
-          bundleId: args.bundleId,
-          mode: args.mode,
-          generated: false,
-          error: err instanceof Error ? err.message : String(err),
-        };
-        return {
-          content: [{ type: 'text', text: `Analysis failed: ${out.error}\n${JSON.stringify(out, null, 2)}` }],
-          structuredContent: out,
-          isError: true,
-        };
-      }
-    }
-  );
-
-  server.registerTool(
     'preflight_verify_claim',
     {
       title: 'Verify claim',
-      description: 'Find evidence for a claim/statement in bundle. Use when: "verify this claim", "is this true", "find evidence for", "check if", "验证说法", "找证据", "这个对吗", "有没有依据".',
+      description: 'Verify a claim with evidence classification and confidence scoring. Returns supporting/contradicting/related evidence. Use when: "verify this claim", "is this true", "find evidence for", "check if", "验证说法", "找证据", "这个对吗", "有没有依据".',
       inputSchema: VerifyClaimInputSchema,
       outputSchema: {
         bundleId: z.string(),
         claim: z.string(),
         scope: z.enum(['docs', 'code', 'all']),
-        evidence: z.array(
+        found: z.boolean(),
+        confidence: z.number().describe('Confidence score 0-1'),
+        confidenceLabel: z.enum(['high', 'medium', 'low', 'none']),
+        summary: z.string().describe('Human-readable summary of verification'),
+        supporting: z.array(
           z.object({
             kind: z.enum(['doc', 'code']),
             repo: z.string(),
@@ -788,9 +863,34 @@ export async function startServer(): Promise<void> {
             lineNo: z.number(),
             snippet: z.string(),
             uri: z.string(),
+            evidenceType: z.enum(['supporting', 'contradicting', 'related']),
+            relevanceScore: z.number(),
           })
-        ),
-        found: z.boolean(),
+        ).describe('Evidence supporting the claim'),
+        contradicting: z.array(
+          z.object({
+            kind: z.enum(['doc', 'code']),
+            repo: z.string(),
+            path: z.string(),
+            lineNo: z.number(),
+            snippet: z.string(),
+            uri: z.string(),
+            evidenceType: z.enum(['supporting', 'contradicting', 'related']),
+            relevanceScore: z.number(),
+          })
+        ).describe('Evidence contradicting the claim'),
+        related: z.array(
+          z.object({
+            kind: z.enum(['doc', 'code']),
+            repo: z.string(),
+            path: z.string(),
+            lineNo: z.number(),
+            snippet: z.string(),
+            uri: z.string(),
+            evidenceType: z.enum(['supporting', 'contradicting', 'related']),
+            relevanceScore: z.number(),
+          })
+        ).describe('Related but inconclusive evidence'),
         autoUpdated: z.boolean().optional().describe('True if bundle was auto-updated due to ensureFresh.'),
       },
       annotations: {
@@ -821,18 +921,31 @@ export async function startServer(): Promise<void> {
         }
       }
 
-      const rawHits = searchIndex(paths.searchDbPath, args.claim, args.scope as SearchScope, args.limit);
-      const evidenceHits = rawHits.map((h) => ({
-        ...h,
-        uri: toBundleFileUri({ bundleId: args.bundleId, relativePath: h.path }),
-      }));
+      // Use differentiated verification with confidence scoring
+      const verification = verifyClaimInIndex(
+        paths.searchDbPath,
+        args.claim,
+        args.scope as SearchScope,
+        args.limit
+      );
+
+      // Add URIs to evidence hits
+      const addUri = (hit: typeof verification.supporting[0]) => ({
+        ...hit,
+        uri: toBundleFileUri({ bundleId: args.bundleId, relativePath: hit.path }),
+      });
 
       const out = {
         bundleId: args.bundleId,
         claim: args.claim,
         scope: args.scope,
-        found: evidenceHits.length > 0,
-        evidence: evidenceHits,
+        found: verification.found,
+        confidence: verification.confidence,
+        confidenceLabel: verification.confidenceLabel,
+        summary: verification.summary,
+        supporting: verification.supporting.map(addUri),
+        contradicting: verification.contradicting.map(addUri),
+        related: verification.related.map(addUri),
         autoUpdated,
       };
 

@@ -2,15 +2,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { analyzeBundleStatic } from '../dist/bundle/analysis.js';
-import { generateAndSaveAnalysis } from '../dist/bundle/llm-analysis.js';
-import { readFacts } from '../dist/bundle/facts.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 
 console.log('🧪 Full Integration Test\n');
-console.log('Testing the complete analysis pipeline on preflight-mcp itself...\n');
+console.log('Testing the static FACTS extraction pipeline on preflight-mcp itself...\n');
 
 // Create a test bundle directory
 const testBundleRoot = path.join(repoRoot, '.test-bundle');
@@ -33,8 +31,6 @@ try {
     'src/bundle/service.ts',
     'src/bundle/facts.ts',
     'src/bundle/analysis.ts',
-    'src/bundle/llm-analysis.ts',
-    'src/bundle/validation.ts',
     'package.json',
     'README.md',
     'tsconfig.json',
@@ -96,32 +92,6 @@ try {
   
   console.log('✅ FACTS.json generated and validated\n');
 
-  // Test Phase 2: LLM Analysis (fallback mode)
-  console.log('🤖 Phase 2: Running LLM Analysis (fallback mode)...');
-  
-  const cfg = {
-    analysisMode: 'deep',
-    llmProvider: 'none',
-    openaiApiKey: undefined,
-    openaiModel: 'gpt-4o-mini',
-  };
-
-  await generateAndSaveAnalysis({
-    cfg,
-    bundleRoot: testBundleRoot,
-  });
-
-  console.log('✅ LLM analysis completed!\n');
-
-  // Verify AI_SUMMARY.md was created
-  const summaryPath = path.join(testBundleRoot, 'analysis', 'AI_SUMMARY.md');
-  const summaryContent = await fs.readFile(summaryPath, 'utf8');
-  
-  console.log('✅ AI_SUMMARY.md generated\n');
-  console.log('--- AI SUMMARY PREVIEW (first 800 chars) ---');
-  console.log(summaryContent.substring(0, 800));
-  console.log('...\n');
-
   // Verify file structure
   console.log('📁 Verifying bundle structure...');
   const analysisDir = path.join(testBundleRoot, 'analysis');
@@ -167,21 +137,16 @@ try {
   console.log('✅ All phases completed successfully:');
   console.log('  1. ✅ Static fact extraction');
   console.log('  2. ✅ FACTS.json generation');
-  console.log('  3. ✅ LLM analysis (fallback mode)');
-  console.log('  4. ✅ AI_SUMMARY.md generation');
-  console.log('  5. ✅ File structure validation');
-  console.log('  6. ✅ Data integrity checks');
+  console.log('  3. ✅ File structure validation');
+  console.log('  4. ✅ Data integrity checks');
   
   console.log('\n📦 Generated artifacts:');
   console.log(`  - ${factsPath}`);
-  console.log(`  - ${summaryPath}`);
   
   console.log('\n🚀 System is ready for production use!');
   console.log('\nNext steps:');
-  console.log('  - Set PREFLIGHT_ANALYSIS_MODE=quick (or deep)');
-  console.log('  - Optional: Set PREFLIGHT_LLM_PROVIDER=openai');
-  console.log('  - Optional: Set OPENAI_API_KEY for deep analysis');
-  console.log('  - Run: npm start (or deploy to Warp)');
+  console.log('  - Set PREFLIGHT_ANALYSIS_MODE=quick');
+  console.log('  - Run: npm start');
 
 } catch (err) {
   console.error('\n❌ Integration test failed:', err);

@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "preflight": {
+      "command": "node",
+      "args": ["E:\\VIBE_CODING_WORK\\preflight-mcp\\dist\\index.js"],
+      "env": {
+        "PREFLIGHT_STORAGE_DIRS": "D:\\OneDrive\\preflight-bundles;E:\\GoogleDrive\\preflight-bundles",
+        "PREFLIGHT_TMP_DIR": "E:\\VIBE_CODING_WORK\\preflight-tmp",
+        "PREFLIGHT_ANALYSIS_MODE": "quick",
+        "PREFLIGHT_MAX_FILE_BYTES": "1048576",
+        "PREFLIGHT_MAX_TOTAL_BYTES": "104857600",
+        "GITHUB_TOKEN": "your-github-token-here",
+        "CONTEXT7_API_KEY": "your-context7-api-key-here"
+      }
+    }
+  }
+}

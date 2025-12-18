@@ -22,6 +22,8 @@ interface JobTask {
 	task: ScheduledTask;
 	cronExpression: string;
 	retries: number;
+	running: boolean;
+	retryTimeout?: NodeJS.Timeout;
 	lastRun?: Date;
 	lastError?: Error;
 }
@@ -36,6 +38,13 @@ export class Scheduler {
 		}
 		
 		this.isRunning = true;
+
+		// Start any tasks that were scheduled while the scheduler was stopped.
+		for (const [name, jobTask] of this.tasks) {
+			jobTask.task.start();
+			logger.debug(`Started job: ${name}`);
+		}
+
 		logger.info('Scheduler started');
 	}
 
@@ -44,33 +53,53 @@ export class Scheduler {
 		const jobName = job.getName();
 		
 		return {
-			schedule: (cronExpression: string) => {
-				const task = cron.schedule(cronExpression, async () => {
-					await this.executeJob(jobName, job);
-				});
+				schedule: (cronExpression: string) => {
+					const task = cron.createTask(cronExpression, async () => {
+						await this.executeJob(jobName, job);
+					});
 
-				const jobTask: JobTask = {
-					job,
-					task,
-					cronExpression,
-					retries: 0
-				};
+					const jobTask: JobTask = {
+						job,
+						task,
+						cronExpression,
+						retries: 0,
+						running: false
+					};
 
-				this.tasks.set(jobName, jobTask);
-				task.start();
-				
-				logger.info(`Scheduled job ${jobName}`, { cronExpression });
-			},
+					this.tasks.set(jobName, jobTask);
+
+					if (this.isRunning) {
+						task.start();
+					}
+					
+					logger.info(`Scheduled job ${jobName}`, { cronExpression });
+				},
 		};
 	}
 
-	private async executeJob(jobName: string, job: Job): Promise<void> {
+	private async executeJob(jobName: string, job: Job, isRetry = false): Promise<void> {
 		const jobTask = this.tasks.get(jobName);
 		if (!jobTask) {
 			logger.error(`Job ${jobName} not found in task registry`);
 			return;
 		}
 
+		if (!this.isRunning) {
+			// Scheduler stopped: don't execute or schedule retries.
+			return;
+		}
+
+		// Avoid overlapping executions.
+		if (jobTask.running) {
+			return;
+		}
+
+		// If a retry is already scheduled, let it run instead of piling up executions from cron.
+		if (!isRetry && jobTask.retryTimeout) {
+			return;
+		}
+
+		jobTask.running = true;
 		try {
 			const startTime = Date.now();
 			logger.debug(`Executing job: ${jobName}`);
@@ -81,6 +110,11 @@ export class Scheduler {
 			jobTask.lastRun = new Date();
 			jobTask.retries = 0;
 			jobTask.lastError = undefined;
+
+			if (jobTask.retryTimeout) {
+				clearTimeout(jobTask.retryTimeout);
+				jobTask.retryTimeout = undefined;
+			}
 			
 			logger.info(`Job ${jobName} completed`, { durationMs: duration });
 		} catch (error) {
@@ -88,19 +122,30 @@ export class Scheduler {
 			
 			logger.error(`Job ${jobName} failed`, error instanceof Error ? error : undefined);
 			
+			if (!this.isRunning) {
+				return;
+			}
+
 			const maxRetries = job.getMaxRetries();
 			if (jobTask.retries < maxRetries) {
 				jobTask.retries++;
 				const delay = job.getRetryDelay() * Math.pow(2, jobTask.retries - 1);
 				
 				logger.info(`Retrying job ${jobName}`, { attempt: jobTask.retries, maxRetries, delayMs: delay });
-				
-				setTimeout(async () => {
-					await this.executeJob(jobName, job);
+
+				if (jobTask.retryTimeout) {
+					clearTimeout(jobTask.retryTimeout);
+				}
+				jobTask.retryTimeout = setTimeout(() => {
+					jobTask.retryTimeout = undefined;
+					void this.executeJob(jobName, job, true);
 				}, delay);
+				jobTask.retryTimeout.unref?.();
 			} else {
 				logger.error(`Job ${jobName} failed after ${maxRetries} retries`);
 			}
+		} finally {
+			jobTask.running = false;
 		}
 	}
 
@@ -109,17 +154,32 @@ export class Scheduler {
 			return;
 		}
 
+		// Mark stopped first so in-flight jobs won't schedule retries.
+		this.isRunning = false;
+
 		for (const [name, jobTask] of this.tasks) {
 			jobTask.task.stop();
+
+			if (jobTask.retryTimeout) {
+				clearTimeout(jobTask.retryTimeout);
+				jobTask.retryTimeout = undefined;
+			}
+			jobTask.running = false;
+
 			logger.debug(`Stopped job: ${name}`);
 		}
 		
-		this.isRunning = false;
 		logger.info('Scheduler stopped');
 	}
 
 	async clear() {
 		for (const [name, jobTask] of this.tasks) {
+			if (jobTask.retryTimeout) {
+				clearTimeout(jobTask.retryTimeout);
+				jobTask.retryTimeout = undefined;
+			}
+			jobTask.running = false;
+
 			jobTask.task.destroy();
 			logger.debug(`Destroyed job: ${name}`);
 		}
@@ -141,8 +201,10 @@ export class Scheduler {
 			return null;
 		}
 
+		const status = jobTask.task.getStatus() as string;
+
 		return {
-			scheduled: jobTask.task.getStatus() === 'scheduled',
+			scheduled: !['stopped', 'destroyed'].includes(status),
 			lastRun: jobTask.lastRun,
 			lastError: jobTask.lastError,
 			retries: jobTask.retries,

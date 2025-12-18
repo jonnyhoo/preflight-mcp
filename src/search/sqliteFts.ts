@@ -9,6 +9,14 @@ export type IndexBuildOptions = {
   includeCode: boolean;
 };
 
+export type IncrementalIndexResult = {
+  added: number;
+  updated: number;
+  removed: number;
+  unchanged: number;
+  totalIndexed: number;
+};
+
 export type SearchScope = 'docs' | 'code' | 'all';
 
 export type SearchHit = {
@@ -23,7 +31,219 @@ async function ensureDir(p: string): Promise<void> {
   await fs.mkdir(p, { recursive: true });
 }
 
-export async function rebuildIndex(dbPath: string, files: IngestedFile[], opts: IndexBuildOptions): Promise<void> {
+/**
+ * Check if incremental indexing is supported for this database.
+ * Returns true if the file_meta table exists.
+ */
+export function supportsIncrementalIndex(dbPath: string): boolean {
+  try {
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      const row = db.prepare(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='file_meta'`
+      ).get() as { name: string } | undefined;
+      return !!row;
+    } finally {
+      db.close();
+    }
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Get stored file metadata (SHA256 hashes) from the index.
+ */
+function getStoredFileMeta(db: Database.Database): Map<string, string> {
+  const meta = new Map<string, string>();
+  try {
+    const rows = db.prepare('SELECT path, sha256 FROM file_meta').all() as Array<{ path: string; sha256: string }>;
+    for (const row of rows) {
+      meta.set(row.path, row.sha256);
+    }
+  } catch {
+    // Table doesn't exist yet
+  }
+  return meta;
+}
+
+/**
+ * Perform incremental index update based on file SHA256 hashes.
+ * Only re-indexes files that have changed since the last index build.
+ * 
+ * @returns Statistics about what was updated
+ */
+export async function incrementalIndexUpdate(
+  dbPath: string,
+  files: IngestedFile[],
+  opts: IndexBuildOptions
+): Promise<IncrementalIndexResult> {
+  // Check if database exists and supports incremental updates
+  const dbExists = await fs.access(dbPath).then(() => true).catch(() => false);
+  
+  if (!dbExists || !supportsIncrementalIndex(dbPath)) {
+    // Fall back to full rebuild
+    await rebuildIndex(dbPath, files, opts);
+    return {
+      added: files.length,
+      updated: 0,
+      removed: 0,
+      unchanged: 0,
+      totalIndexed: files.length,
+    };
+  }
+
+  const db = new Database(dbPath);
+  try {
+    db.pragma('journal_mode = WAL');
+    db.pragma('synchronous = NORMAL');
+
+    // Get existing file metadata
+    const storedMeta = getStoredFileMeta(db);
+    const currentPaths = new Set(files.map(f => f.bundleNormRelativePath));
+
+    let added = 0;
+    let updated = 0;
+    let removed = 0;
+    let unchanged = 0;
+
+    // Find files to remove (in index but not in current files)
+    const pathsToRemove: string[] = [];
+    for (const storedPath of storedMeta.keys()) {
+      if (!currentPaths.has(storedPath)) {
+        pathsToRemove.push(storedPath);
+      }
+    }
+
+    // Remove deleted files from index
+    if (pathsToRemove.length > 0) {
+      const deleteLines = db.prepare('DELETE FROM lines WHERE path = ?');
+      const deleteMeta = db.prepare('DELETE FROM file_meta WHERE path = ?');
+      
+      const removeTransaction = db.transaction((paths: string[]) => {
+        for (const p of paths) {
+          deleteLines.run(p);
+          deleteMeta.run(p);
+        }
+      });
+      removeTransaction(pathsToRemove);
+      removed = pathsToRemove.length;
+    }
+
+    // Categorize files: new, changed, or unchanged
+    const filesToIndex: IngestedFile[] = [];
+    const filesToUpdate: IngestedFile[] = [];
+
+    for (const f of files) {
+      if (f.kind === 'doc' && !opts.includeDocs) continue;
+      if (f.kind === 'code' && !opts.includeCode) continue;
+
+      const storedSha = storedMeta.get(f.bundleNormRelativePath);
+      
+      if (!storedSha) {
+        // New file
+        filesToIndex.push(f);
+        added++;
+      } else if (storedSha !== f.sha256) {
+        // Changed file
+        filesToUpdate.push(f);
+        updated++;
+      } else {
+        // Unchanged
+        unchanged++;
+      }
+    }
+
+    // Prepare statements
+    const insertLine = db.prepare(
+      'INSERT INTO lines (content, path, repo, kind, lineNo) VALUES (?, ?, ?, ?, ?)'
+    );
+    const deleteLines = db.prepare('DELETE FROM lines WHERE path = ?');
+    const upsertMeta = db.prepare(
+      'INSERT OR REPLACE INTO file_meta (path, sha256, indexed_at) VALUES (?, ?, ?)'
+    );
+
+    // Process updates (delete old lines, insert new)
+    const updateTransaction = db.transaction((updateFiles: IngestedFile[]) => {
+      const now = new Date().toISOString();
+      
+      for (const f of updateFiles) {
+        // Delete old lines
+        deleteLines.run(f.bundleNormRelativePath);
+        
+        // Insert new lines
+        const text = fsSync.readFileSync(f.bundleNormAbsPath, 'utf8');
+        const lines = text.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i] ?? '';
+          if (!line.trim()) continue;
+          insertLine.run(line, f.bundleNormRelativePath, f.repoId, f.kind, i + 1);
+        }
+        
+        // Update metadata
+        upsertMeta.run(f.bundleNormRelativePath, f.sha256, now);
+      }
+    });
+
+    // Process new files
+    const insertTransaction = db.transaction((newFiles: IngestedFile[]) => {
+      const now = new Date().toISOString();
+      
+      for (const f of newFiles) {
+        const text = fsSync.readFileSync(f.bundleNormAbsPath, 'utf8');
+        const lines = text.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i] ?? '';
+          if (!line.trim()) continue;
+          insertLine.run(line, f.bundleNormRelativePath, f.repoId, f.kind, i + 1);
+        }
+        
+        // Insert metadata
+        upsertMeta.run(f.bundleNormRelativePath, f.sha256, now);
+      }
+    });
+
+    // Execute transactions
+    if (filesToUpdate.length > 0) {
+      updateTransaction(filesToUpdate);
+    }
+    if (filesToIndex.length > 0) {
+      insertTransaction(filesToIndex);
+    }
+
+    return {
+      added,
+      updated,
+      removed,
+      unchanged,
+      totalIndexed: added + updated + unchanged,
+    };
+  } finally {
+    db.close();
+  }
+}
+
+// Note: rebuildIndex signature changed
+// Old callers should use the wrapper below
+export async function rebuildIndex(
+  dbPathOrFiles: string | IngestedFile[],
+  filesOrDbPath: IngestedFile[] | string,
+  opts: IndexBuildOptions
+): Promise<void> {
+  // Handle both old and new signatures for backward compatibility
+  let dbPath: string;
+  let files: IngestedFile[];
+  
+  if (typeof dbPathOrFiles === 'string') {
+    // Old signature: rebuildIndex(dbPath, files, opts)
+    dbPath = dbPathOrFiles;
+    files = filesOrDbPath as IngestedFile[];
+  } else {
+    // New signature: rebuildIndex(files, dbPath, opts)
+    files = dbPathOrFiles;
+    dbPath = filesOrDbPath as string;
+  }
+
   await ensureDir(path.dirname(dbPath));
   await fs.rm(dbPath, { force: true });
   // Also remove WAL/SHM files if present.
@@ -35,6 +255,7 @@ export async function rebuildIndex(dbPath: string, files: IngestedFile[], opts: 
     db.pragma('journal_mode = WAL');
     db.pragma('synchronous = NORMAL');
 
+    // Create FTS5 table for full-text search
     db.exec(`
       CREATE VIRTUAL TABLE lines USING fts5(
         content,
@@ -46,11 +267,25 @@ export async function rebuildIndex(dbPath: string, files: IngestedFile[], opts: 
       );
     `);
 
-    const insert = db.prepare(
+    // Create file_meta table for incremental indexing support
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS file_meta (
+        path TEXT PRIMARY KEY,
+        sha256 TEXT NOT NULL,
+        indexed_at TEXT NOT NULL
+      );
+    `);
+
+    const insertLine = db.prepare(
       `INSERT INTO lines (content, path, repo, kind, lineNo) VALUES (?, ?, ?, ?, ?)`
+    );
+    const insertMeta = db.prepare(
+      `INSERT INTO file_meta (path, sha256, indexed_at) VALUES (?, ?, ?)`
     );
 
     const insertMany = db.transaction((fileList: IngestedFile[]) => {
+      const now = new Date().toISOString();
+      
       for (const f of fileList) {
         if (f.kind === 'doc' && !opts.includeDocs) continue;
         if (f.kind === 'code' && !opts.includeCode) continue;
@@ -62,8 +297,11 @@ export async function rebuildIndex(dbPath: string, files: IngestedFile[], opts: 
           const line = lines[i] ?? '';
           // Skip empty lines to keep the index smaller.
           if (!line.trim()) continue;
-          insert.run(line, f.bundleNormRelativePath, f.repoId, f.kind, i + 1);
+          insertLine.run(line, f.bundleNormRelativePath, f.repoId, f.kind, i + 1);
         }
+        
+        // Store file metadata for incremental updates
+        insertMeta.run(f.bundleNormRelativePath, f.sha256, now);
       }
     });
 
@@ -145,4 +383,243 @@ export function searchIndex(dbPath: string, query: string, scope: SearchScope, l
   } finally {
     db.close();
   }
+}
+
+// --- Claim Verification Types and Functions ---
+
+/**
+ * Evidence classification based on content analysis.
+ */
+export type EvidenceType = 'supporting' | 'contradicting' | 'related';
+
+/**
+ * A piece of evidence with classification and relevance score.
+ */
+export type EvidenceHit = SearchHit & {
+  evidenceType: EvidenceType;
+  relevanceScore: number; // 0-1, higher = more relevant
+};
+
+/**
+ * Result of claim verification.
+ */
+export type VerificationResult = {
+  claim: string;
+  found: boolean;
+  confidence: number; // 0-1, overall confidence in verification
+  confidenceLabel: 'high' | 'medium' | 'low' | 'none';
+  summary: string;
+  supporting: EvidenceHit[];
+  contradicting: EvidenceHit[];
+  related: EvidenceHit[];
+};
+
+// Negation patterns that might indicate contradiction
+const NEGATION_PATTERNS = [
+  /\b(not|no|never|cannot|can't|won't|doesn't|don't|isn't|aren't|wasn't|weren't|hasn't|haven't|hadn't)\b/i,
+  /\b(deprecated|removed|obsolete|discontinued|unsupported|disabled)\b/i,
+  /\b(instead of|rather than|unlike|contrary to|in contrast)\b/i,
+];
+
+// Affirmation patterns that might indicate support
+const AFFIRMATION_PATTERNS = [
+  /\b(is|are|was|were|has|have|does|do|can|will|should|must)\b/i,
+  /\b(supports?|enables?|provides?|allows?|includes?)\b/i,
+  /\b(recommended|required|default|standard|official)\b/i,
+];
+
+/**
+ * Classify evidence as supporting, contradicting, or related.
+ * Uses heuristic analysis of content patterns.
+ */
+function classifyEvidence(snippet: string, claimTokens: string[]): { type: EvidenceType; score: number } {
+  const lowerSnippet = snippet.toLowerCase();
+  
+  // Count how many claim tokens appear in the snippet
+  const tokenMatches = claimTokens.filter(t => lowerSnippet.includes(t.toLowerCase())).length;
+  const tokenRatio = claimTokens.length > 0 ? tokenMatches / claimTokens.length : 0;
+  
+  // Check for negation patterns
+  const hasNegation = NEGATION_PATTERNS.some(p => p.test(snippet));
+  
+  // Check for affirmation patterns
+  const hasAffirmation = AFFIRMATION_PATTERNS.some(p => p.test(snippet));
+  
+  // Base score on token match ratio
+  let score = tokenRatio * 0.7 + 0.3; // 0.3-1.0 range
+  
+  // Classify based on patterns
+  let type: EvidenceType;
+  
+  if (tokenRatio >= 0.5) {
+    // High token match - likely directly relevant
+    if (hasNegation && !hasAffirmation) {
+      type = 'contradicting';
+      score *= 0.9; // Slightly lower confidence for contradictions
+    } else if (hasAffirmation || !hasNegation) {
+      type = 'supporting';
+    } else {
+      type = 'related';
+      score *= 0.8;
+    }
+  } else if (tokenRatio >= 0.25) {
+    // Moderate token match - probably related
+    type = 'related';
+    score *= 0.7;
+  } else {
+    // Low token match - tangentially related
+    type = 'related';
+    score *= 0.5;
+  }
+  
+  return { type, score: Math.min(1, Math.max(0, score)) };
+}
+
+/**
+ * Calculate overall confidence based on evidence distribution.
+ */
+function calculateConfidence(supporting: EvidenceHit[], contradicting: EvidenceHit[], related: EvidenceHit[]): {
+  confidence: number;
+  label: 'high' | 'medium' | 'low' | 'none';
+} {
+  const totalEvidence = supporting.length + contradicting.length + related.length;
+  
+  if (totalEvidence === 0) {
+    return { confidence: 0, label: 'none' };
+  }
+  
+  // Weight by evidence type and scores
+  const supportingWeight = supporting.reduce((sum, e) => sum + e.relevanceScore, 0);
+  const contradictingWeight = contradicting.reduce((sum, e) => sum + e.relevanceScore * 0.8, 0);
+  const relatedWeight = related.reduce((sum, e) => sum + e.relevanceScore * 0.3, 0);
+  
+  const totalWeight = supportingWeight + contradictingWeight + relatedWeight;
+  
+  // Calculate confidence based on supporting evidence ratio
+  let confidence: number;
+  if (totalWeight === 0) {
+    confidence = 0;
+  } else if (contradictingWeight > supportingWeight) {
+    // More contradicting than supporting evidence
+    confidence = 0.2 * (supportingWeight / totalWeight);
+  } else {
+    // More supporting than contradicting evidence
+    confidence = (supportingWeight - contradictingWeight * 0.5) / totalWeight;
+  }
+  
+  // Apply quantity bonus (more evidence = more confidence, up to a point)
+  const quantityBonus = Math.min(0.2, totalEvidence * 0.02);
+  confidence = Math.min(1, confidence + quantityBonus);
+  
+  // Determine label
+  let label: 'high' | 'medium' | 'low' | 'none';
+  if (confidence >= 0.7) label = 'high';
+  else if (confidence >= 0.4) label = 'medium';
+  else if (confidence > 0) label = 'low';
+  else label = 'none';
+  
+  return { confidence, label };
+}
+
+/**
+ * Generate a human-readable summary of the verification result.
+ */
+function generateVerificationSummary(
+  claim: string,
+  supporting: EvidenceHit[],
+  contradicting: EvidenceHit[],
+  related: EvidenceHit[],
+  confidence: number,
+  label: string
+): string {
+  const total = supporting.length + contradicting.length + related.length;
+  
+  if (total === 0) {
+    return `No evidence found for: "${claim.slice(0, 50)}${claim.length > 50 ? '...' : ''}"`;
+  }
+  
+  const parts: string[] = [];
+  parts.push(`Found ${total} piece(s) of evidence (confidence: ${label})`);
+  
+  if (supporting.length > 0) {
+    parts.push(`${supporting.length} supporting`);
+  }
+  if (contradicting.length > 0) {
+    parts.push(`${contradicting.length} potentially contradicting`);
+  }
+  if (related.length > 0 && supporting.length + contradicting.length === 0) {
+    parts.push(`${related.length} related but inconclusive`);
+  }
+  
+  return parts.join('; ');
+}
+
+/**
+ * Verify a claim against the search index.
+ * Returns classified evidence with confidence scoring.
+ * 
+ * This differs from searchIndex by:
+ * 1. Classifying results as supporting/contradicting/related
+ * 2. Calculating an overall confidence score
+ * 3. Providing a human-readable summary
+ */
+export function verifyClaimInIndex(
+  dbPath: string,
+  claim: string,
+  scope: SearchScope,
+  limit: number
+): VerificationResult {
+  // Get raw search results
+  const rawHits = searchIndex(dbPath, claim, scope, limit);
+  
+  // Extract tokens from claim for classification
+  const claimTokens = tokenizeForSafeQuery(claim);
+  
+  // Classify each hit
+  const supporting: EvidenceHit[] = [];
+  const contradicting: EvidenceHit[] = [];
+  const related: EvidenceHit[] = [];
+  
+  for (const hit of rawHits) {
+    const { type, score } = classifyEvidence(hit.snippet, claimTokens);
+    const evidenceHit: EvidenceHit = {
+      ...hit,
+      evidenceType: type,
+      relevanceScore: score,
+    };
+    
+    switch (type) {
+      case 'supporting':
+        supporting.push(evidenceHit);
+        break;
+      case 'contradicting':
+        contradicting.push(evidenceHit);
+        break;
+      case 'related':
+        related.push(evidenceHit);
+        break;
+    }
+  }
+  
+  // Sort each category by relevance score
+  supporting.sort((a, b) => b.relevanceScore - a.relevanceScore);
+  contradicting.sort((a, b) => b.relevanceScore - a.relevanceScore);
+  related.sort((a, b) => b.relevanceScore - a.relevanceScore);
+  
+  // Calculate confidence
+  const { confidence, label } = calculateConfidence(supporting, contradicting, related);
+  
+  // Generate summary
+  const summary = generateVerificationSummary(claim, supporting, contradicting, related, confidence, label);
+  
+  return {
+    claim,
+    found: rawHits.length > 0,
+    confidence,
+    confidenceLabel: label,
+    summary,
+    supporting,
+    contradicting,
+    related,
+  };
 }

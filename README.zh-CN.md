@@ -13,9 +13,9 @@
 
 ## ✨ 功能特性
 
-- **10 个工具** - 创建/更新/搜索/验证/读取/分析 bundles
-- **AI 驱动分析** - 静态事实提取和 LLM 摘要
-- **基于证据的验证** - 检测幻觉
+- **10 个工具** - 创建/更新/搜索/验证/读取 bundles
+- **静态事实提取** - 生成 `analysis/FACTS.json`（非 LLM）
+- **基于证据的校验** - 用证据定位来减少幻觉
 - **资源访问** - 通过 `preflight://...` URI 读取 bundle 文件
 - **多路径镜像备份** - 云存储冗余
 - **弹性存储** - 挂载点不可用时自动故障转移
@@ -154,19 +154,15 @@ npm run typecheck
 
 ---
 
-### 9. `preflight_analyze_bundle`
-为 bundle 生成或重新生成 AI 分析。
+### 9. `preflight_search_by_tags`
+按标签筛选后跨多个 bundle 搜索（基于行的 SQLite FTS5）。
 
-**触发词**: "analyze this bundle"、"generate analysis"、"分析bundle"、"生成分析报告"
+**触发词**: "在MCP项目中搜索"、"搜索所有agent"、"search in MCP bundles"
 
-**参数**:
-- `bundleId`: 要分析的 Bundle ID
-- `mode`: 分析模式 - `quick`（仅静态）或 `deep`（静态 + LLM）
-- `regenerate`: 如果为 true，即使已存在也重新生成分析
-
-**生成内容**:
-- **FACTS.json**: 静态分析（语言、框架、依赖、入口点）
-- **AI_SUMMARY.md**: LLM 生成的摘要，包含架构概览和使用指南（仅 deep 模式）
+**可选参数**:
+- `tags`: 标签过滤（例如 `["mcp", "agents"]`）
+- `scope`: 搜索范围（`docs` / `code` / `all`）
+- `limit`: 跨 bundle 的总命中数量上限
 
 ---
 
@@ -207,12 +203,9 @@ bundles 及其主要入口文件的静态 JSON 列表。
 | `PREFLIGHT_MAX_TOTAL_BYTES` | 每个仓库导入的最大字节数 | 50 MiB |
 
 ### 分析配置
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `PREFLIGHT_ANALYSIS_MODE` | 分析模式：`none`、`quick`、`deep` | `quick` |
-| `PREFLIGHT_LLM_PROVIDER` | LLM 提供商：`none`、`openai`、`context7` | `none` |
-| `OPENAI_API_KEY` | OpenAI API 密钥（deep 模式需要） | - |
-| `OPENAI_MODEL` | OpenAI 模型 | `gpt-4o-mini` |
+|| 变量 | 说明 | 默认值 |
+||------|------|--------|
+|| `PREFLIGHT_ANALYSIS_MODE` | 静态分析模式：`none`、`quick`（生成 `analysis/FACTS.json`） | `quick` |
 
 ### GitHub & Context7
 | 变量 | 说明 | 默认值 |
@@ -235,7 +228,6 @@ bundle-id/
 │   └── search.sqlite3     # FTS5 搜索索引
 ├── analysis/
 │   ├── FACTS.json         # 静态分析结果
-│   └── AI_SUMMARY.md      # LLM 分析摘要
 ├── repos/
 │   └── <owner>/<repo>/
 │       ├── raw/...        # 原始文件
@@ -327,8 +319,7 @@ src/
 │   └── optimized-server.ts # 优化服务器集成
 ├── bundle/
 │   ├── service.ts          # Bundle 服务
-│   ├── analysis.ts         # 静态分析
-│   ├── llm-analysis.ts     # LLM 分析
+│   ├── analysis.ts         # 静态分析（FACTS.json）
 │   ├── facts.ts            # 事实提取
 │   └── ...                 # 其他 bundle 相关模块
 ├── search/

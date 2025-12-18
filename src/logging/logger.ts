@@ -68,6 +68,9 @@ export class StructuredLogger {
 				console.error('Failed to flush logs:', error);
 			});
 		}, this.flushInterval);
+
+		// Don't keep the process alive just for log flushing (important for tests/CLI runs).
+		this.flushTimer.unref?.();
 	}
 
 	private async flush(): Promise<void> {
@@ -93,14 +96,14 @@ export class StructuredLogger {
 		}
 
 		try {
-			// 确保日志目录存在
+			// Ensure log directory exists
 			const logDir = path.dirname(this.config.filePath);
 			await fs.mkdir(logDir, { recursive: true });
 
-			// 检查文件大小，如果超过限制则轮转
+			// Check file size and rotate if over limit
 			await this.rotateLogFile();
 
-			// 写入日志条目
+			// Write log entries
 			const logLines = entries.map(entry => this.formatLogEntry(entry, 'json'));
 			await fs.appendFile(this.config.filePath, logLines.join('\n') + '\n');
 		} catch (error) {
@@ -118,17 +121,17 @@ export class StructuredLogger {
 			const maxSizeBytes = (this.config.maxFileSize || 10) * 1024 * 1024;
 
 			if (stats.size > maxSizeBytes) {
-				// 轮转日志文件
+				// Rotate log file
 				const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 				const rotatedPath = `${this.config.filePath}.${timestamp}`;
 				
 				await fs.rename(this.config.filePath, rotatedPath);
 				
-				// 清理旧日志文件
+				// Cleanup old log files
 				await this.cleanupOldLogFiles();
 			}
 		} catch (error) {
-			// 文件不存在或其他错误，忽略
+			// File doesn't exist or other error, ignore
 		}
 	}
 
@@ -142,7 +145,7 @@ export class StructuredLogger {
 			const logName = path.basename(this.config.filePath);
 			const files = await fs.readdir(logDir);
 			
-			// 获取文件信息并排序
+			// Get file info and sort by mtime
 			const logFilesWithMtime: Array<{ name: string; path: string; mtime: Date }> = [];
 			for (const file of files) {
 				if (file.startsWith(logName) && file !== logName) {
@@ -160,10 +163,10 @@ export class StructuredLogger {
 				}
 			}
 
-			// 按修改时间排序
+			// Sort by modification time
 			logFilesWithMtime.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
 
-			// 保留最新的几个文件，删除其余的
+			// Keep the newest files, delete the rest
 			const maxFiles = this.config.maxFiles || 5;
 			if (logFilesWithMtime.length > maxFiles) {
 				const filesToDelete = logFilesWithMtime.slice(maxFiles);
@@ -216,29 +219,29 @@ export class StructuredLogger {
 
 		const parts: string[] = [];
 		
-		// 时间戳
+		// Timestamp
 		if (this.config.enableTimestamp) {
 			parts.push(`[${entry.timestamp}]`);
 		}
 		
-		// 日志级别
+		// Log level
 		parts.push(`[${entry.levelName}]`);
 		
-		// 模块和函数信息
+		// Module and function info
 		if (entry.module || entry.function) {
 			const location = [entry.module, entry.function].filter(Boolean).join('.');
 			parts.push(`[${location}]`);
 		}
 		
-		// 主要消息
+		// Main message
 		parts.push(entry.message);
 		
-		// 元数据
+		// Metadata
 		if (entry.metadata && Object.keys(entry.metadata).length > 0) {
 			parts.push(`| ${JSON.stringify(entry.metadata)}`);
 		}
 		
-		// 错误信息
+		// Error info
 		if (entry.error && this.config.enableStackTrace && entry.error.stack) {
 			parts.push(`\n${entry.error.stack}`);
 		}
@@ -294,12 +297,12 @@ export class StructuredLogger {
 		const entry = this.createLogEntry(level, message, metadata, error);
 		
 		if (this.config.output === 'console' || this.config.output === 'both') {
-			// 对于控制台输出，立即写入
+			// For console output, write immediately
 			this.writeToConsole([entry]);
 		}
 		
 		if (this.config.output === 'file' || this.config.output === 'both') {
-			// 对于文件输出，缓冲后批量写入
+			// For file output, buffer and batch write
 			this.logBuffer.push(entry);
 			
 			if (this.logBuffer.length >= this.bufferSize) {
@@ -330,22 +333,22 @@ export class StructuredLogger {
 		this.log(LogLevel.FATAL, message, metadata, error);
 	}
 
-	// 立即刷新缓冲区
+	// Flush buffer immediately
 	async flushNow(): Promise<void> {
 		await this.flush();
 	}
 
-	// 更新配置
+	// Update configuration
 	updateConfig(config: Partial<LoggerConfig>): void {
 		this.config = { ...this.config, ...config };
 	}
 
-	// 获取当前配置
+	// Get current configuration
 	getConfig(): LoggerConfig {
 		return { ...this.config };
 	}
 
-	// 关闭日志器
+	// Close the logger
 	async close(): Promise<void> {
 		if (this.flushTimer) {
 			clearInterval(this.flushTimer);
@@ -354,7 +357,7 @@ export class StructuredLogger {
 	}
 }
 
-// 默认日志器实例
+// Default logger instance
 export const defaultLogger = new StructuredLogger({
 	level: LogLevel.INFO,
 	output: 'both',
@@ -362,7 +365,7 @@ export const defaultLogger = new StructuredLogger({
 	format: 'text'
 });
 
-// 便捷函数
+// Convenience functions
 export const logger = {
 	debug: (message: string, metadata?: Record<string, any>) => defaultLogger.debug(message, metadata),
 	info: (message: string, metadata?: Record<string, any>) => defaultLogger.info(message, metadata),
@@ -375,11 +378,11 @@ export const logger = {
 	close: () => defaultLogger.close()
 };
 
-// 模块特定的日志器创建函数
+// Create a module-specific logger
 export function createModuleLogger(moduleName: string, config?: Partial<LoggerConfig>) {
 	const moduleConfig = {
 		...config,
-		// 可以在这里添加模块特定的配置
+		// Module-specific configuration can be added here
 	};
 	
 	const moduleLogger = new StructuredLogger(moduleConfig);

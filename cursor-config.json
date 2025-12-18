@@ -1,0 +1,15 @@
+{
+  "mcp": {
+    "servers": {
+      "preflight": {
+        "command": "node",
+        "args": ["E:\\VIBE_CODING_WORK\\preflight-mcp\\dist\\index.js"],
+        "cwd": "E:\\VIBE_CODING_WORK\\preflight-mcp",
+        "env": {
+          "PREFLIGHT_STORAGE_DIR": "E:\\VIBE_CODING_WORK\\preflight-bundles",
+          "PREFLIGHT_ANALYSIS_MODE": "quick"
+        }
+      }
+    }
+  }
+}

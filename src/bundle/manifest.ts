@@ -40,6 +40,11 @@ export type BundleManifestV1 = {
   bundleId: string;
   createdAt: string;
   updatedAt: string;
+  // NEW: Human-readable metadata
+  displayName?: string; // e.g., "React Framework"
+  description?: string; // Brief description of the bundle
+  tags?: string[];      // Auto-detected or manual tags for categorization
+  primaryLanguage?: string; // Primary programming language
   inputs: {
     repos: RepoInput[];
     libraries?: string[];

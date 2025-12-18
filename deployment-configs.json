@@ -1,0 +1,491 @@
+# Preflight-MCP 部署配置文件集合
+
+本文档包含了 Preflight-MCP 项目的各种部署配置，适用于不同的场景和平台。
+
+## 1. Claude Desktop 配置
+
+### 基础配置 (claude-desktop-basic.json)
+```json
+{
+  "mcpServers": {
+    "preflight": {
+      "command": "node",
+      "args": ["E:\\VIBE_CODING_WORK\\preflight-mcp\\dist\\index.js"],
+      "env": {
+        "PREFLIGHT_STORAGE_DIR": "E:\\VIBE_CODING_WORK\\preflight-bundles"
+      }
+    }
+  }
+}
+```
+
+### 高级配置 (claude-desktop-advanced.json)
+```json
+{
+  "mcpServers": {
+    "preflight": {
+      "command": "node",
+      "args": ["E:\\VIBE_CODING_WORK\\preflight-mcp\\dist\\index.js"],
+      "env": {
+        "PREFLIGHT_STORAGE_DIRS": "D:\\OneDrive\\preflight-bundles;E:\\GoogleDrive\\preflight-bundles",
+        "PREFLIGHT_TMP_DIR": "E:\\VIBE_CODING_WORK\\preflight-tmp",
+        "PREFLIGHT_ANALYSIS_MODE": "quick",
+        "PREFLIGHT_MAX_FILE_BYTES": "1048576",
+        "PREFLIGHT_MAX_TOTAL_BYTES": "104857600",
+        "GITHUB_TOKEN": "your-github-token-here",
+        "CONTEXT7_API_KEY": "your-context7-api-key-here"
+      }
+    }
+  }
+}
+```
+
+### Context7 增强配置 (claude-desktop-context7.json)
+```json
+{
+  "mcpServers": {
+    "preflight-context7": {
+      "command": "node",
+      "args": ["E:\\VIBE_CODING_WORK\\preflight-mcp\\dist\\index.js"],
+      "env": {
+        "PREFLIGHT_STORAGE_DIR": "E:\\VIBE_CODING_WORK\\preflight-bundles",
+        "PREFLIGHT_ANALYSIS_MODE": "quick",
+        "CONTEXT7_API_KEY": "your-context7-api-key-here",
+        "CONTEXT7_MCP_URL": "https://mcp.context7.com/mcp",
+        "GITHUB_TOKEN": "your-github-token-here"
+      }
+    }
+  }
+}
+```
+
+## 2. Cursor 配置
+
+### 基础配置 (cursor-basic.json)
+```json
+{
+  "mcp": {
+    "servers": {
+      "preflight": {
+        "command": "node",
+        "args": ["E:\\VIBE_CODING_WORK\\preflight-mcp\\dist\\index.js"],
+        "cwd": "E:\\VIBE_CODING_WORK\\preflight-mcp",
+        "env": {
+          "PREFLIGHT_STORAGE_DIR": "E:\\VIBE_CODING_WORK\\preflight-bundles"
+        }
+      }
+    }
+  }
+}
+```
+
+### 开发环境配置 (cursor-dev.json)
+```json
+{
+  "mcp": {
+    "servers": {
+      "preflight-dev": {
+        "command": "node",
+        "args": ["--loader", "tsx", "E:\\VIBE_CODING_WORK\\preflight-mcp\\src\\index.ts"],
+        "cwd": "E:\\VIBE_CODING_WORK\\preflight-mcp",
+        "env": {
+          "PREFLIGHT_STORAGE_DIR": "E:\\VIBE_CODING_WORK\\preflight-bundles",
+          "PREFLIGHT_ANALYSIS_MODE": "quick",
+          "NODE_ENV": "development"
+        }
+      }
+    }
+  }
+}
+```
+
+## 3. Windsurf 配置
+
+### 标准配置 (windsurf.json)
+```json
+{
+  "name": "preflight-mcp",
+  "description": "Preflight MCP Server for GitHub repository indexing and analysis",
+  "version": "0.1.0",
+  "mcpServers": {
+    "preflight": {
+      "command": "node",
+      "args": ["E:\\VIBE_CODING_WORK\\preflight-mcp\\dist\\index.js"],
+      "env": {
+        "PREFLIGHT_STORAGE_DIR": "E:\\VIBE_CODING_WORK\\preflight-bundles",
+        "PREFLIGHT_ANALYSIS_MODE": "quick"
+      }
+    }
+  }
+}
+```
+
+## 4. Docker 配置
+
+### Dockerfile
+```dockerfile
+FROM node:18-alpine
+
+# 设置工作目录
+WORKDIR /app
+
+# 复制 package.json 和 package-lock.json
+COPY package*.json ./
+
+# 安装依赖
+RUN npm ci --only=production
+
+# 复制构建后的文件
+COPY dist/ ./dist/
+COPY package.json ./
+
+# 创建非root用户
+RUN addgroup -g 1001 -S nodejs
+RUN adduser -S nodejs -u 1001
+
+# 设置权限
+RUN chown -R nodejs:nodejs /app
+USER nodejs
+
+# 设置环境变量
+ENV PREFLIGHT_STORAGE_DIR=/app/bundles
+ENV PREFLIGHT_TMP_DIR=/tmp/preflight-mcp
+
+# 创建必要目录
+RUN mkdir -p /app/bundles /tmp/preflight-mcp
+
+# 暴露端口 (如果需要HTTP接口)
+EXPOSE 3000
+
+# 启动命令
+CMD ["node", "dist/index.js"]
+```
+
+### Docker Compose 配置 (docker-compose.yml)
+```yaml
+version: '3.8'
+
+services:
+  preflight-mcp:
+    build: .
+    container_name: preflight-mcp
+    restart: unless-stopped
+    environment:
+      - PREFLIGHT_STORAGE_DIRS=/app/bundles;/data/preflight-backup
+      - PREFLIGHT_TMP_DIR=/tmp/preflight-mcp
+      - PREFLIGHT_ANALYSIS_MODE=quick
+      - PREFLIGHT_MAX_FILE_BYTES=1048576
+      - PREFLIGHT_MAX_TOTAL_BYTES=104857600
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - CONTEXT7_API_KEY=${CONTEXT7_API_KEY}
+    volumes:
+      - preflight_bundles:/app/bundles
+      - preflight_backup:/data/preflight-backup
+      - preflight_tmp:/tmp/preflight-mcp
+    networks:
+      - preflight-network
+
+  # 可选：Redis 用于缓存
+  redis:
+    image: redis:7-alpine
+    container_name: preflight-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    networks:
+      - preflight-network
+
+volumes:
+  preflight_bundles:
+  preflight_backup:
+  preflight_tmp:
+  redis_data:
+
+networks:
+  preflight-network:
+    driver: bridge
+```
+
+### Docker Compose 环境变量 (.env)
+```env
+# GitHub API Token (可选，用于私有仓库或提高速率限制)
+GITHUB_TOKEN=ghp_your_github_token_here
+
+# Context7 API Key (可选)
+CONTEXT7_API_KEY=your_context7_api_key_here
+
+# 存储配置
+PREFLIGHT_STORAGE_DIRS=/app/bundles;/data/preflight-backup
+PREFLIGHT_TMP_DIR=/tmp/preflight-mcp
+
+# 分析配置
+PREFLIGHT_ANALYSIS_MODE=quick
+
+# 文件大小限制
+PREFLIGHT_MAX_FILE_BYTES=1048576
+PREFLIGHT_MAX_TOTAL_BYTES=104857600
+```
+
+## 5. Kubernetes 配置
+
+### Kubernetes Deployment (k8s-deployment.yaml)
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: preflight-mcp
+  labels:
+    app: preflight-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: preflight-mcp
+  template:
+    metadata:
+      labels:
+        app: preflight-mcp
+    spec:
+      containers:
+      - name: preflight-mcp
+        image: preflight-mcp:latest
+        imagePullPolicy: Always
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        env:
+        - name: PREFLIGHT_STORAGE_DIRS
+          value: "/app/bundles;/backup/preflight"
+        - name: PREFLIGHT_TMP_DIR
+          value: "/tmp/preflight-mcp"
+        - name: PREFLIGHT_ANALYSIS_MODE
+          value: "quick"
+        - name: PREFLIGHT_MAX_FILE_BYTES
+          value: "524288"
+        - name: PREFLIGHT_MAX_TOTAL_BYTES
+          value: "52428800"
+        - name: GITHUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: preflight-secrets
+              key: github-token
+        - name: CONTEXT7_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: preflight-secrets
+              key: context7-api-key
+        volumeMounts:
+        - name: preflight-storage
+          mountPath: /app/bundles
+        - name: preflight-backup
+          mountPath: /backup/preflight
+        - name: preflight-tmp
+          mountPath: /tmp/preflight-mcp
+      volumes:
+      - name: preflight-storage
+        persistentVolumeClaim:
+          claimName: preflight-storage-pvc
+      - name: preflight-backup
+        persistentVolumeClaim:
+          claimName: preflight-backup-pvc
+      - name: preflight-tmp
+        emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: preflight-mcp-service
+spec:
+  selector:
+    app: preflight-mcp
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 3000
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: preflight-storage-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: preflight-backup-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+```
+
+### Kubernetes Secrets (k8s-secrets.yaml)
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: preflight-secrets
+type: Opaque
+data:
+  # 注意：这里的值需要是 base64 编码的
+  # echo -n "your-github-token" | base64
+  github-token: eW91ci1naXRodWItdG9rZW4=
+  # echo -n "your-context7-api-key" | base64
+  context7-api-key: eW91ci1jb250ZXh0Ny1hcGkta2V5
+```
+
+## 6. 云服务配置
+
+### Vercel 配置 (vercel.json)
+```json
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "dist/index.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "dist/index.js"
+    }
+  ],
+  "env": {
+    "PREFLIGHT_ANALYSIS_MODE": "quick",
+    "PREFLIGHT_MAX_FILE_BYTES": "524288",
+    "PREFLIGHT_MAX_TOTAL_BYTES": "52428800"
+  },
+  "functions": {
+    "dist/index.js": {
+      "maxDuration": 30
+    }
+  }
+}
+```
+
+### Railway 配置 (railway.json)
+```json
+{
+  "build": {
+    "builder": "NIXPACKS"
+  },
+  "deploy": {
+    "startCommand": "node dist/index.js",
+    "healthcheckPath": "/health",
+    "healthcheckTimeout": 100,
+    "restartPolicyType": "ON_FAILURE"
+  },
+  "services": {
+    "preflight-mcp": {
+      "environment": {
+        "PREFLIGHT_ANALYSIS_MODE": "quick",
+        "CONTEXT7_API_KEY": "@context7_api_key",
+        "GITHUB_TOKEN": "@github_token"
+      }
+    }
+  }
+}
+```
+
+## 7. 开发环境配置
+
+### 本地开发配置 (development.json)
+```json
+{
+  "name": "preflight-dev",
+  "command": "node",
+  "args": ["--loader", "tsx", "src/index.ts"],
+  "cwd": "E:\\VIBE_CODING_WORK\\preflight-mcp",
+  "env": {
+    "NODE_ENV": "development",
+    "PREFLIGHT_STORAGE_DIR": "E:\\VIBE_CODING_WORK\\dev-preflight-bundles",
+    "PREFLIGHT_ANALYSIS_MODE": "quick",
+    "DEBUG": "preflight:*"
+  },
+  "watch": true,
+  "restart": true
+}
+```
+
+### 测试环境配置 (testing.json)
+```json
+{
+  "name": "preflight-test",
+  "command": "node",
+  "args": ["dist/index.js"],
+  "cwd": "E:\\VIBE_CODING_WORK\\preflight-mcp",
+  "env": {
+    "NODE_ENV": "test",
+    "PREFLIGHT_STORAGE_DIR": "E:\\VIBE_CODING_WORK\\test-preflight-bundles",
+    "PREFLIGHT_ANALYSIS_MODE": "none",
+    "PREFLIGHT_MAX_FILE_BYTES": "1024",
+    "PREFLIGHT_MAX_TOTAL_BYTES": "10240"
+  }
+}
+```
+
+## 8. 生产环境配置
+
+### 生产配置 (production.json)
+```json
+{
+  "name": "preflight-prod",
+  "command": "node",
+  "args": ["dist/index.js"],
+  "cwd": "/opt/preflight-mcp",
+  "env": {
+    "NODE_ENV": "production",
+    "PREFLIGHT_STORAGE_DIRS": "/opt/preflight-bundles;/backup/preflight;/mnt/cloud/preflight",
+    "PREFLIGHT_TMP_DIR": "/tmp/preflight-mcp",
+    "PREFLIGHT_ANALYSIS_MODE": "quick",
+    "GITHUB_TOKEN": "@github_token",
+    "CONTEXT7_API_KEY": "@context7_api_key",
+    "PREFLIGHT_MAX_FILE_BYTES": "1048576",
+    "PREFLIGHT_MAX_TOTAL_BYTES": "104857600",
+    "LOG_LEVEL": "info"
+  }
+}
+```
+
+## 使用说明
+
+### 1. 选择合适的配置
+- **基础使用**: 使用 claude-desktop-basic.json
+- **开发环境**: 使用 development.json
+- **生产环境**: 使用 production.json
+- **Docker部署**: 使用 docker-compose.yml
+
+### 2. 环境变量配置
+创建 `.env` 文件并设置必要的环境变量：
+- `GITHUB_TOKEN`: GitHub API令牌（可选）
+- `CONTEXT7_API_KEY`: Context7 API密钥（可选）
+
+### 3. 存储路径配置
+- 单一路径: `PREFLIGHT_STORAGE_DIR`
+- 多路径备份: `PREFLIGHT_STORAGE_DIRS` (用分号分隔)
+
+### 4. 分析模式选择
+- `none`: 不生成 `analysis/FACTS.json`
+- `quick`: 生成静态事实文件 `analysis/FACTS.json`
+
+### 5. 部署位置
+- Windows: `C:\Users\YourUser\AppData\Roaming\Claude\claude_desktop_config.json`
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Linux: `~/.config/claude/claude_desktop_config.json`

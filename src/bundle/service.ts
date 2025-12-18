@@ -20,6 +20,7 @@ import { rebuildIndex } from '../search/sqliteFts.js';
 import { ingestContext7Libraries, type Context7LibrarySummary } from './context7.js';
 import { ingestDeepWikiRepo, type DeepWikiSummary } from './deepwiki.js';
 import { analyzeBundleStatic, type AnalysisMode } from './analysis.js';
+import { autoDetectTags, generateDisplayName, generateDescription } from './tagging.js';
 
 export type CreateBundleInput = {
   repos: RepoInput[];
@@ -71,6 +72,156 @@ async function writeRepoMeta(params: {
 
 async function rmIfExists(p: string): Promise<void> {
   await fs.rm(p, { recursive: true, force: true });
+}
+
+/**
+ * Validate bundle completeness after creation.
+ * Ensures all critical files exist and have meaningful content.
+ */
+async function validateBundleCompleteness(bundleRoot: string): Promise<{
+  isValid: boolean;
+  missingComponents: string[];
+}> {
+  const requiredFiles = [
+    'manifest.json',
+    'START_HERE.md',
+    'AGENTS.md',
+    'OVERVIEW.md',
+  ];
+
+  const missingComponents: string[] = [];
+
+  // Check required files
+  for (const file of requiredFiles) {
+    const filePath = path.join(bundleRoot, file);
+    try {
+      const stats = await fs.stat(filePath);
+      // Check if file has meaningful content (not empty)
+      if (stats.size === 0) {
+        missingComponents.push(`${file} (empty)`);
+      } else if (file === 'manifest.json' && stats.size < 50) {
+        // Manifest should be at least 50 bytes
+        missingComponents.push(`${file} (too small, likely incomplete)`);
+      }
+    } catch {
+      missingComponents.push(`${file} (missing)`);
+    }
+  }
+
+  // Check if search index exists
+  const indexPath = path.join(bundleRoot, 'indexes', 'search.sqlite3');
+  try {
+    const stats = await fs.stat(indexPath);
+    if (stats.size === 0) {
+      missingComponents.push('indexes/search.sqlite3 (empty)');
+    }
+  } catch {
+    missingComponents.push('indexes/search.sqlite3 (missing)');
+  }
+
+  // Check if at least one repo was ingested
+  const reposDir = path.join(bundleRoot, 'repos');
+  try {
+    const repoEntries = await fs.readdir(reposDir);
+    const hasRepos = repoEntries.length > 0;
+    if (!hasRepos) {
+      missingComponents.push('repos/ (empty - no repositories ingested)');
+    } else {
+      // Check if repos have actual content
+      let hasContent = false;
+      for (const entry of repoEntries) {
+        const entryPath = path.join(reposDir, entry);
+        const stat = await fs.stat(entryPath);
+        if (stat.isDirectory()) {
+          const subEntries = await fs.readdir(entryPath);
+          if (subEntries.length > 0) {
+            hasContent = true;
+            break;
+          }
+        }
+      }
+      if (!hasContent) {
+        missingComponents.push('repos/ (no actual content)');
+      }
+    }
+  } catch {
+    missingComponents.push('repos/ (missing)');
+  }
+
+  return {
+    isValid: missingComponents.length === 0,
+    missingComponents,
+  };
+}
+
+/**
+ * Detect primary language from ingested files
+ */
+function detectPrimaryLanguage(files: IngestedFile[]): string | undefined {
+  const extToLang: Record<string, string> = {
+    '.ts': 'TypeScript',
+    '.tsx': 'TypeScript',
+    '.js': 'JavaScript',
+    '.jsx': 'JavaScript',
+    '.py': 'Python',
+    '.go': 'Go',
+    '.rs': 'Rust',
+    '.java': 'Java',
+    '.rb': 'Ruby',
+    '.php': 'PHP',
+  };
+
+  const langCounts = new Map<string, number>();
+  for (const file of files) {
+    if (file.kind !== 'code') continue;
+    const ext = path.extname(file.repoRelativePath).toLowerCase();
+    const lang = extToLang[ext];
+    if (lang) {
+      langCounts.set(lang, (langCounts.get(lang) || 0) + 1);
+    }
+  }
+
+  if (langCounts.size === 0) return undefined;
+
+  // Return the most common language
+  let maxLang: string | undefined;
+  let maxCount = 0;
+  for (const [lang, count] of langCounts) {
+    if (count > maxCount) {
+      maxCount = count;
+      maxLang = lang;
+    }
+  }
+  return maxLang;
+}
+
+/**
+ * Clean up failed bundle creation from all storage directories.
+ */
+async function cleanupFailedBundle(cfg: PreflightConfig, bundleId: string): Promise<void> {
+  logger.warn(`Cleaning up failed bundle: ${bundleId}`);
+
+  // Clean from all storage directories
+  for (const storageDir of cfg.storageDirs) {
+    const bundlePath = path.join(storageDir, bundleId);
+    try {
+      const exists = await isPathAvailable(bundlePath);
+      if (exists) {
+        await rmIfExists(bundlePath);
+        logger.info(`Removed failed bundle from: ${storageDir}`);
+      }
+    } catch (err) {
+      logger.error(`Failed to cleanup bundle from ${storageDir}`, err instanceof Error ? err : undefined);
+    }
+  }
+
+  // Also clean up temp directory
+  const tmpCheckout = path.join(cfg.tmpDir, 'checkouts', bundleId);
+  try {
+    await rmIfExists(tmpCheckout);
+  } catch {
+    // Ignore cleanup errors
+  }
 }
 
 /** Check if a path is accessible (mount exists). */
@@ -306,23 +457,41 @@ async function cloneAndIngestGitHubRepo(params: {
   return { headSha, files: ingested.files, skipped: ingested.skipped };
 }
 
-/**
- * Trigger bundle analysis asynchronously (non-blocking)
- */
-async function triggerBundleAnalysis(params: {
+function groupFilesByRepoId(files: IngestedFile[]): Array<{ repoId: string; files: IngestedFile[] }> {
+  const byRepo = new Map<string, IngestedFile[]>();
+  for (const f of files) {
+    const arr = byRepo.get(f.repoId);
+    if (arr) {
+      arr.push(f);
+    } else {
+      byRepo.set(f.repoId, [f]);
+    }
+  }
+  return Array.from(byRepo.entries()).map(([repoId, repoFiles]) => ({ repoId, files: repoFiles }));
+}
+
+async function generateFactsBestEffort(params: {
   bundleId: string;
   bundleRoot: string;
-  repos: Array<{ repoId: string; files: IngestedFile[] }>;
+  files: IngestedFile[];
   mode: AnalysisMode;
-  cfg: PreflightConfig;
 }): Promise<void> {
+  if (params.mode === 'none') return;
+
   try {
-    const result = await analyzeBundleStatic(params);
+    const repos = groupFilesByRepoId(params.files);
+    const result = await analyzeBundleStatic({
+      bundleId: params.bundleId,
+      bundleRoot: params.bundleRoot,
+      repos,
+      mode: params.mode,
+    });
+
     if (result.error) {
-      logger.warn('Analysis error', { error: result.error });
+      logger.warn('Static analysis error', { error: result.error });
     }
   } catch (err) {
-    logger.error('Analysis exception', err instanceof Error ? err : undefined);
+    logger.error('Static analysis exception', err instanceof Error ? err : undefined);
   }
 }
 
@@ -337,10 +506,15 @@ export async function createBundle(cfg: PreflightConfig, input: CreateBundleInpu
   const paths = getBundlePaths(effectiveStorageDir, bundleId);
   await ensureDir(paths.rootDir);
 
+  let bundleCreated = false;
+
   const allIngestedFiles: IngestedFile[] = [];
   const reposSummary: BundleSummary['repos'] = [];
 
-  for (const repoInput of input.repos) {
+  try {
+    bundleCreated = true; // Mark that bundle directory was created
+
+    for (const repoInput of input.repos) {
     if (repoInput.kind === 'github') {
       const { owner, repo } = parseOwnerRepo(repoInput.repo);
       const { headSha, files, skipped } = await cloneAndIngestGitHubRepo({
@@ -394,30 +568,49 @@ export async function createBundle(cfg: PreflightConfig, input: CreateBundleInpu
     includeCode: true,
   });
 
-  const manifest: BundleManifestV1 = {
-    schemaVersion: 1,
-    bundleId,
-    createdAt,
-    updatedAt: createdAt,
-    inputs: {
-      repos: input.repos,
-      libraries: input.libraries,
-      topics: input.topics,
-    },
-    repos: reposSummary.map((r) => ({
-      kind: r.kind,
-      id: r.id,
-      headSha: r.headSha,
-      fetchedAt: createdAt,
-      notes: r.notes,
-    })),
-    libraries: librariesSummary,
-    index: {
-      backend: 'sqlite-fts5-lines',
-      includeDocs: true,
-      includeCode: true,
-    },
-  };
+    // Auto-generate metadata (displayName, tags, description)
+    const repoIds = reposSummary.map((r) => r.id);
+    const displayName = generateDisplayName(repoIds);
+    const tags = autoDetectTags({
+      repoIds,
+      files: allIngestedFiles,
+      facts: undefined, // Will be populated later if analysis runs
+    });
+    const description = generateDescription({
+      repoIds,
+      tags,
+      facts: undefined,
+    });
+    const primaryLanguage = allIngestedFiles.length > 0 ? detectPrimaryLanguage(allIngestedFiles) : undefined;
+
+    const manifest: BundleManifestV1 = {
+      schemaVersion: 1,
+      bundleId,
+      createdAt,
+      updatedAt: createdAt,
+      displayName,
+      description,
+      tags,
+      primaryLanguage,
+      inputs: {
+        repos: input.repos,
+        libraries: input.libraries,
+        topics: input.topics,
+      },
+      repos: reposSummary.map((r) => ({
+        kind: r.kind,
+        id: r.id,
+        headSha: r.headSha,
+        fetchedAt: createdAt,
+        notes: r.notes,
+      })),
+      libraries: librariesSummary,
+      index: {
+        backend: 'sqlite-fts5-lines',
+        includeDocs: true,
+        includeCode: true,
+      },
+    };
 
   await writeManifest(paths.manifestPath, manifest);
 
@@ -447,34 +640,49 @@ export async function createBundle(cfg: PreflightConfig, input: CreateBundleInpu
   });
   await writeOverviewFile(paths.overviewPath, overviewMd);
 
+    // Generate static facts (FACTS.json). This is intentionally non-LLM and safe to keep inside bundles.
+    await generateFactsBestEffort({
+      bundleId,
+      bundleRoot: paths.rootDir,
+      files: allIngestedFiles,
+      mode: cfg.analysisMode,
+    });
+
   // Mirror to backup storage directories (non-blocking on failures)
   if (cfg.storageDirs.length > 1) {
     await mirrorBundleToBackups(effectiveStorageDir, cfg.storageDirs, bundleId);
   }
 
-  const summary = {
-    bundleId,
-    createdAt,
-    updatedAt: createdAt,
-    repos: reposSummary,
-    libraries: librariesSummary,
-  };
+    // CRITICAL: Validate bundle completeness before finalizing
+    const validation = await validateBundleCompleteness(paths.rootDir);
 
-  // Trigger async analysis (non-blocking)
-  const analysisMode = cfg.analysisMode;
-  if (analysisMode !== 'none') {
-    triggerBundleAnalysis({
+    if (!validation.isValid) {
+      const errorMsg = `Bundle creation incomplete. Missing: ${validation.missingComponents.join(', ')}`;
+      logger.error(errorMsg);
+      throw new Error(errorMsg);
+    }
+
+    const summary = {
       bundleId,
-      bundleRoot: paths.rootDir,
-      repos: perRepoOverviews,
-      mode: analysisMode,
-      cfg,
-    }).catch((err) => {
-      logger.error(`Analysis failed for bundle ${bundleId}`, err instanceof Error ? err : undefined);
-    });
-  }
+      createdAt,
+      updatedAt: createdAt,
+      repos: reposSummary,
+      libraries: librariesSummary,
+    };
 
-  return summary;
+    return summary;
+
+  } catch (err) {
+    // If bundle directory was created, clean it up
+    if (bundleCreated) {
+      logger.error(`Bundle creation failed, cleaning up: ${bundleId}`, err instanceof Error ? err : undefined);
+      await cleanupFailedBundle(cfg, bundleId);
+    }
+
+    // Enhance error message
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to create bundle: ${errorMsg}`);
+  }
 }
 
 export type UpdateBundleOptions = {
@@ -645,6 +853,14 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
     libraries: librariesSummary,
   });
   await writeOverviewFile(paths.overviewPath, overviewMd);
+
+  // Refresh static facts (FACTS.json) after update.
+  await generateFactsBestEffort({
+    bundleId,
+    bundleRoot: paths.rootDir,
+    files: allIngestedFiles,
+    mode: cfg.analysisMode,
+  });
 
   // Mirror to backup storage directories (non-blocking on failures)
   if (cfg.storageDirs.length > 1) {

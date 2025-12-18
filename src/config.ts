@@ -1,6 +1,8 @@
 import os from 'node:os';
 import path from 'node:path';
 
+export type AnalysisMode = 'none' | 'quick';
+
 export type PreflightConfig = {
   /** Primary storage directory (first in storageDirs, used for reading). */
   storageDir: string;
@@ -12,11 +14,25 @@ export type PreflightConfig = {
   context7McpUrl: string;
   maxFileBytes: number;
   maxTotalBytes: number;
-  // Analysis settings
-  analysisMode: 'none' | 'quick' | 'deep';
-  llmProvider: 'context7' | 'openai' | 'none';
-  openaiApiKey?: string;
-  openaiModel: string;
+  /** Static analysis mode (controls whether analysis/FACTS.json is generated). */
+  analysisMode: AnalysisMode;
+
+  // --- Limits and tuning parameters (previously hardcoded) ---
+
+  /** Max Context7 libraries to process per bundle (default: 20). */
+  maxContext7Libraries: number;
+  /** Max Context7 topics per library (default: 10). */
+  maxContext7Topics: number;
+  /** Max tokens to extract for FTS query (default: 12). */
+  maxFtsQueryTokens: number;
+  /** Max skipped file notes to include in manifest (default: 50). */
+  maxSkippedNotes: number;
+  /** Default max age in hours before auto-update (default: 24). */
+  defaultMaxAgeHours: number;
+  /** Max search results limit (default: 200). */
+  maxSearchLimit: number;
+  /** Default search results limit (default: 30). */
+  defaultSearchLimit: number;
 };
 
 function envNumber(name: string, fallback: number): number {
@@ -24,6 +40,15 @@ function envNumber(name: string, fallback: number): number {
   if (!raw) return fallback;
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function parseAnalysisMode(raw: string | undefined): AnalysisMode {
+  const v = (raw ?? '').trim().toLowerCase();
+  if (v === 'none') return 'none';
+  if (v === 'quick') return 'quick';
+  // Back-compat: deep used to exist; treat it as quick (but never run LLM).
+  if (v === 'deep') return 'quick';
+  return 'quick';
 }
 
 /**
@@ -56,8 +81,7 @@ export function getConfig(): PreflightConfig {
   const tmpDir =
     process.env.PREFLIGHT_TMP_DIR ?? path.join(os.tmpdir(), 'preflight-mcp');
 
-  const analysisMode = (process.env.PREFLIGHT_ANALYSIS_MODE as 'none' | 'quick' | 'deep') || 'quick';
-  const llmProvider = (process.env.PREFLIGHT_LLM_PROVIDER as 'context7' | 'openai' | 'none') || 'none';
+  const analysisMode = parseAnalysisMode(process.env.PREFLIGHT_ANALYSIS_MODE);
 
   return {
     storageDir,
@@ -69,8 +93,14 @@ export function getConfig(): PreflightConfig {
     maxFileBytes: envNumber('PREFLIGHT_MAX_FILE_BYTES', 512 * 1024),
     maxTotalBytes: envNumber('PREFLIGHT_MAX_TOTAL_BYTES', 50 * 1024 * 1024),
     analysisMode,
-    llmProvider,
-    openaiApiKey: process.env.OPENAI_API_KEY,
-    openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+
+    // Tuning parameters with defaults (can be overridden via env vars)
+    maxContext7Libraries: envNumber('PREFLIGHT_MAX_CONTEXT7_LIBRARIES', 20),
+    maxContext7Topics: envNumber('PREFLIGHT_MAX_CONTEXT7_TOPICS', 10),
+    maxFtsQueryTokens: envNumber('PREFLIGHT_MAX_FTS_QUERY_TOKENS', 12),
+    maxSkippedNotes: envNumber('PREFLIGHT_MAX_SKIPPED_NOTES', 50),
+    defaultMaxAgeHours: envNumber('PREFLIGHT_DEFAULT_MAX_AGE_HOURS', 24),
+    maxSearchLimit: envNumber('PREFLIGHT_MAX_SEARCH_LIMIT', 200),
+    defaultSearchLimit: envNumber('PREFLIGHT_DEFAULT_SEARCH_LIMIT', 30),
   };
 }

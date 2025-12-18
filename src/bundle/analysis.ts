@@ -1,11 +1,9 @@
 import path from 'node:path';
 import { type IngestedFile } from './ingest.js';
 import { extractBundleFacts, writeFacts, type BundleFacts } from './facts.js';
-import { generateAndSaveAnalysis } from './llm-analysis.js';
-import { type PreflightConfig } from '../config.js';
 import { logger } from '../logging/logger.js';
 
-export type AnalysisMode = 'none' | 'quick' | 'deep';
+export type AnalysisMode = 'none' | 'quick';
 
 export type AnalysisResult = {
   facts?: BundleFacts;
@@ -21,34 +19,19 @@ export async function analyzeBundleStatic(params: {
   bundleRoot: string;
   repos: Array<{ repoId: string; files: IngestedFile[] }>;
   mode: AnalysisMode;
-  cfg?: PreflightConfig;
 }): Promise<AnalysisResult> {
   if (params.mode === 'none') {
     return {};
   }
 
   try {
-    // Phase 1: Extract static facts
     const facts = await extractBundleFacts({
       bundleRoot: params.bundleRoot,
       repos: params.repos,
     });
 
-    // Write facts to disk
     const factsPath = path.join(params.bundleRoot, 'analysis', 'FACTS.json');
     await writeFacts(factsPath, facts);
-
-    // Phase 2: Generate LLM analysis (only for 'deep' mode)
-    if (params.mode === 'deep' && params.cfg) {
-      try {
-        await generateAndSaveAnalysis({
-          cfg: params.cfg,
-          bundleRoot: params.bundleRoot,
-        });
-      } catch (err) {
-        logger.warn('LLM analysis failed', { error: err instanceof Error ? err.message : String(err) });
-      }
-    }
 
     return { facts };
   } catch (err) {

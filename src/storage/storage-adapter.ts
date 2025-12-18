@@ -151,6 +151,16 @@ export class LocalStorageAdapter implements StorageAdapter {
 	}
 }
 
+/**
+ * S3 Storage Adapter - NOT YET IMPLEMENTED
+ *
+ * TODO: This is a placeholder implementation. To use S3 storage:
+ * 1. Install AWS SDK: npm install @aws-sdk/client-s3
+ * 2. Implement the getS3Client method
+ * 3. Remove this warning comment
+ *
+ * @experimental This adapter is not functional. Use LocalStorageAdapter instead.
+ */
 export class S3StorageAdapter implements StorageAdapter {
 	name: string;
 	type: 'local' | 's3' | 'gcs' | 'azure' | 'custom' = 's3';
@@ -176,9 +186,11 @@ export class S3StorageAdapter implements StorageAdapter {
 	}
 
 	private async getS3Client(): Promise<any> {
-		// 这里需要导入 AWS SDK
-		// 为了简化，我们返回一个模拟实现
-		throw new Error('S3StorageAdapter requires AWS SDK to be installed');
+		// TODO: Import AWS SDK - requires @aws-sdk/client-s3
+		// This is a placeholder that throws to prevent accidental use.
+		throw new Error(
+			'S3StorageAdapter is not implemented. Install @aws-sdk/client-s3 and implement this method.'
+		);
 	}
 
 	async exists(path: string): Promise<boolean> {
@@ -212,7 +224,7 @@ export class S3StorageAdapter implements StorageAdapter {
 	}
 
 	async createDirectory(path: string): Promise<void> {
-		// S3 不需要显式创建目录，但我们可以创建一个占位符对象
+		// S3 doesn't require explicit directory creation, but we create a placeholder object
 		const dirPath = path.endsWith('/') ? path : `${path}/`;
 		await this.writeFile(dirPath, '');
 	}
@@ -263,7 +275,7 @@ export class S3StorageAdapter implements StorageAdapter {
 	}
 
 	async getStats(path?: string): Promise<StorageStats> {
-		// S3 的存储统计需要通过 CloudWatch 或其他方式获取
+		// S3 storage stats would need CloudWatch or similar service
 		return {
 			totalSize: 0,
 			freeSpace: 0,
@@ -312,15 +324,15 @@ export class StorageManager {
 	}
 
 	private initializeAdapters(config: PreflightConfig): void {
-		// 初始化默认本地存储适配器
+		// Initialize default local storage adapter
 		if (config.storageDirs && config.storageDirs.length > 0) {
 			const localAdapter = new LocalStorageAdapter(config.storageDirs[0]!);
 			this.adapters.set('default', localAdapter);
 			this.primaryAdapter = 'default';
 		}
 
-		// 可以在这里初始化其他存储适配器
-		// 例如：S3、GCS、Azure Blob Storage 等
+		// TODO: Initialize other storage adapters here (S3, GCS, Azure Blob Storage, etc.)
+		// These are not yet implemented.
 	}
 
 	getAdapter(name = 'default'): StorageAdapter {
