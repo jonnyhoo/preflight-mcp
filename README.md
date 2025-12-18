@@ -1,4 +1,7 @@
 # preflight-mcp
+
+**[中文文档 (Chinese Documentation)](./README.zh-CN.md)**
+
 An MCP (Model Context Protocol) **stdio** server that creates **evidence-based, reusable "bundle" packs** for external GitHub repositories.
 
 Each bundle contains:
