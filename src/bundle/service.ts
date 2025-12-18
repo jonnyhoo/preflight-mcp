@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { type PreflightConfig } from '../config.js';
+import { logger } from '../logging/logger.js';
 import {
   getLocalHeadSha,
   getRemoteHeadSha,
@@ -318,10 +319,10 @@ async function triggerBundleAnalysis(params: {
   try {
     const result = await analyzeBundleStatic(params);
     if (result.error) {
-      console.error('[preflight-mcp] Analysis error:', result.error);
+      logger.warn('Analysis error', { error: result.error });
     }
   } catch (err) {
-    console.error('[preflight-mcp] Analysis exception:', err);
+    logger.error('Analysis exception', err instanceof Error ? err : undefined);
   }
 }
 
@@ -469,7 +470,7 @@ export async function createBundle(cfg: PreflightConfig, input: CreateBundleInpu
       mode: analysisMode,
       cfg,
     }).catch((err) => {
-      console.error('[preflight-mcp] Analysis failed for bundle', bundleId, ':', err);
+      logger.error(`Analysis failed for bundle ${bundleId}`, err instanceof Error ? err : undefined);
     });
   }
 

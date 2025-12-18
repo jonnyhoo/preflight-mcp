@@ -2,6 +2,7 @@ import { Job } from '../core/scheduler.js';
 import { getConfig } from '../config.js';
 import { listBundles, bundleExists, clearBundleMulti } from '../bundle/service.js';
 import { readManifest } from '../bundle/manifest.js';
+import { logger } from '../logging/logger.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -37,16 +38,15 @@ export class StorageCleanupJob extends Job {
 			let freedSpace = 0;
 			const errors: string[] = [];
 
-			console.log(`[StorageCleanupJob] Scanning ${bundleIds.length} bundles for cleanup (max age: ${maxAgeDays} days)`);
+			logger.info(`Scanning ${bundleIds.length} bundles for cleanup`, { maxAgeDays });
 
 			for (const bundleId of bundleIds) {
 				try {
 					const bundlePath = path.join(effectiveDir, bundleId);
 					
-					// 检查 bundle 是否存在
 					const exists = await bundleExists(effectiveDir, bundleId);
 					if (!exists) {
-						console.warn(`[StorageCleanupJob] Bundle ${bundleId} not found, skipping`);
+						logger.warn(`Bundle ${bundleId} not found, skipping`);
 						continue;
 					}
 
@@ -57,12 +57,11 @@ export class StorageCleanupJob extends Job {
 					const ageMs = Date.now() - lastAccess;
 
 					if (ageMs > maxAgeMs) {
-						// 计算 bundle 大小
 						const size = await this.calculateDirectorySize(bundlePath);
+						const ageDays = Math.floor(ageMs / (24 * 60 * 60 * 1000));
 						
-						console.log(`[StorageCleanupJob] Removing old bundle ${bundleId} (${(size / 1024 / 1024).toFixed(2)} MB, ${Math.floor(ageMs / (24 * 60 * 60 * 1000))} days old)`);
+						logger.info(`Removing old bundle ${bundleId}`, { sizeMB: (size / 1024 / 1024).toFixed(2), ageDays });
 						
-						// 删除 bundle
 						const deleted = await clearBundleMulti(cfg.storageDirs, bundleId);
 						if (deleted) {
 							cleanedBundles++;
@@ -72,20 +71,19 @@ export class StorageCleanupJob extends Job {
 						}
 					} else {
 						const ageDays = Math.floor(ageMs / (24 * 60 * 60 * 1000));
-						console.log(`[StorageCleanupJob] Bundle ${bundleId} is recent (${ageDays} days old), keeping`);
+						logger.debug(`Bundle ${bundleId} is recent, keeping`, { ageDays });
 					}
 				} catch (error) {
 					const errorMsg = error instanceof Error ? error.message : String(error);
 					errors.push(`Error processing bundle ${bundleId}: ${errorMsg}`);
-					console.error(`[StorageCleanupJob] Error processing bundle ${bundleId}:`, error);
+					logger.error(`Error processing bundle ${bundleId}`, error instanceof Error ? error : undefined);
 				}
 			}
 
-			// 清理临时文件
 			try {
 				const tmpFreed = await this.cleanupTempFiles();
 				freedSpace += tmpFreed;
-				console.log(`[StorageCleanupJob] Cleaned up ${(tmpFreed / 1024 / 1024).toFixed(2)} MB of temporary files`);
+				logger.debug(`Cleaned up temporary files`, { freedMB: (tmpFreed / 1024 / 1024).toFixed(2) });
 			} catch (error) {
 				const errorMsg = error instanceof Error ? error.message : String(error);
 				errors.push(`Temp file cleanup failed: ${errorMsg}`);
@@ -99,10 +97,10 @@ export class StorageCleanupJob extends Job {
 				totalBundles: bundleIds.length
 			};
 
-			console.log(`[StorageCleanupJob] Completed: ${cleanedBundles} bundles cleaned, ${(freedSpace / 1024 / 1024).toFixed(2)} MB freed, ${errors.length} errors`);
+			logger.info('Storage cleanup completed', { cleanedBundles, freedMB: (freedSpace / 1024 / 1024).toFixed(2), errors: errors.length });
 			return result;
 		} catch (error) {
-			console.error('[StorageCleanupJob] Failed to cleanup storage:', error);
+			logger.error('Failed to cleanup storage', error instanceof Error ? error : undefined);
 			throw error;
 		}
 	}
@@ -124,8 +122,7 @@ export class StorageCleanupJob extends Job {
 				}
 			}
 		} catch (error) {
-			// 如果无法访问某个文件，跳过它
-			console.warn(`[StorageCleanupJob] Cannot calculate size for ${dirPath}:`, error);
+			logger.debug(`Cannot calculate size for ${dirPath}`);
 		}
 		
 		return totalSize;
@@ -160,14 +157,14 @@ export class StorageCleanupJob extends Job {
 						const size = stats.size;
 						await fs.rm(fullPath, { recursive: true, force: true });
 						freedSpace += size;
-						console.log(`[StorageCleanupJob] Removed old temp file/dir: ${entry.name}`);
+						logger.debug(`Removed old temp file/dir: ${entry.name}`);
 					}
 				} catch (error) {
-					console.warn(`[StorageCleanupJob] Failed to remove temp file ${entry.name}:`, error);
+					logger.debug(`Failed to remove temp file ${entry.name}`);
 				}
 			}
 		} catch (error) {
-			console.warn('[StorageCleanupJob] Failed to cleanup temp files:', error);
+			logger.debug('Failed to cleanup temp files');
 		}
 
 		return freedSpace;

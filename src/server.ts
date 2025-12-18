@@ -21,6 +21,7 @@ import { readFacts } from './bundle/facts.js';
 import { readManifest } from './bundle/manifest.js';
 import { safeJoin, toBundleFileUri } from './mcp/uris.js';
 import { searchIndex, type SearchScope } from './search/sqliteFts.js';
+import { logger } from './logging/logger.js';
 
 const CreateRepoInputSchema = z.union([
   z.object({
@@ -713,11 +714,9 @@ export async function startServer(): Promise<void> {
         
         // Prepare files list (simplified - we'll just note that analysis was triggered)
         // In a real scenario, we'd re-read the actual files or use cached data
-        const message = args.regenerate 
-          ? `Regenerating ${args.mode} analysis for bundle ${args.bundleId}...`
-          : `Generating ${args.mode} analysis for bundle ${args.bundleId}...`;
-        
-        console.log(`[preflight-mcp] ${message}`);
+        // Log analysis action (messages go to stderr via logger)
+        const action = args.regenerate ? 'Regenerating' : 'Generating';
+        logger.debug(`${action} ${args.mode} analysis for bundle ${args.bundleId}`);
 
         // For deep mode, trigger LLM analysis
         if (args.mode === 'deep') {

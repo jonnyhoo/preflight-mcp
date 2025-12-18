@@ -187,7 +187,8 @@ export class StructuredLogger {
 			if (this.config.enableColors) {
 				this.writeColoredConsole(entry, formatted);
 			} else {
-				console.log(formatted);
+				// MCP stdio servers must log to stderr to avoid interfering with protocol
+				console.error(formatted);
 			}
 		}
 	}
@@ -204,7 +205,8 @@ export class StructuredLogger {
 		const reset = '\x1b[0m';
 		const color = colors[entry.level] || '';
 		
-		console.log(`${color}${formatted}${reset}`);
+		// MCP stdio servers must log to stderr to avoid interfering with protocol
+		console.error(`${color}${formatted}${reset}`);
 	}
 
 	private formatLogEntry(entry: LogEntry, format: 'json' | 'text'): string {

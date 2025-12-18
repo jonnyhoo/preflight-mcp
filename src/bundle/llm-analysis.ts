@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { type PreflightConfig } from '../config.js';
 import { type BundleFacts, readFacts } from './facts.js';
+import { logger } from '../logging/logger.js';
 import {
   buildArchitectureAnalysisPrompt,
   buildUsageGuidePrompt,
@@ -171,16 +172,13 @@ export async function generateLLMAnalysis(
       };
     } else if (cfg.llmProvider === 'context7') {
       // TODO: Implement Context7 MCP client integration
-      // For now, fall back to simple analysis
-      console.warn(
-        '[preflight-mcp] Context7 provider not yet implemented, using fallback'
-      );
+      logger.warn('Context7 provider not yet implemented, using fallback');
       return generateSimpleAnalysis(facts);
     } else {
       return generateSimpleAnalysis(facts);
     }
   } catch (err) {
-    console.error('[preflight-mcp] LLM analysis failed:', err);
+    logger.error('LLM analysis failed', err instanceof Error ? err : undefined);
     return {
       ...generateSimpleAnalysis(facts),
       error: err instanceof Error ? err.message : String(err),
@@ -361,7 +359,7 @@ export async function generateAndSaveAnalysis(params: {
   // Log validation results
   if (params.cfg.llmProvider !== 'none') {
     const validationReport = formatValidationResult(validation);
-    console.log('[preflight-mcp]', validationReport);
+    logger.debug('Analysis validation', { report: validationReport });
   }
 
   // Apply corrections based on validation
@@ -383,9 +381,9 @@ export async function generateAndSaveAnalysis(params: {
   await fs.mkdir(path.dirname(summaryPath), { recursive: true });
   await fs.writeFile(summaryPath, markdown, 'utf8');
 
-  console.log(`[preflight-mcp] AI analysis saved to ${summaryPath}`);
+  logger.debug(`AI analysis saved`, { path: summaryPath });
   
   if (!validation.valid) {
-    console.warn(`[preflight-mcp] Analysis had ${validation.errors.length} error(s) and ${validation.warnings.length} warning(s)`);
+    logger.warn(`Analysis had validation issues`, { errors: validation.errors.length, warnings: validation.warnings.length });
   }
 }

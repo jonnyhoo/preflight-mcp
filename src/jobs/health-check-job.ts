@@ -3,6 +3,7 @@ import { getConfig } from '../config.js';
 import { listBundles, bundleExists } from '../bundle/service.js';
 import { readManifest } from '../bundle/manifest.js';
 import { PreflightScheduler } from '../core/scheduler.js';
+import { logger } from '../logging/logger.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -42,7 +43,7 @@ export class HealthCheckJob extends Job {
 	}
 
 	async run(): Promise<HealthCheckResult> {
-		console.log('[HealthCheckJob] Starting system health check...');
+		logger.debug('Starting system health check');
 		
 		const cfg = getConfig();
 		const result: HealthCheckResult = {
@@ -79,17 +80,17 @@ export class HealthCheckJob extends Job {
 			// 检查调度器健康状态
 			this.checkSchedulerHealth(result);
 			
-			// 确定整体健康状态
 			this.determineOverallHealth(result);
 			
-			console.log(`[HealthCheckJob] Health check completed: ${result.status.toUpperCase()}`);
-			console.log(`[HealthCheckJob] Bundles: ${result.bundles.healthy}/${result.bundles.total} healthy`);
-			console.log(`[HealthCheckJob] Storage: ${result.storage.accessiblePaths}/${result.storage.totalPaths} paths accessible`);
-			console.log(`[HealthCheckJob] Scheduler: ${result.scheduler.totalJobs} jobs configured`);
+			logger.info(`Health check completed: ${result.status}`, {
+				bundles: `${result.bundles.healthy}/${result.bundles.total}`,
+				storage: `${result.storage.accessiblePaths}/${result.storage.totalPaths}`,
+				jobs: result.scheduler.totalJobs
+			});
 			
 			return result;
 		} catch (error) {
-			console.error('[HealthCheckJob] Health check failed:', error);
+			logger.error('Health check failed', error instanceof Error ? error : undefined);
 			result.status = 'error';
 			return result;
 		}
@@ -105,16 +106,15 @@ export class HealthCheckJob extends Job {
 				// 获取磁盘空间信息（简化版本，仅适用于某些系统）
 				try {
 					const stats = await fs.stat(storageDir);
-					// 注意：这里只是占位符，实际获取磁盘空间需要更多系统特定的代码
-					result.storage.totalSpace += 0; // 占位符
-					result.storage.freeSpace += 0; // 占位符
+					result.storage.totalSpace += 0;
+					result.storage.freeSpace += 0;
 				} catch (spaceError) {
-					console.warn(`[HealthCheckJob] Cannot get disk space info for ${storageDir}:`, spaceError);
+					logger.warn(`Cannot get disk space info for ${storageDir}`);
 				}
 				
-				console.log(`[HealthCheckJob] Storage path ${storageDir}: accessible`);
+				logger.debug(`Storage path accessible: ${storageDir}`);
 			} catch (error) {
-				console.error(`[HealthCheckJob] Storage path ${storageDir} not accessible:`, error);
+				logger.warn(`Storage path not accessible: ${storageDir}`);
 			}
 		}
 	}
@@ -134,7 +134,7 @@ export class HealthCheckJob extends Job {
 					const exists = await bundleExists(effectiveDir, bundleId);
 					if (!exists) {
 						result.bundles.corrupted++;
-						console.warn(`[HealthCheckJob] Bundle ${bundleId} missing from filesystem`);
+						logger.warn(`Bundle ${bundleId} missing from filesystem`);
 						continue;
 					}
 
@@ -154,15 +154,15 @@ export class HealthCheckJob extends Job {
 						result.bundles.healthy++;
 					} catch (manifestError) {
 						result.bundles.corrupted++;
-						console.warn(`[HealthCheckJob] Bundle ${bundleId} has corrupted manifest:`, manifestError);
+						logger.warn(`Bundle ${bundleId} has corrupted manifest`);
 					}
 				} catch (error) {
 					result.bundles.corrupted++;
-					console.warn(`[HealthCheckJob] Bundle ${bundleId} health check failed:`, error);
+					logger.warn(`Bundle ${bundleId} health check failed`);
 				}
 			}
 		} catch (error) {
-			console.error('[HealthCheckJob] Failed to list bundles for health check:', error);
+			logger.error('Failed to list bundles for health check', error instanceof Error ? error : undefined);
 		}
 	}
 
@@ -181,7 +181,7 @@ export class HealthCheckJob extends Job {
 				}
 			}
 		} catch (error) {
-			console.error('[HealthCheckJob] Failed to check scheduler health:', error);
+			logger.error('Failed to check scheduler health', error instanceof Error ? error : undefined);
 		}
 	}
 

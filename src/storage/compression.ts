@@ -1,5 +1,6 @@
 import zlib from 'node:zlib';
 import { promisify } from 'node:util';
+import { logger } from '../logging/logger.js';
 
 const gzip = promisify(zlib.gzip);
 const gunzip = promisify(zlib.gunzip);
@@ -95,9 +96,8 @@ export class CompressionManager {
 			const compressionTime = Date.now() - startTime;
 			const compressionRatio = compressedData.length / originalSize;
 
-			// 如果压缩后反而变大了，返回原始数据
 			if (compressionRatio >= 0.95) {
-				console.log(`[Compression] ${opts.type} compression ineffective (ratio: ${compressionRatio.toFixed(3)}, time: ${compressionTime}ms), using original data`);
+				logger.debug(`Compression ineffective`, { type: opts.type, ratio: compressionRatio.toFixed(3), timeMs: compressionTime });
 				return {
 					compressed: false,
 					originalSize,
@@ -108,7 +108,7 @@ export class CompressionManager {
 				};
 			}
 
-			console.log(`[Compression] ${opts.type} compressed ${originalSize} bytes to ${compressedData.length} bytes (ratio: ${compressionRatio.toFixed(3)}, time: ${compressionTime}ms)`);
+			logger.debug(`Compressed data`, { type: opts.type, originalSize, compressedSize: compressedData.length, ratio: compressionRatio.toFixed(3), timeMs: compressionTime });
 
 			return {
 				compressed: true,
@@ -119,8 +119,7 @@ export class CompressionManager {
 				data: compressedData
 			};
 		} catch (error) {
-			console.error(`[Compression] Failed to compress data:`, error);
-			// 压缩失败时返回原始数据
+			logger.debug(`Failed to compress data`, { error: error instanceof Error ? error.message : String(error) });
 			return {
 				compressed: false,
 				originalSize,
@@ -159,11 +158,11 @@ export class CompressionManager {
 			}
 
 			const decompressionTime = Date.now() - startTime;
-			console.log(`[Compression] ${type} decompressed ${data.length} bytes to ${decompressedData.length} bytes (time: ${decompressionTime}ms)`);
+			logger.debug(`Decompressed data`, { type, originalSize: data.length, decompressedSize: decompressedData.length, timeMs: decompressionTime });
 
 			return decompressedData;
 		} catch (error) {
-			console.error(`[Compression] Failed to decompress data:`, error);
+			logger.error(`Failed to decompress data`, error instanceof Error ? error : undefined);
 			throw error;
 		}
 	}

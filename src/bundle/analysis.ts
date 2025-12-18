@@ -3,6 +3,7 @@ import { type IngestedFile } from './ingest.js';
 import { extractBundleFacts, writeFacts, type BundleFacts } from './facts.js';
 import { generateAndSaveAnalysis } from './llm-analysis.js';
 import { type PreflightConfig } from '../config.js';
+import { logger } from '../logging/logger.js';
 
 export type AnalysisMode = 'none' | 'quick' | 'deep';
 
@@ -45,14 +46,13 @@ export async function analyzeBundleStatic(params: {
           bundleRoot: params.bundleRoot,
         });
       } catch (err) {
-        console.error('[preflight-mcp] LLM analysis failed:', err);
-        // Continue even if LLM fails
+        logger.warn('LLM analysis failed', { error: err instanceof Error ? err.message : String(err) });
       }
     }
 
     return { facts };
   } catch (err) {
-    console.error('[preflight-mcp] Analysis failed:', err);
+    logger.error('Analysis failed', err instanceof Error ? err : undefined);
     return {
       error: err instanceof Error ? err.message : String(err),
     };

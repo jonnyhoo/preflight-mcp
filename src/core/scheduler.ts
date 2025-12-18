@@ -1,4 +1,5 @@
 import cron, { type ScheduledTask } from "node-cron";
+import { logger } from '../logging/logger.js';
 
 export abstract class Job {
 	abstract run(): Promise<unknown>;
@@ -35,7 +36,7 @@ export class Scheduler {
 		}
 		
 		this.isRunning = true;
-		console.log("[PreflightScheduler] started");
+		logger.info('Scheduler started');
 	}
 
 	build(JobClass: JobConstructor) {
@@ -58,7 +59,7 @@ export class Scheduler {
 				this.tasks.set(jobName, jobTask);
 				task.start();
 				
-				console.log(`[PreflightScheduler] Scheduled job ${jobName} with cron: ${cronExpression}`);
+				logger.info(`Scheduled job ${jobName}`, { cronExpression });
 			},
 		};
 	}
@@ -66,40 +67,39 @@ export class Scheduler {
 	private async executeJob(jobName: string, job: Job): Promise<void> {
 		const jobTask = this.tasks.get(jobName);
 		if (!jobTask) {
-			console.error(`[PreflightScheduler] Job ${jobName} not found in task registry`);
+			logger.error(`Job ${jobName} not found in task registry`);
 			return;
 		}
 
 		try {
 			const startTime = Date.now();
-			console.log(`[PreflightScheduler] Executing job: ${jobName}`);
+			logger.debug(`Executing job: ${jobName}`);
 			
 			await job.run();
 			
 			const duration = Date.now() - startTime;
 			jobTask.lastRun = new Date();
-			jobTask.retries = 0; // 重置重试计数
+			jobTask.retries = 0;
 			jobTask.lastError = undefined;
 			
-			console.log(`[PreflightScheduler] Job ${jobName} completed successfully in ${duration}ms`);
+			logger.info(`Job ${jobName} completed`, { durationMs: duration });
 		} catch (error) {
 			jobTask.lastError = error instanceof Error ? error : new Error(String(error));
 			
-			console.error(`[PreflightScheduler] Job ${jobName} failed:`, error);
+			logger.error(`Job ${jobName} failed`, error instanceof Error ? error : undefined);
 			
-			// 重试逻辑
 			const maxRetries = job.getMaxRetries();
 			if (jobTask.retries < maxRetries) {
 				jobTask.retries++;
-				const delay = job.getRetryDelay() * Math.pow(2, jobTask.retries - 1); // 指数退避
+				const delay = job.getRetryDelay() * Math.pow(2, jobTask.retries - 1);
 				
-				console.log(`[PreflightScheduler] Retrying job ${jobName} (${jobTask.retries}/${maxRetries}) in ${delay}ms`);
+				logger.info(`Retrying job ${jobName}`, { attempt: jobTask.retries, maxRetries, delayMs: delay });
 				
 				setTimeout(async () => {
 					await this.executeJob(jobName, job);
 				}, delay);
 			} else {
-				console.error(`[PreflightScheduler] Job ${jobName} failed after ${maxRetries} retries`);
+				logger.error(`Job ${jobName} failed after ${maxRetries} retries`);
 			}
 		}
 	}
@@ -111,21 +111,21 @@ export class Scheduler {
 
 		for (const [name, jobTask] of this.tasks) {
 			jobTask.task.stop();
-			console.log(`[PreflightScheduler] Stopped job: ${name}`);
+			logger.debug(`Stopped job: ${name}`);
 		}
 		
 		this.isRunning = false;
-		console.log("[PreflightScheduler] stopped");
+		logger.info('Scheduler stopped');
 	}
 
 	async clear() {
 		for (const [name, jobTask] of this.tasks) {
 			jobTask.task.destroy();
-			console.log(`[PreflightScheduler] Destroyed job: ${name}`);
+			logger.debug(`Destroyed job: ${name}`);
 		}
 		
 		this.tasks.clear();
-		console.log("[PreflightScheduler] cleared all tasks");
+		logger.info('Scheduler cleared all tasks');
 	}
 
 	// 获取任务状态
