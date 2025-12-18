@@ -12,6 +12,11 @@ export type PreflightConfig = {
   context7McpUrl: string;
   maxFileBytes: number;
   maxTotalBytes: number;
+  // Analysis settings
+  analysisMode: 'none' | 'quick' | 'deep';
+  llmProvider: 'context7' | 'openai' | 'none';
+  openaiApiKey?: string;
+  openaiModel: string;
 };
 
 function envNumber(name: string, fallback: number): number {
@@ -51,6 +56,9 @@ export function getConfig(): PreflightConfig {
   const tmpDir =
     process.env.PREFLIGHT_TMP_DIR ?? path.join(os.tmpdir(), 'preflight-mcp');
 
+  const analysisMode = (process.env.PREFLIGHT_ANALYSIS_MODE as 'none' | 'quick' | 'deep') || 'quick';
+  const llmProvider = (process.env.PREFLIGHT_LLM_PROVIDER as 'context7' | 'openai' | 'none') || 'none';
+
   return {
     storageDir,
     storageDirs,
@@ -60,5 +68,9 @@ export function getConfig(): PreflightConfig {
     context7McpUrl: process.env.CONTEXT7_MCP_URL ?? 'https://mcp.context7.com/mcp',
     maxFileBytes: envNumber('PREFLIGHT_MAX_FILE_BYTES', 512 * 1024),
     maxTotalBytes: envNumber('PREFLIGHT_MAX_TOTAL_BYTES', 50 * 1024 * 1024),
+    analysisMode,
+    llmProvider,
+    openaiApiKey: process.env.OPENAI_API_KEY,
+    openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
   };
 }

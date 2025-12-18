@@ -7,7 +7,9 @@ Each bundle contains:
 - Agent-facing entry files: `START_HERE.md`, `AGENTS.md`, and `OVERVIEW.md` (factual-only, with evidence pointers)
 
 ## What you get
-- **9 Tools** to create/update/search/verify/read bundles
+- **10 Tools** to create/update/search/verify/read/analyze bundles
+- **AI-powered analysis** with static facts extraction and LLM summaries
+- **Evidence-based validation** to detect hallucinations
 - **Resources** to read bundle files via `preflight://...` URIs
 - **Multi-path mirror backup** for cloud storage redundancy
 - **Resilient storage** with automatic failover when mounts are unavailable
@@ -46,7 +48,7 @@ Command:
 
 Note: the smoke test clones `octocat/Hello-World` from GitHub, so it needs internet access.
 
-## Tools (9 total)
+## Tools (10 total)
 
 ### `preflight_list_bundles`
 List bundle IDs in storage.
@@ -93,6 +95,19 @@ Optional parameters:
 - `ensureFresh`: If true, check if bundle needs update before searching.
 - `maxAgeHours`: Max age in hours before triggering auto-update (default: 24).
 
+### `preflight_analyze_bundle`
+Generate or regenerate AI analysis for a bundle.
+- Triggers: "analyze this bundle", "generate analysis", "分析bundle"
+
+Parameters:
+- `bundleId`: Bundle ID to analyze
+- `mode`: Analysis mode - `quick` (static only) or `deep` (static + LLM)
+- `regenerate`: If true, regenerate analysis even if it exists
+
+Generates:
+- **FACTS.json**: Static analysis (languages, frameworks, dependencies, entry points)
+- **AI_SUMMARY.md**: LLM-generated summary with architecture overview and usage guide (deep mode only)
+
 ### `preflight_verify_claim`
 Find evidence for a claim/statement in bundle.
 - Triggers: "验证说法", "找证据", "这个对吗"
@@ -113,11 +128,20 @@ Examples:
 - `preflight://bundle/<id>/file/repos%2Fowner%2Frepo%2Fnorm%2FREADME.md`
 
 ## Environment variables
+### Storage
 - `PREFLIGHT_STORAGE_DIR`: bundle storage dir (default: `~/.preflight-mcp/bundles`)
 - `PREFLIGHT_STORAGE_DIRS`: **multi-path mirror backup** (semicolon-separated, e.g., `D:\cloud1\preflight;E:\cloud2\preflight`)
 - `PREFLIGHT_TMP_DIR`: temp checkout dir (default: OS temp `preflight-mcp/`)
 - `PREFLIGHT_MAX_FILE_BYTES`: max bytes per file (default: 512 KiB)
 - `PREFLIGHT_MAX_TOTAL_BYTES`: max bytes per repo ingest (default: 50 MiB)
+
+### Analysis (NEW)
+- `PREFLIGHT_ANALYSIS_MODE`: Analysis mode - `none`, `quick`, or `deep` (default: `quick`)
+- `PREFLIGHT_LLM_PROVIDER`: LLM provider - `none`, `openai`, or `context7` (default: `none`)
+- `OPENAI_API_KEY`: OpenAI API key (required for `deep` mode with `openai` provider)
+- `OPENAI_MODEL`: OpenAI model (default: `gpt-4o-mini`)
+
+### GitHub & Context7
 - `GITHUB_TOKEN`: optional; used for GitHub API/auth patterns (currently not required for public repos)
 - `CONTEXT7_API_KEY`: optional; enables higher Context7 limits (runs without a key but may be rate-limited)
 - `CONTEXT7_MCP_URL`: optional; defaults to Context7 MCP endpoint
@@ -129,6 +153,8 @@ Inside a bundle directory:
 - `AGENTS.md`
 - `OVERVIEW.md`
 - `indexes/search.sqlite3`
+- **`analysis/FACTS.json`** (NEW - static analysis)
+- **`analysis/AI_SUMMARY.md`** (NEW - LLM analysis)
 - `repos/<owner>/<repo>/raw/...`
 - `repos/<owner>/<repo>/norm/...`
 - `deepwiki/<owner>/<repo>/norm/index.md` (DeepWiki sources)

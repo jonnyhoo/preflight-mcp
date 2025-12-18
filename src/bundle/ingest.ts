@@ -101,7 +101,7 @@ async function buildIgnore(repoRoot: string): Promise<Ignore> {
   return ig;
 }
 
-async function* walkFiles(repoRoot: string): AsyncGenerator<{ absPath: string; relPosix: string }> {
+async function* walkFiles(repoRoot: string, ig: Ignore): AsyncGenerator<{ absPath: string; relPosix: string }> {
   const stack: string[] = [repoRoot];
 
   while (stack.length) {
@@ -110,14 +110,20 @@ async function* walkFiles(repoRoot: string): AsyncGenerator<{ absPath: string; r
 
     for (const ent of entries) {
       const abs = path.join(dir, ent.name);
+      const rel = path.relative(repoRoot, abs);
+      const relPosix = toPosix(rel);
+      
+      // Check ignore rules for both files and directories
+      if (ig.ignores(relPosix)) {
+        continue;
+      }
+      
       if (ent.isDirectory()) {
         stack.push(abs);
         continue;
       }
       if (!ent.isFile()) continue;
 
-      const rel = path.relative(repoRoot, abs);
-      const relPosix = toPosix(rel);
       yield { absPath: abs, relPosix };
     }
   }
@@ -139,10 +145,8 @@ export async function ingestRepoToBundle(params: {
 
   const decoder = new TextDecoder('utf-8', { fatal: true });
 
-  for await (const f of walkFiles(params.repoRoot)) {
-    if (ig.ignores(f.relPosix)) {
-      continue;
-    }
+  for await (const f of walkFiles(params.repoRoot, ig)) {
+    // ignore check already done in walkFiles
 
     const st = await fs.stat(f.absPath);
     if (st.size > params.options.maxFileBytes) {

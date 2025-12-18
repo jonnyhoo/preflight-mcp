@@ -5,11 +5,20 @@ dist/
 .preflight-test-bundles/
 .preflight-test-bundles-c7/
 
+# Test output directories
+.test-bundle/
+.test-output/
+
 # Default bundle storage (if pointed inside repo)
 .preflight-mcp/
 
 # Logs
 *.log
+logs/
 
 # npm pack
 preflight-mcp-*.tgz
+
+# IDE
+.vscode/
+.idea/

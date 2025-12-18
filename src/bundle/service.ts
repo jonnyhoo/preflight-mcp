@@ -18,6 +18,7 @@ import { generateOverviewMarkdown, writeOverviewFile } from './overview.js';
 import { rebuildIndex } from '../search/sqliteFts.js';
 import { ingestContext7Libraries, type Context7LibrarySummary } from './context7.js';
 import { ingestDeepWikiRepo, type DeepWikiSummary } from './deepwiki.js';
+import { analyzeBundleStatic, type AnalysisMode } from './analysis.js';
 
 export type CreateBundleInput = {
   repos: RepoInput[];
@@ -304,6 +305,26 @@ async function cloneAndIngestGitHubRepo(params: {
   return { headSha, files: ingested.files, skipped: ingested.skipped };
 }
 
+/**
+ * Trigger bundle analysis asynchronously (non-blocking)
+ */
+async function triggerBundleAnalysis(params: {
+  bundleId: string;
+  bundleRoot: string;
+  repos: Array<{ repoId: string; files: IngestedFile[] }>;
+  mode: AnalysisMode;
+  cfg: PreflightConfig;
+}): Promise<void> {
+  try {
+    const result = await analyzeBundleStatic(params);
+    if (result.error) {
+      console.error('[preflight-mcp] Analysis error:', result.error);
+    }
+  } catch (err) {
+    console.error('[preflight-mcp] Analysis exception:', err);
+  }
+}
+
 export async function createBundle(cfg: PreflightConfig, input: CreateBundleInput): Promise<BundleSummary> {
   const bundleId = crypto.randomUUID();
   const createdAt = nowIso();
@@ -430,13 +451,29 @@ export async function createBundle(cfg: PreflightConfig, input: CreateBundleInpu
     await mirrorBundleToBackups(effectiveStorageDir, cfg.storageDirs, bundleId);
   }
 
-  return {
+  const summary = {
     bundleId,
     createdAt,
     updatedAt: createdAt,
     repos: reposSummary,
     libraries: librariesSummary,
   };
+
+  // Trigger async analysis (non-blocking)
+  const analysisMode = cfg.analysisMode;
+  if (analysisMode !== 'none') {
+    triggerBundleAnalysis({
+      bundleId,
+      bundleRoot: paths.rootDir,
+      repos: perRepoOverviews,
+      mode: analysisMode,
+      cfg,
+    }).catch((err) => {
+      console.error('[preflight-mcp] Analysis failed for bundle', bundleId, ':', err);
+    });
+  }
+
+  return summary;
 }
 
 export type UpdateBundleOptions = {
