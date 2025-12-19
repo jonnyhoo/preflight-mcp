@@ -10,21 +10,35 @@ import {
   checkForUpdates,
   clearBundleMulti,
   createBundle,
+  findBundleByInputs,
+  computeCreateInputFingerprint,
+  findBundleStorageDir,
   getBundlePathsForId,
   getEffectiveStorageDir,
   listBundles,
+  repairBundle,
   updateBundle,
 } from './bundle/service.js';
 import { readManifest } from './bundle/manifest.js';
 import { safeJoin, toBundleFileUri } from './mcp/uris.js';
+import { wrapPreflightError } from './mcp/errorKinds.js';
 import { searchIndex, verifyClaimInIndex, type SearchScope, type EvidenceType } from './search/sqliteFts.js';
 import { logger } from './logging/logger.js';
+import { runSearchByTags } from './tools/searchByTags.js';
 
 const CreateRepoInputSchema = z.union([
   z.object({
     kind: z.literal('github'),
     repo: z.string().describe('GitHub repo in owner/repo form (or github.com/owner/repo URL).'),
     ref: z.string().optional().describe('Optional git ref (branch/tag).'),
+  }),
+  z.object({
+    kind: z.literal('local'),
+    repo: z
+      .string()
+      .describe('Logical repo id in owner/repo form (used for storage layout and de-dup).'),
+    path: z.string().describe('Local directory path containing the repository files.'),
+    ref: z.string().optional().describe('Optional label/ref for the local snapshot.'),
   }),
   z.object({
     kind: z.literal('deepwiki'),
@@ -36,6 +50,12 @@ const CreateBundleInputSchema = {
   repos: z.array(CreateRepoInputSchema).min(1).describe('Repositories to ingest into the bundle.'),
   libraries: z.array(z.string()).optional().describe('Optional library names for Context7 docs ingestion.'),
   topics: z.array(z.string()).optional().describe('Optional Context7 topic filters (limits fetched docs).'),
+  ifExists: z
+    .enum(['error', 'returnExisting', 'updateExisting', 'createNew'])
+    .default('error')
+    .describe(
+      'What to do if a bundle with the same normalized inputs already exists. error=reject (default), returnExisting=return existing without fetching, updateExisting=update existing bundle then return it, createNew=bypass de-duplication.'
+    ),
 };
 
 const UpdateBundleInputSchema = {
@@ -56,8 +76,19 @@ const SearchBundleInputSchema = {
   query: z.string().describe('Search query. Prefix with fts: to use raw FTS syntax.'),
   scope: z.enum(['docs', 'code', 'all']).default('all').describe('Search scope.'),
   limit: z.number().int().min(1).max(200).default(30).describe('Max number of hits.'),
-  ensureFresh: z.boolean().optional().describe('If true, check if bundle needs update before searching.'),
-  maxAgeHours: z.number().optional().describe('Max age in hours before triggering auto-update (requires ensureFresh).'),
+  // Deprecated (kept for backward compatibility): this tool is strictly read-only.
+  ensureFresh: z
+    .boolean()
+    .optional()
+    .describe('DEPRECATED. This tool is strictly read-only and will not auto-update. Use preflight_update_bundle, then call search again.'),
+  maxAgeHours: z
+    .number()
+    .optional()
+    .describe('DEPRECATED. Only used with ensureFresh (which is deprecated).'),
+  autoRepairIndex: z
+    .boolean()
+    .optional()
+    .describe('DEPRECATED. This tool is strictly read-only and will not auto-repair. Use preflight_repair_bundle, then call search again.'),
 };
 
 const SearchByTagsInputSchema = {
@@ -72,8 +103,19 @@ const VerifyClaimInputSchema = {
   claim: z.string().describe('A claim to look for evidence for (best-effort).'),
   scope: z.enum(['docs', 'code', 'all']).default('all').describe('Search scope.'),
   limit: z.number().int().min(1).max(50).default(8).describe('Max number of evidence hits.'),
-  ensureFresh: z.boolean().optional().describe('If true, check if bundle needs update before verifying.'),
-  maxAgeHours: z.number().optional().describe('Max age in hours before triggering auto-update (requires ensureFresh).'),
+  // Deprecated (kept for backward compatibility): this tool is strictly read-only.
+  ensureFresh: z
+    .boolean()
+    .optional()
+    .describe('DEPRECATED. This tool is strictly read-only and will not auto-update. Use preflight_update_bundle, then call verify again.'),
+  maxAgeHours: z
+    .number()
+    .optional()
+    .describe('DEPRECATED. Only used with ensureFresh (which is deprecated).'),
+  autoRepairIndex: z
+    .boolean()
+    .optional()
+    .describe('DEPRECATED. This tool is strictly read-only and will not auto-repair. Use preflight_repair_bundle, then call verify again.'),
 };
 
 const ListBundlesInputSchema = {
@@ -82,6 +124,14 @@ const ListBundlesInputSchema = {
 
 const DeleteBundleInputSchema = {
   bundleId: z.string().describe('Bundle ID to delete.'),
+};
+
+const RepairBundleInputSchema = {
+  bundleId: z.string().describe('Bundle ID to repair.'),
+  mode: z.enum(['validate', 'repair']).default('repair').describe('validate=report missing components only; repair=fix missing derived artifacts.'),
+  rebuildIndex: z.boolean().optional().describe('If true, rebuild search index when missing/empty.'),
+  rebuildGuides: z.boolean().optional().describe('If true, rebuild START_HERE.md and AGENTS.md when missing/empty.'),
+  rebuildOverview: z.boolean().optional().describe('If true, rebuild OVERVIEW.md when missing/empty.'),
 };
 
 const BundleInfoInputSchema = {
@@ -191,24 +241,37 @@ export async function startServer(): Promise<void> {
     'preflight_list_bundles',
     {
       title: 'List bundles',
-      description: 'List all preflight bundles with metadata. Use when: "show bundles", "what bundles exist", "list repos", "show my knowledge bases", "what have I indexed", "查看bundle", "有哪些bundle", "列出仓库".',
+      description:
+        'List available preflight bundles in a stable, minimal format. Use when: "show bundles", "what bundles exist", "list repos", "show my knowledge bases", "what have I indexed", "查看bundle", "有哪些bundle", "列出仓库".',
       inputSchema: {
-        filterByTag: z.string().optional().describe('Filter by tag (e.g., "mcp", "agents", "web-scraping")'),
-        groupByCategory: z.boolean().default(false).describe('Group bundles by auto-detected categories'),
+        filterByTag: z
+          .string()
+          .optional()
+          .describe('Filter by tag (e.g., "mcp", "agents", "web-scraping").'),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(200)
+          .default(50)
+          .describe('Max number of bundles to return.'),
+        maxItemsPerList: z
+          .number()
+          .int()
+          .min(1)
+          .max(50)
+          .default(10)
+          .describe('Max repos/tags to include per bundle to keep output compact.'),
       },
       outputSchema: {
         bundles: z.array(
           z.object({
             bundleId: z.string(),
-            displayName: z.string().optional(),
-            description: z.string().optional(),
-            tags: z.array(z.string()).optional(),
-            primaryLanguage: z.string().optional(),
-            category: z.string().optional(),
-            repoCount: z.number(),
+            displayName: z.string(),
+            repos: z.array(z.string()),
+            tags: z.array(z.string()),
           })
         ),
-        grouped: z.record(z.string(), z.array(z.string())).optional(),
       },
       annotations: {
         readOnlyHint: true,
@@ -216,68 +279,72 @@ export async function startServer(): Promise<void> {
     },
     async (args) => {
       const effectiveDir = await getEffectiveStorageDir(cfg);
-      const ids = await listBundles(effectiveDir);
-      
-      // Read manifests for each bundle
-      const bundlesWithMeta: Array<{
+      const ids = (await listBundles(effectiveDir)).slice(0, args.limit);
+
+      const capList = (items: string[], max: number): string[] => {
+        if (items.length <= max) return items;
+        const keep = items.slice(0, max);
+        keep.push(`...(+${items.length - max})`);
+        return keep;
+      };
+
+      const bundlesInternal: Array<{
         bundleId: string;
-        displayName?: string;
-        description?: string;
-        tags?: string[];
-        primaryLanguage?: string;
-        category?: string;
-        repoCount: number;
+        displayName: string;
+        repos: string[];
+        tags: string[];
+        tagsFull: string[];
       }> = [];
 
       for (const id of ids) {
         try {
           const paths = getBundlePathsForId(effectiveDir, id);
           const manifest = await readManifest(paths.manifestPath);
-          
-          // Import getCategoryFromTags dynamically
-          const { getCategoryFromTags } = await import('./bundle/tagging.js');
-          const category = manifest.tags ? getCategoryFromTags(manifest.tags) : 'uncategorized';
-          
-          bundlesWithMeta.push({
+
+          const reposRaw = (manifest.repos ?? []).map((r) => r.id).filter(Boolean);
+          const tagsFull = (manifest.tags ?? []).map(String);
+
+          const displayName =
+            (manifest.displayName && manifest.displayName.trim()) ||
+            (reposRaw[0] && reposRaw[0].trim()) ||
+            '(unnamed)';
+
+          bundlesInternal.push({
             bundleId: id,
-            displayName: manifest.displayName,
-            description: manifest.description,
-            tags: manifest.tags,
-            primaryLanguage: manifest.primaryLanguage,
-            category,
-            repoCount: manifest.repos.length,
+            displayName,
+            repos: capList(reposRaw, args.maxItemsPerList),
+            tags: capList(tagsFull, args.maxItemsPerList),
+            tagsFull,
           });
         } catch {
-          // Skip bundles with missing/corrupt manifests
+          // Keep the bundleId visible even if the manifest is missing/corrupt.
+          bundlesInternal.push({
+            bundleId: id,
+            displayName: '(unreadable manifest)',
+            repos: [],
+            tags: [],
+            tagsFull: [],
+          });
         }
       }
 
-      // Filter by tag if specified
-      let filtered = bundlesWithMeta;
-      if (args.filterByTag) {
-        filtered = bundlesWithMeta.filter(
-          (b) => b.tags && b.tags.includes(args.filterByTag!)
-        );
-      }
+      const filteredInternal = args.filterByTag
+        ? bundlesInternal.filter((b) => b.tagsFull.includes(args.filterByTag!))
+        : bundlesInternal;
 
-      // Group by category if requested
-      let grouped: Record<string, string[]> | undefined;
-      if (args.groupByCategory) {
-        grouped = {};
-        for (const bundle of filtered) {
-          const cat = bundle.category || 'uncategorized';
-          if (!grouped[cat]) grouped[cat] = [];
-          grouped[cat]!.push(bundle.bundleId);
-        }
-      }
+      const filtered = filteredInternal.map(({ tagsFull: _tagsFull, ...b }) => b);
 
-      const out = {
-        bundles: filtered,
-        grouped,
-      };
-      
+      const out = { bundles: filtered };
+
+      // Stable human-readable format for UI logs.
+      const lines = filtered.map((b) => {
+        const repos = b.repos.length ? b.repos.join(', ') : '(none)';
+        const tags = b.tags.length ? b.tags.join(', ') : '(none)';
+        return `${b.bundleId} | ${b.displayName} | repos: ${repos} | tags: ${tags}`;
+      });
+
       return {
-        content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
+        content: [{ type: 'text', text: lines.join('\n') || '(no bundles)' }],
         structuredContent: out,
       };
     }
@@ -299,27 +366,30 @@ export async function startServer(): Promise<void> {
       },
     },
     async (args) => {
-      const effectiveDir = await getEffectiveStorageDir(cfg);
-      const exists = await bundleExists(effectiveDir, args.bundleId);
-      if (!exists) {
-        throw new Error(`Bundle not found: ${args.bundleId}`);
+      try {
+        const storageDir = await findBundleStorageDir(cfg.storageDirs, args.bundleId);
+        if (!storageDir) {
+          throw new Error(`Bundle not found: ${args.bundleId}`);
+        }
+
+        const bundleRoot = getBundlePathsForId(storageDir, args.bundleId).rootDir;
+        const absPath = safeJoin(bundleRoot, args.file);
+
+        const content = await fs.readFile(absPath, 'utf8');
+
+        const out = {
+          bundleId: args.bundleId,
+          file: args.file,
+          content,
+        };
+
+        return {
+          content: [{ type: 'text', text: content }],
+          structuredContent: out,
+        };
+      } catch (err) {
+        throw wrapPreflightError(err);
       }
-
-      const bundleRoot = getBundlePathsForId(effectiveDir, args.bundleId).rootDir;
-      const absPath = safeJoin(bundleRoot, args.file);
-
-      const content = await fs.readFile(absPath, 'utf8');
-
-      const out = {
-        bundleId: args.bundleId,
-        file: args.file,
-        content,
-      };
-
-      return {
-        content: [{ type: 'text', text: content }],
-        structuredContent: out,
-      };
     }
   );
 
@@ -338,18 +408,22 @@ export async function startServer(): Promise<void> {
       },
     },
     async (args) => {
-      const deleted = await clearBundleMulti(cfg.storageDirs, args.bundleId);
-      if (!deleted) {
-        throw new Error(`Bundle not found: ${args.bundleId}`);
+      try {
+        const deleted = await clearBundleMulti(cfg.storageDirs, args.bundleId);
+        if (!deleted) {
+          throw new Error(`Bundle not found: ${args.bundleId}`);
+        }
+
+        server.sendResourceListChanged();
+
+        const out = { deleted: true, bundleId: args.bundleId };
+        return {
+          content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
+          structuredContent: out,
+        };
+      } catch (err) {
+        throw wrapPreflightError(err);
       }
-
-      server.sendResourceListChanged();
-
-      const out = { deleted: true, bundleId: args.bundleId };
-      return {
-        content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
-        structuredContent: out,
-      };
     }
   );
 
@@ -365,8 +439,9 @@ export async function startServer(): Promise<void> {
         updatedAt: z.string(),
         repos: z.array(
           z.object({
-            kind: z.enum(['github', 'deepwiki']),
+            kind: z.enum(['github', 'local', 'deepwiki']),
             id: z.string(),
+            source: z.enum(['git', 'archive', 'local', 'deepwiki']).optional(),
             headSha: z.string().optional(),
             fetchedAt: z.string().optional(),
             notes: z.array(z.string()).optional(),
@@ -401,14 +476,14 @@ export async function startServer(): Promise<void> {
       },
     },
     async (args) => {
-      const effectiveDir = await getEffectiveStorageDir(cfg);
-      const exists = await bundleExists(effectiveDir, args.bundleId);
-      if (!exists) {
-        throw new Error(`Bundle not found: ${args.bundleId}`);
-      }
+      try {
+        const storageDir = await findBundleStorageDir(cfg.storageDirs, args.bundleId);
+        if (!storageDir) {
+          throw new Error(`Bundle not found: ${args.bundleId}`);
+        }
 
-      const paths = getBundlePathsForId(effectiveDir, args.bundleId);
-      const manifest = await readManifest(paths.manifestPath);
+        const paths = getBundlePathsForId(storageDir, args.bundleId);
+        const manifest = await readManifest(paths.manifestPath);
 
       const resources = {
         startHere: toBundleFileUri({ bundleId: args.bundleId, relativePath: 'START_HERE.md' }),
@@ -427,10 +502,70 @@ export async function startServer(): Promise<void> {
         resources,
       };
 
-      return {
-        content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
-        structuredContent: out,
-      };
+        return {
+          content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
+          structuredContent: out,
+        };
+      } catch (err) {
+        throw wrapPreflightError(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    'preflight_find_bundle',
+    {
+      title: 'Find existing bundle',
+      description:
+        'Check whether a bundle already exists for the given inputs (no fetching, no changes). Use when: "does this repo already exist", "have I indexed this", "find bundle for", "这个项目是否已索引".',
+      inputSchema: {
+        repos: z.array(CreateRepoInputSchema).min(1),
+        libraries: z.array(z.string()).optional(),
+        topics: z.array(z.string()).optional(),
+      },
+      outputSchema: {
+        found: z.boolean(),
+        bundleId: z.string().optional(),
+        fingerprint: z.string(),
+      },
+      annotations: {
+        readOnlyHint: true,
+      },
+    },
+    async (args) => {
+      try {
+        const fingerprint = computeCreateInputFingerprint({
+          repos: args.repos,
+          libraries: args.libraries,
+          topics: args.topics,
+        });
+
+        const bundleId = await findBundleByInputs(cfg, {
+          repos: args.repos,
+          libraries: args.libraries,
+          topics: args.topics,
+        });
+
+        const out = {
+          found: !!bundleId,
+          bundleId: bundleId ?? undefined,
+          fingerprint,
+        };
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: out.found
+                ? `FOUND ${out.bundleId} (fingerprint=${out.fingerprint})`
+                : `NOT_FOUND (fingerprint=${out.fingerprint})`,
+            },
+          ],
+          structuredContent: out,
+        };
+      } catch (err) {
+        throw wrapPreflightError(err);
+      }
     }
   );
 
@@ -438,7 +573,7 @@ export async function startServer(): Promise<void> {
     'preflight_create_bundle',
     {
       title: 'Create bundle',
-      description: 'Create a new bundle from GitHub repos or DeepWiki. Use when: "index this repo", "create bundle for", "add repo to preflight", "索引这个仓库", "创建bundle", "添加GitHub项目", "学习这个项目".',
+      description: 'Create a new bundle from GitHub repos or DeepWiki (or update an existing one if ifExists=updateExisting). Use when: "index this repo", "create bundle for", "add repo to preflight", "索引这个仓库", "创建bundle", "添加GitHub项目", "学习这个项目".',
       inputSchema: CreateBundleInputSchema,
       outputSchema: {
         bundleId: z.string(),
@@ -452,8 +587,9 @@ export async function startServer(): Promise<void> {
         }),
         repos: z.array(
           z.object({
-            kind: z.enum(['github', 'deepwiki']),
+            kind: z.enum(['github', 'local', 'deepwiki']),
             id: z.string(),
+            source: z.enum(['git', 'archive', 'local', 'deepwiki']).optional(),
             headSha: z.string().optional(),
             notes: z.array(z.string()).optional(),
           })
@@ -476,31 +612,91 @@ export async function startServer(): Promise<void> {
       },
     },
     async (args) => {
-      const summary = await createBundle(cfg, {
-        repos: args.repos,
-        libraries: args.libraries,
-        topics: args.topics,
-      });
+      try {
+        const summary = await createBundle(
+          cfg,
+          {
+            repos: args.repos,
+            libraries: args.libraries,
+            topics: args.topics,
+          },
+          { ifExists: args.ifExists }
+        );
 
-      const resources = {
-        startHere: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'START_HERE.md' }),
-        agents: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'AGENTS.md' }),
-        overview: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'OVERVIEW.md' }),
-        manifest: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'manifest.json' }),
-      };
+        const resources = {
+          startHere: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'START_HERE.md' }),
+          agents: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'AGENTS.md' }),
+          overview: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'OVERVIEW.md' }),
+          manifest: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'manifest.json' }),
+        };
 
-      // Let clients know resources list may have changed.
-      server.sendResourceListChanged();
+        // Let clients know resources list may have changed.
+        server.sendResourceListChanged();
 
-      const out = {
-        ...summary,
-        resources,
-      };
+        const out = {
+          ...summary,
+          resources,
+        };
 
-      return {
-        content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
-        structuredContent: out,
-      };
+        return {
+          content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
+          structuredContent: out,
+        };
+      } catch (err) {
+        throw wrapPreflightError(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    'preflight_repair_bundle',
+    {
+      title: 'Repair bundle (offline)',
+      description:
+        'Validate and repair missing/empty derived bundle artifacts (offline, no fetching): search index, START_HERE.md, AGENTS.md, OVERVIEW.md. Use when: "bundle is broken", "search fails", "index missing", "修复bundle", "重建索引", "修复概览".',
+      inputSchema: RepairBundleInputSchema,
+      outputSchema: {
+        bundleId: z.string(),
+        mode: z.enum(['validate', 'repair']),
+        repaired: z.boolean(),
+        actionsTaken: z.array(z.string()),
+        before: z.object({
+          isValid: z.boolean(),
+          missingComponents: z.array(z.string()),
+        }),
+        after: z.object({
+          isValid: z.boolean(),
+          missingComponents: z.array(z.string()),
+        }),
+        updatedAt: z.string().optional(),
+      },
+      annotations: {
+        openWorldHint: true,
+      },
+    },
+    async (args) => {
+      try {
+        const out = await repairBundle(cfg, args.bundleId, {
+          mode: args.mode,
+          rebuildIndex: args.rebuildIndex,
+          rebuildGuides: args.rebuildGuides,
+          rebuildOverview: args.rebuildOverview,
+        });
+
+        const summaryLine =
+          out.mode === 'validate'
+            ? `VALIDATE ${out.bundleId}: ${out.before.isValid ? 'OK' : 'MISSING'} (${out.before.missingComponents.length} issue(s))`
+            : out.repaired
+              ? `REPAIRED ${out.bundleId}: ${out.actionsTaken.length} action(s), now ${out.after.isValid ? 'OK' : 'STILL_MISSING'} (${out.after.missingComponents.length} issue(s))`
+              : `NOOP ${out.bundleId}: nothing to repair (already OK)`;
+
+        return {
+          content: [{ type: 'text', text: summaryLine }],
+          structuredContent: out,
+        };
+      } catch (err) {
+        throw wrapPreflightError(err);
+      }
     }
   );
 
@@ -532,8 +728,9 @@ export async function startServer(): Promise<void> {
         }).optional(),
         repos: z.array(
           z.object({
-            kind: z.enum(['github', 'deepwiki']),
+            kind: z.enum(['github', 'local', 'deepwiki']),
             id: z.string(),
+            source: z.enum(['git', 'archive', 'local', 'deepwiki']).optional(),
             headSha: z.string().optional(),
             notes: z.array(z.string()).optional(),
           })
@@ -556,46 +753,49 @@ export async function startServer(): Promise<void> {
       },
     },
     async (args) => {
-      const effectiveDir = await getEffectiveStorageDir(cfg);
-      const exists = await bundleExists(effectiveDir, args.bundleId);
-      if (!exists) {
-        throw new Error(`Bundle not found: ${args.bundleId}`);
-      }
+      try {
+        const storageDir = await findBundleStorageDir(cfg.storageDirs, args.bundleId);
+        if (!storageDir) {
+          throw new Error(`Bundle not found: ${args.bundleId}`);
+        }
 
-      // checkOnly mode: just check for updates without applying
-      if (args.checkOnly) {
-        const { hasUpdates, details } = await checkForUpdates(cfg, args.bundleId);
-        const out = {
-          bundleId: args.bundleId,
-          changed: hasUpdates,
-          checkOnly: true,
-          updateDetails: details,
+        // checkOnly mode: just check for updates without applying
+        if (args.checkOnly) {
+          const { hasUpdates, details } = await checkForUpdates(cfg, args.bundleId);
+          const out = {
+            bundleId: args.bundleId,
+            changed: hasUpdates,
+            checkOnly: true,
+            updateDetails: details,
+          };
+          return {
+            content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
+            structuredContent: out,
+          };
+        }
+
+        const { summary, changed } = await updateBundle(cfg, args.bundleId, { force: args.force });
+
+        const resources = {
+          startHere: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'START_HERE.md' }),
+          agents: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'AGENTS.md' }),
+          overview: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'OVERVIEW.md' }),
+          manifest: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'manifest.json' }),
         };
+
+        const out = {
+          changed: args.force ? true : changed,
+          ...summary,
+          resources,
+        };
+
         return {
           content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
           structuredContent: out,
         };
+      } catch (err) {
+        throw wrapPreflightError(err);
       }
-
-      const { summary, changed } = await updateBundle(cfg, args.bundleId, { force: args.force });
-
-      const resources = {
-        startHere: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'START_HERE.md' }),
-        agents: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'AGENTS.md' }),
-        overview: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'OVERVIEW.md' }),
-        manifest: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'manifest.json' }),
-      };
-
-      const out = {
-        changed: args.force ? true : changed,
-        ...summary,
-        resources,
-      };
-
-      return {
-        content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
-        structuredContent: out,
-      };
     }
   );
 
@@ -645,7 +845,7 @@ export async function startServer(): Promise<void> {
           const { summary, changed } = await updateBundle(cfg, bundleId);
           results.push({ bundleId, changed, updatedAt: summary.updatedAt });
         } catch (err) {
-          results.push({ bundleId, error: err instanceof Error ? err.message : String(err) });
+          results.push({ bundleId, error: wrapPreflightError(err).message });
         }
       }
 
@@ -685,6 +885,17 @@ export async function startServer(): Promise<void> {
             uri: z.string(),
           })
         ),
+        warnings: z
+          .array(
+            z.object({
+              bundleId: z.string(),
+              kind: z.string(),
+              message: z.string(),
+            })
+          )
+          .optional()
+          .describe('Non-fatal per-bundle errors. Use kind to decide whether to repair/update.'),
+        warningsTruncated: z.boolean().optional().describe('True if warnings were capped.'),
       },
       annotations: {
         readOnlyHint: true,
@@ -693,75 +904,33 @@ export async function startServer(): Promise<void> {
     async (args) => {
       const effectiveDir = await getEffectiveStorageDir(cfg);
       const allBundleIds = await listBundles(effectiveDir);
-      
-      // Filter bundles by tags if specified
-      let targetBundleIds: string[] = allBundleIds;
-      if (args.tags && args.tags.length > 0) {
-        targetBundleIds = [];
-        for (const id of allBundleIds) {
-          try {
-            const paths = getBundlePathsForId(effectiveDir, id);
-            const manifest = await readManifest(paths.manifestPath);
-            if (manifest.tags && args.tags.some((t) => manifest.tags!.includes(t))) {
-              targetBundleIds.push(id);
-            }
-          } catch {
-            // Skip bundles with errors
-          }
-        }
-      }
 
-      // Search each bundle and collect results
-      const allHits: Array<{
-        bundleId: string;
-        bundleName?: string;
-        kind: 'doc' | 'code';
-        repo: string;
-        path: string;
-        lineNo: number;
-        snippet: string;
-        uri: string;
-      }> = [];
-
-      for (const bundleId of targetBundleIds) {
-        try {
+      const result = await runSearchByTags({
+        bundleIds: allBundleIds,
+        query: args.query,
+        tags: args.tags,
+        scope: args.scope as SearchScope,
+        limit: args.limit,
+        readManifestForBundleId: async (bundleId) => {
           const paths = getBundlePathsForId(effectiveDir, bundleId);
           const manifest = await readManifest(paths.manifestPath);
-          
-          const bundleHits = searchIndex(
-            paths.searchDbPath,
-            args.query,
-            args.scope as SearchScope,
-            args.limit
-          );
-
-          for (const hit of bundleHits) {
-            allHits.push({
-              bundleId,
-              bundleName: manifest.displayName,
-              kind: hit.kind,
-              repo: hit.repo,
-              path: hit.path,
-              lineNo: hit.lineNo,
-              snippet: hit.snippet,
-              uri: toBundleFileUri({ bundleId, relativePath: hit.path }),
-            });
-
-            if (allHits.length >= args.limit) break;
-          }
-
-          if (allHits.length >= args.limit) break;
-        } catch {
-          // Skip bundles with search errors
-        }
-      }
+          return { displayName: manifest.displayName, tags: manifest.tags };
+        },
+        searchIndexForBundleId: (bundleId, query, scope, limit) => {
+          const paths = getBundlePathsForId(effectiveDir, bundleId);
+          return searchIndex(paths.searchDbPath, query, scope, limit);
+        },
+        toUri: (bundleId, p) => toBundleFileUri({ bundleId, relativePath: p }),
+      });
 
       const out = {
         query: args.query,
         tags: args.tags,
         scope: args.scope,
-        totalBundlesSearched: targetBundleIds.length,
-        hits: allHits.slice(0, args.limit),
+        totalBundlesSearched: result.totalBundlesSearched,
+        hits: result.hits,
+        warnings: result.warnings,
+        warningsTruncated: result.warningsTruncated,
       };
 
       return {
@@ -775,7 +944,7 @@ export async function startServer(): Promise<void> {
     'preflight_search_bundle',
     {
       title: 'Search bundle',
-      description: 'Full-text search in bundle docs and code. Use when: "search in bundle", "find in repo", "look for X in bundle", "搜索bundle", "在仓库中查找", "搜代码", "搜文档".',
+      description: 'Full-text search in bundle docs and code (strictly read-only). If you need to update or repair, call preflight_update_bundle or preflight_repair_bundle explicitly, then search again. Use when: "search in bundle", "find in repo", "look for X in bundle", "搜索bundle", "在仓库中查找", "搜代码", "搜文档".',
       inputSchema: SearchBundleInputSchema,
       outputSchema: {
         bundleId: z.string(),
@@ -791,53 +960,68 @@ export async function startServer(): Promise<void> {
             uri: z.string(),
           })
         ),
-        autoUpdated: z.boolean().optional().describe('True if bundle was auto-updated due to ensureFresh.'),
+        autoUpdated: z
+          .boolean()
+          .optional()
+          .describe('DEPRECATED. This tool is strictly read-only and will not auto-update.'),
+        autoRepaired: z
+          .boolean()
+          .optional()
+          .describe('DEPRECATED. This tool is strictly read-only and will not auto-repair.'),
+        repairActions: z
+          .array(z.string())
+          .optional()
+          .describe('DEPRECATED. This tool is strictly read-only and will not auto-repair.'),
       },
       annotations: {
         readOnlyHint: true,
       },
     },
     async (args) => {
-      const effectiveDir = await getEffectiveStorageDir(cfg);
-      const exists = await bundleExists(effectiveDir, args.bundleId);
-      if (!exists) {
-        throw new Error(`Bundle not found: ${args.bundleId}`);
-      }
-
-      let autoUpdated: boolean | undefined;
-      const paths = getBundlePathsForId(effectiveDir, args.bundleId);
-
-      // Lazy update: check if bundle is stale when ensureFresh is true.
-      if (args.ensureFresh) {
-        const manifest = await readManifest(paths.manifestPath);
-        const updatedAt = new Date(manifest.updatedAt).getTime();
-        const ageMs = Date.now() - updatedAt;
-        const maxAgeMs = (args.maxAgeHours ?? 24) * 60 * 60 * 1000;
-        if (ageMs > maxAgeMs) {
-          await updateBundle(cfg, args.bundleId);
-          autoUpdated = true;
-        } else {
-          autoUpdated = false;
+      try {
+        // Resolve bundle location across storageDirs (more robust than a single effectiveDir).
+        const storageDir = await findBundleStorageDir(cfg.storageDirs, args.bundleId);
+        if (!storageDir) {
+          throw new Error(`Bundle not found: ${args.bundleId}`);
         }
+
+        if (args.ensureFresh) {
+          throw new Error(
+            'ensureFresh is deprecated and not supported in this tool. This tool is strictly read-only. ' +
+              'Call preflight_update_bundle explicitly, then call preflight_search_bundle again.'
+          );
+        }
+
+        if (args.autoRepairIndex) {
+          throw new Error(
+            'autoRepairIndex is deprecated and not supported in this tool. This tool is strictly read-only. ' +
+              'Call preflight_repair_bundle explicitly, then call preflight_search_bundle again.'
+          );
+        }
+
+        const paths = getBundlePathsForId(storageDir, args.bundleId);
+
+        const rawHits = searchIndex(paths.searchDbPath, args.query, args.scope as SearchScope, args.limit);
+
+        const hits = rawHits.map((h) => ({
+          ...h,
+          uri: toBundleFileUri({ bundleId: args.bundleId, relativePath: h.path }),
+        }));
+
+        const out = {
+          bundleId: args.bundleId,
+          query: args.query,
+          scope: args.scope,
+          hits,
+        };
+
+        return {
+          content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
+          structuredContent: out,
+        };
+      } catch (err) {
+        throw wrapPreflightError(err);
       }
-
-      const hits = searchIndex(paths.searchDbPath, args.query, args.scope as SearchScope, args.limit).map((h) => ({
-        ...h,
-        uri: toBundleFileUri({ bundleId: args.bundleId, relativePath: h.path }),
-      }));
-
-      const out = {
-        bundleId: args.bundleId,
-        query: args.query,
-        scope: args.scope,
-        hits,
-        autoUpdated,
-      };
-
-      return {
-        content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
-        structuredContent: out,
-      };
     }
   );
 
@@ -845,7 +1029,7 @@ export async function startServer(): Promise<void> {
     'preflight_verify_claim',
     {
       title: 'Verify claim',
-      description: 'Verify a claim with evidence classification and confidence scoring. Returns supporting/contradicting/related evidence. Use when: "verify this claim", "is this true", "find evidence for", "check if", "验证说法", "找证据", "这个对吗", "有没有依据".',
+      description: 'Verify a claim with evidence classification and confidence scoring (strictly read-only). If you need to update or repair, call preflight_update_bundle or preflight_repair_bundle explicitly, then verify again. Returns supporting/contradicting/related evidence. Use when: "verify this claim", "is this true", "find evidence for", "check if", "验证说法", "找证据", "这个对吗", "有没有依据".',
       inputSchema: VerifyClaimInputSchema,
       outputSchema: {
         bundleId: z.string(),
@@ -891,43 +1075,48 @@ export async function startServer(): Promise<void> {
             relevanceScore: z.number(),
           })
         ).describe('Related but inconclusive evidence'),
-        autoUpdated: z.boolean().optional().describe('True if bundle was auto-updated due to ensureFresh.'),
+        autoUpdated: z
+          .boolean()
+          .optional()
+          .describe('DEPRECATED. This tool is strictly read-only and will not auto-update.'),
+        autoRepaired: z
+          .boolean()
+          .optional()
+          .describe('DEPRECATED. This tool is strictly read-only and will not auto-repair.'),
+        repairActions: z
+          .array(z.string())
+          .optional()
+          .describe('DEPRECATED. This tool is strictly read-only and will not auto-repair.'),
       },
       annotations: {
         readOnlyHint: true,
       },
     },
     async (args) => {
-      const effectiveDir = await getEffectiveStorageDir(cfg);
-      const exists = await bundleExists(effectiveDir, args.bundleId);
-      if (!exists) {
-        throw new Error(`Bundle not found: ${args.bundleId}`);
-      }
-
-      let autoUpdated: boolean | undefined;
-      const paths = getBundlePathsForId(effectiveDir, args.bundleId);
-
-      // Lazy update: check if bundle is stale when ensureFresh is true.
-      if (args.ensureFresh) {
-        const manifest = await readManifest(paths.manifestPath);
-        const updatedAt = new Date(manifest.updatedAt).getTime();
-        const ageMs = Date.now() - updatedAt;
-        const maxAgeMs = (args.maxAgeHours ?? 24) * 60 * 60 * 1000;
-        if (ageMs > maxAgeMs) {
-          await updateBundle(cfg, args.bundleId);
-          autoUpdated = true;
-        } else {
-          autoUpdated = false;
+      try {
+        // Resolve bundle location across storageDirs (more robust than a single effectiveDir).
+        const storageDir = await findBundleStorageDir(cfg.storageDirs, args.bundleId);
+        if (!storageDir) {
+          throw new Error(`Bundle not found: ${args.bundleId}`);
         }
-      }
 
-      // Use differentiated verification with confidence scoring
-      const verification = verifyClaimInIndex(
-        paths.searchDbPath,
-        args.claim,
-        args.scope as SearchScope,
-        args.limit
-      );
+        if (args.ensureFresh) {
+          throw new Error(
+            'ensureFresh is deprecated and not supported in this tool. This tool is strictly read-only. ' +
+              'Call preflight_update_bundle explicitly, then call preflight_verify_claim again.'
+          );
+        }
+
+        if (args.autoRepairIndex) {
+          throw new Error(
+            'autoRepairIndex is deprecated and not supported in this tool. This tool is strictly read-only. ' +
+              'Call preflight_repair_bundle explicitly, then call preflight_verify_claim again.'
+          );
+        }
+
+        const paths = getBundlePathsForId(storageDir, args.bundleId);
+
+        const verification = verifyClaimInIndex(paths.searchDbPath, args.claim, args.scope as SearchScope, args.limit);
 
       // Add URIs to evidence hits
       const addUri = (hit: typeof verification.supporting[0]) => ({
@@ -946,13 +1135,15 @@ export async function startServer(): Promise<void> {
         supporting: verification.supporting.map(addUri),
         contradicting: verification.contradicting.map(addUri),
         related: verification.related.map(addUri),
-        autoUpdated,
       };
 
-      return {
-        content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
-        structuredContent: out,
-      };
+        return {
+          content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
+          structuredContent: out,
+        };
+      } catch (err) {
+        throw wrapPreflightError(err);
+      }
     }
   );
 

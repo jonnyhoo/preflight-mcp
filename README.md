@@ -10,7 +10,10 @@ Each bundle contains:
 - Agent-facing entry files: `START_HERE.md`, `AGENTS.md`, and `OVERVIEW.md` (factual-only, with evidence pointers)
 
 ## What you get
-- **10 Tools** to create/update/search/verify/read bundles
+- **12 tools** to create/update/repair/search/verify/read bundles (plus resources)
+- **De-duplication**: prevent repeated indexing of the same normalized inputs
+- **Resilient GitHub fetching**: configurable git clone timeout + GitHub archive (zipball) fallback
+- **Offline repair**: rebuild missing/empty derived artifacts (index/guides/overview) without re-fetching
 - **Static facts extraction** via `analysis/FACTS.json` (non-LLM)
 - **Evidence-based verification** to reduce hallucinations
 - **Resources** to read bundle files via `preflight://...` URIs
@@ -51,7 +54,7 @@ Command:
 
 Note: the smoke test clones `octocat/Hello-World` from GitHub, so it needs internet access.
 
-## Tools (10 total)
+## Tools (12 total)
 
 ### `preflight_list_bundles`
 List bundle IDs in storage.
@@ -61,10 +64,21 @@ List bundle IDs in storage.
 Create a new bundle from one or more inputs.
 - Triggers: "index this repo", "学习这个项目", "创建bundle"
 
+Key semantics:
+- **De-dup by default**: if a bundle already exists for the same normalized inputs, creation is rejected.
+- Use `ifExists` to control behavior:
+  - `error` (default): reject duplicate
+  - `returnExisting`: return the existing bundle without fetching
+  - `updateExisting`: update the existing bundle then return it
+  - `createNew`: bypass de-duplication
+- GitHub ingest uses **shallow clone**; if `git clone` fails, it will fall back to **GitHub archive (zipball)**.
+- Supports `repos.kind: "local"` to ingest from a local directory (e.g. an extracted zip).
+
 Input (example):
-- `repos`: `[{ kind: "github", repo: "owner/repo" }, { kind: "deepwiki", url: "https://deepwiki.com/owner/repo" }]`
+- `repos`: `[{ kind: "github", repo: "owner/repo" }, { kind: "local", repo: "owner/repo", path: "/path/to/dir" }, { kind: "deepwiki", url: "https://deepwiki.com/owner/repo" }]`
 - `libraries`: `["nextjs", "react"]` (Context7; optional)
 - `topics`: `["routing", "api"]` (Context7 topic filter; optional)
+- `ifExists`: `"error" | "returnExisting" | "updateExisting" | "createNew"`
 
 ### `preflight_read_file`
 Read a file from bundle (OVERVIEW.md, START_HERE.md, AGENTS.md, or any repo file).
@@ -90,30 +104,49 @@ Optional parameters:
 Batch update all bundles at once.
 - Triggers: "批量更新", "全部刷新"
 
+### `preflight_find_bundle`
+Check whether a bundle already exists for the given inputs (no fetching, no changes).
+- Use when your UI/agent wants to decide whether to create/update.
+
+### `preflight_repair_bundle`
+Offline repair for a bundle (no fetching): rebuild missing/empty derived artifacts.
+- Rebuilds `indexes/search.sqlite3`, `START_HERE.md`, `AGENTS.md`, `OVERVIEW.md` when missing/empty.
+- Use when: search fails due to index corruption, bundle files were partially deleted, etc.
+
 ### `preflight_search_bundle`
 Full-text search across ingested docs/code (line-based SQLite FTS5).
 - Triggers: "搜索bundle", "在仓库中查找", "搜代码"
 
-Optional parameters:
-- `ensureFresh`: If true, check if bundle needs update before searching.
-- `maxAgeHours`: Max age in hours before triggering auto-update (default: 24).
+Important: **this tool is strictly read-only**.
+- `ensureFresh` / `maxAgeHours` are **deprecated** and will error if provided.
+- To update: call `preflight_update_bundle`, then search again.
+- To repair: call `preflight_repair_bundle`, then search again.
 
 ### `preflight_search_by_tags`
 Search across multiple bundles filtered by tags (line-based SQLite FTS5).
 - Triggers: "search in MCP bundles", "search in all bundles", "在MCP项目中搜索", "搜索所有agent"
+
+Notes:
+- This tool is read-only and **does not auto-repair**.
+- If some bundles fail to search (e.g. missing/corrupt index), they will be reported in `warnings`.
 
 Optional parameters:
 - `tags`: Filter bundles by tags (e.g., `["mcp", "agents"]`)
 - `scope`: Search scope (`docs`, `code`, or `all`)
 - `limit`: Max total hits across all bundles
 
+Output additions:
+- `warnings?: [{ bundleId, kind, message }]` (non-fatal per-bundle errors)
+- `warningsTruncated?: true` if warnings were capped
+
 ### `preflight_verify_claim`
 Find evidence for a claim/statement in bundle.
 - Triggers: "验证说法", "找证据", "这个对吗"
 
-Optional parameters:
-- `ensureFresh`: If true, check if bundle needs update before verifying.
-- `maxAgeHours`: Max age in hours before triggering auto-update (default: 24).
+Important: **this tool is strictly read-only**.
+- `ensureFresh` / `maxAgeHours` are **deprecated** and will error if provided.
+- To update: call `preflight_update_bundle`, then verify again.
+- To repair: call `preflight_repair_bundle`, then verify again.
 
 ## Resources
 ### `preflight://bundles`
@@ -125,6 +158,24 @@ Read a specific file inside a bundle.
 Examples:
 - `preflight://bundle/<id>/file/START_HERE.md`
 - `preflight://bundle/<id>/file/repos%2Fowner%2Frepo%2Fnorm%2FREADME.md`
+
+## Error semantics (stable, UI-friendly)
+Most tool errors are wrapped with a stable, machine-parseable prefix:
+- `[preflight_error kind=<kind>] <message>`
+
+Common kinds:
+- `bundle_not_found`
+- `file_not_found`
+- `invalid_path` (unsafe path traversal attempt)
+- `permission_denied`
+- `index_missing_or_corrupt`
+- `deprecated_parameter`
+- `unknown`
+
+This is designed so UIs/agents can reliably decide whether to:
+- call `preflight_update_bundle`
+- call `preflight_repair_bundle`
+- prompt the user for a different bundleId/path
 
 ## Environment variables
 ### Storage
@@ -138,20 +189,21 @@ Examples:
 - `PREFLIGHT_ANALYSIS_MODE`: Static analysis mode - `none` or `quick` (default: `quick`). Generates `analysis/FACTS.json`.
 
 ### GitHub & Context7
-- `GITHUB_TOKEN`: optional; used for GitHub API/auth patterns (currently not required for public repos)
+- `GITHUB_TOKEN`: optional; used for GitHub API/auth patterns and GitHub archive fallback (public repos usually work without it)
+- `PREFLIGHT_GIT_CLONE_TIMEOUT_MS`: optional; max time to allow `git clone` before failing over to archive (default: 5 minutes)
 - `CONTEXT7_API_KEY`: optional; enables higher Context7 limits (runs without a key but may be rate-limited)
 - `CONTEXT7_MCP_URL`: optional; defaults to Context7 MCP endpoint
 
 ## Bundle layout (on disk)
 Inside a bundle directory:
-- `manifest.json`
+- `manifest.json` (includes `fingerprint`, `displayName`, `tags`, and per-repo `source`)
 - `START_HERE.md`
 - `AGENTS.md`
 - `OVERVIEW.md`
 - `indexes/search.sqlite3`
 - **`analysis/FACTS.json`** (static analysis)
 - `repos/<owner>/<repo>/raw/...`
-- `repos/<owner>/<repo>/norm/...`
+- `repos/<owner>/<repo>/norm/...` (GitHub/local snapshots)
 - `deepwiki/<owner>/<repo>/norm/index.md` (DeepWiki sources)
 - `deepwiki/<owner>/<repo>/meta.json`
 - `libraries/context7/<...>/meta.json`
@@ -179,7 +231,7 @@ $env:PREFLIGHT_STORAGE_DIRS = "D:\OneDrive\preflight;E:\GoogleDrive\preflight"
 ```
 ```bash
 # macOS/Linux
-export PREFLIGHT_STORAGE_DIRS="$HOME/OneDrive/preflight:$HOME/Dropbox/preflight"
+export PREFLIGHT_STORAGE_DIRS="$HOME/OneDrive/preflight;$HOME/Dropbox/preflight"
 ```
 
 ### MCP host config (Claude Desktop)

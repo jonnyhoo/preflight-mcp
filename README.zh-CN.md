@@ -13,7 +13,10 @@
 
 ## ✨ 功能特性
 
-- **10 个工具** - 创建/更新/搜索/验证/读取 bundles
+- **12 个工具** - 创建/更新/修复/搜索/验证/读取 bundles
+- **去重** - 防止重复索引同一组（规范化后）输入
+- **更可靠的 GitHub 获取** - 可配置 git clone 超时 + GitHub archive(zipball) 兜底
+- **离线修复** - 索引/导读/指南缺失或为空时可重建（无需重新拉取）
 - **静态事实提取** - 生成 `analysis/FACTS.json`（非 LLM）
 - **基于证据的校验** - 用证据定位来减少幻觉
 - **资源访问** - 通过 `preflight://...` URI 读取 bundle 文件
@@ -76,104 +79,95 @@ npm run typecheck
 
 ---
 
-## 🛠️ 工具列表（共 10 个）
+## 🛠️ 工具列表（共 12 个）
 
 ### 1. `preflight_list_bundles`
-列出存储中的所有 bundle ID。
+列出存储中的所有 bundle（稳定、最小化输出）。
 
-**触发词**: "show bundles"、"查看bundle"、"有哪些bundle"、"列出仓库"
+### 2. `preflight_find_bundle`
+给定输入（repos/libraries/topics），计算指纹并查找是否已有 bundle。
+- 用途：UI/Agent 先查再决定是 create 还是 update。
 
----
-
-### 2. `preflight_create_bundle`
+### 3. `preflight_create_bundle`
 从一个或多个输入创建新的 bundle。
 
-**触发词**: "index this repo"、"学习这个项目"、"创建bundle"、"添加GitHub项目"
+关键语义（强一致性）：
+- 默认 **去重**：相同规范化输入已经存在 bundle 时会拒绝创建。
+- 通过 `ifExists` 指定策略：
+  - `error`（默认）：拒绝重复创建
+  - `returnExisting`：直接返回已有 bundle（不抓取）
+  - `updateExisting`：更新已有 bundle（显式写盘行为）后返回
+  - `createNew`：绕过去重强制新建
+- GitHub 获取：浅克隆；若 `git clone` 失败，会使用 GitHub zipball 兜底。
+- 支持 `local`：从本地目录导入（例如你手动下载 zip 解压后的目录）。
 
 **输入示例**:
 ```json
 {
   "repos": [
     { "kind": "github", "repo": "owner/repo" },
+    { "kind": "local", "repo": "owner/repo", "path": "/path/to/dir" },
     { "kind": "deepwiki", "url": "https://deepwiki.com/owner/repo" }
   ],
   "libraries": ["nextjs", "react"],
-  "topics": ["routing", "api"]
+  "topics": ["routing", "api"],
+  "ifExists": "error"
 }
 ```
 
----
+### 4. `preflight_read_file`
+从 bundle 读取文件（OVERVIEW.md、START_HERE.md、AGENTS.md 或任意仓库文件）。
 
-### 3. `preflight_read_file`
-从 bundle 读取文件（OVERVIEW.md、START_HERE.md、AGENTS.md 或任何仓库文件）。
+### 5. `preflight_bundle_info`
+获取 bundle 详情：repos、更新时间、索引信息、资源 URI 等。
 
-**触发词**: "查看概览"、"项目概览"、"看README"、"show overview"
+### 6. `preflight_repair_bundle`
+离线修复（不抓取）：当索引/导读/指南文件缺失或为空时，重建派生物。
+- 可重建：`indexes/search.sqlite3`、`OVERVIEW.md`、`START_HERE.md`、`AGENTS.md`
 
----
-
-### 4. `preflight_bundle_info`
-获取 bundle 详情：仓库、更新时间、统计信息。
-
-**触发词**: "bundle详情"、"仓库信息"、"bundle info"
-
----
-
-### 5. `preflight_delete_bundle`
+### 7. `preflight_delete_bundle`
 永久删除/移除一个 bundle。
 
-**触发词**: "删除bundle"、"移除仓库"、"delete bundle"
-
----
-
-### 6. `preflight_update_bundle`
+### 8. `preflight_update_bundle`
 刷新/同步 bundle 与最新的仓库更改。
 
-**触发词**: "更新bundle"、"同步仓库"、"刷新索引"
+可选参数：
+- `checkOnly`: true 时仅检查是否有更新，不应用
+- `force`: true 时强制重建（即使没有检测到更改）
 
-**可选参数**:
-- `checkOnly`: 如果为 true，仅检查更新不应用
-- `force`: 如果为 true，即使没有检测到更改也强制重建
-
----
-
-### 7. `preflight_update_all_bundles`
+### 9. `preflight_update_all_bundles`
 批量更新所有 bundles。
 
-**触发词**: "批量更新"、"全部刷新"、"更新所有bundle"
-
----
-
-### 8. `preflight_search_bundle`
+### 10. `preflight_search_bundle`
 在已导入的文档/代码中进行全文搜索（基于行的 SQLite FTS5）。
 
-**触发词**: "搜索bundle"、"在仓库中查找"、"搜代码"、"搜文档"
+重要说明：**该工具严格只读**。
+- `ensureFresh` / `maxAgeHours` 参数已 **废弃**，如果传入会直接报错。
+- 如需更新：先调用 `preflight_update_bundle`，再搜索。
+- 如需修复：先调用 `preflight_repair_bundle`，再搜索。
 
-**可选参数**:
-- `ensureFresh`: 如果为 true，搜索前检查 bundle 是否需要更新
-- `maxAgeHours`: 触发自动更新前的最大小时数（默认: 24）
-
----
-
-### 9. `preflight_search_by_tags`
+### 11. `preflight_search_by_tags`
 按标签筛选后跨多个 bundle 搜索（基于行的 SQLite FTS5）。
 
-**触发词**: "在MCP项目中搜索"、"搜索所有agent"、"search in MCP bundles"
+说明：该工具只读，不会自动 repair/update。
+- 如果某些 bundle 因索引缺失/损坏而无法搜索，会在输出的 `warnings` 中列出。
 
-**可选参数**:
+可选参数：
 - `tags`: 标签过滤（例如 `["mcp", "agents"]`）
 - `scope`: 搜索范围（`docs` / `code` / `all`）
 - `limit`: 跨 bundle 的总命中数量上限
 
----
+输出新增字段：
+- `warnings?: [{ bundleId, kind, message }]`（非致命错误列表）
+- `warningsTruncated?: true`（warnings 被截断）
 
-### 10. `preflight_verify_claim`
+### 12. `preflight_verify_claim`
 在 bundle 中查找声明/陈述的证据。
 
-**触发词**: "验证说法"、"找证据"、"这个对吗"、"有没有依据"
-
-**可选参数**:
-- `ensureFresh`: 如果为 true，验证前检查 bundle 是否需要更新
-- `maxAgeHours`: 触发自动更新前的最大小时数（默认: 24）
+重要说明：**该工具严格只读**。
+- `ensureFresh` / `maxAgeHours` 参数已 **废弃**，如果传入会直接报错。
+- 如需更新：先调用 `preflight_update_bundle`，再验证。
+- 如需修复：先调用 `preflight_repair_bundle`，再验证。
 
 ---
 
@@ -189,6 +183,22 @@ bundles 及其主要入口文件的静态 JSON 列表。
 - `preflight://bundle/<id>/file/START_HERE.md`
 - `preflight://bundle/<id>/file/repos%2Fowner%2Frepo%2Fnorm%2FREADME.md`
 
+## 🧾 错误语义（稳定、可解析，便于 UI 编排）
+大多数工具错误会用稳定前缀包装：
+- `[preflight_error kind=<kind>] <message>`
+
+常见 kind：
+- `bundle_not_found` / `file_not_found`
+- `invalid_path`（路径越界/穿越尝试）
+- `permission_denied`
+- `index_missing_or_corrupt`
+- `deprecated_parameter`
+- `unknown`
+
+UI/Agent 推荐按 kind 决策下一步：
+- `index_missing_or_corrupt` → 调 `preflight_repair_bundle`
+- 需要更新语义 → 调 `preflight_update_bundle`
+
 ---
 
 ## ⚙️ 环境变量
@@ -203,14 +213,15 @@ bundles 及其主要入口文件的静态 JSON 列表。
 | `PREFLIGHT_MAX_TOTAL_BYTES` | 每个仓库导入的最大字节数 | 50 MiB |
 
 ### 分析配置
-|| 变量 | 说明 | 默认值 |
-||------|------|--------|
-|| `PREFLIGHT_ANALYSIS_MODE` | 静态分析模式：`none`、`quick`（生成 `analysis/FACTS.json`） | `quick` |
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `PREFLIGHT_ANALYSIS_MODE` | 静态分析模式：`none`、`quick`（生成 `analysis/FACTS.json`） | `quick` |
 
 ### GitHub & Context7
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `GITHUB_TOKEN` | GitHub API 令牌（公开仓库不需要） | - |
+| `GITHUB_TOKEN` | GitHub API 令牌（公开仓库通常不需要；用于 GitHub API/zipball 兜底等） | - |
+| `PREFLIGHT_GIT_CLONE_TIMEOUT_MS` | git clone 最大允许时间（毫秒），超时后会尝试 zipball 兜底 | 5 分钟 |
 | `CONTEXT7_API_KEY` | Context7 API 密钥 | - |
 | `CONTEXT7_MCP_URL` | Context7 MCP 端点 | 默认端点 |
 
@@ -267,7 +278,7 @@ $env:PREFLIGHT_STORAGE_DIRS = "D:\OneDrive\preflight;E:\GoogleDrive\preflight"
 
 ```bash
 # macOS/Linux
-export PREFLIGHT_STORAGE_DIRS="$HOME/OneDrive/preflight:$HOME/Dropbox/preflight"
+export PREFLIGHT_STORAGE_DIRS="$HOME/OneDrive/preflight;$HOME/Dropbox/preflight"
 ```
 
 ### MCP 主机配置（Claude Desktop）
@@ -332,7 +343,7 @@ src/
 
 ## 🧪 测试
 
-项目包含完整的测试套件（28 个测试）：
+项目包含完整的测试套件（会持续增长，以 `npm test` 输出为准）：
 
 ```bash
 # 运行所有测试
@@ -353,30 +364,26 @@ npm test
 
 ---
 
-## 📊 本次更新内容
+## 📊 近期变更要点（面向使用者）
 
-### 新增功能
-1. **任务调度系统** - 基于 node-cron 的自动化任务调度
-2. **自动化任务**:
-   - Bundle 自动更新（每小时检查）
-   - 存储清理（每天凌晨 2 点）
-   - 健康检查（每 30 分钟）
-3. **存储抽象层** - 支持本地和 S3 存储
-4. **压缩系统** - 支持 Gzip、Brotli、Deflate
-5. **结构化日志** - 多级别、文件轮转、彩色输出
-6. **优化服务器** - 统一管理接口
-7. **完整测试套件** - 28 个 Jest 测试
+这一段只列出会影响工具使用/语义边界的变更（避免“只是代码变了但文档不变”）：
 
-### 修复问题
-- ESM 模块兼容性问题
-- TypeScript 类型错误
-- 存储适配器 require 改为 import
-- Logger mtime Promise 处理
-- 错误类型转换
+### 1) 工具语义更严格
+- `preflight_search_bundle` / `preflight_verify_claim`：严格只读，不再隐式 update/repair（相关参数已废弃）。
+- update/repair 必须显式调用对应工具。
 
-### 依赖更新
-- 新增: `node-cron`, `@types/node-cron`
-- 新增开发依赖: `jest`, `ts-jest`, `@jest/globals`, `@types/jest`
+### 2) 去重与查找
+- 新增输入指纹（fingerprint）与去重策略。
+- 新增 `preflight_find_bundle` 便于 UI 先查再决定 create/update。
+
+### 3) 获取可靠性增强
+- git clone 超时可配置，失败时 GitHub zipball 兜底。
+- 支持 local 目录导入（例如你手动下载 zip 解压后导入）。
+
+### 4) 离线修复与可观测错误
+- 新增 `preflight_repair_bundle`：离线重建索引/导读/指南。
+- 错误输出采用稳定前缀：`[preflight_error kind=...]`，方便 UI 编排。
+- `preflight_search_by_tags` 增加 `warnings`，不再静默吞错。
 
 ---
 

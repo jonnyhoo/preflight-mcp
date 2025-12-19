@@ -53,7 +53,7 @@ export async function getRemoteHeadSha(cloneUrl: string): Promise<string> {
 export async function shallowClone(
   cloneUrl: string,
   destDir: string,
-  opts?: { ref?: string }
+  opts?: { ref?: string; timeoutMs?: number }
 ): Promise<void> {
   await fs.mkdir(path.dirname(destDir), { recursive: true });
 
@@ -66,7 +66,7 @@ export async function shallowClone(
   }
   args.push(cloneUrl, destDir);
 
-  await runGit(args, { timeoutMs: 15 * 60_000 });
+  await runGit(args, { timeoutMs: opts?.timeoutMs ?? 15 * 60_000 });
 }
 
 export async function getLocalHeadSha(repoDir: string): Promise<string> {

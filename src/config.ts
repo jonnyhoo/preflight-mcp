@@ -12,6 +12,8 @@ export type PreflightConfig = {
   githubToken?: string;
   context7ApiKey?: string;
   context7McpUrl: string;
+  /** Max time to allow git clone to run before failing (ms). */
+  gitCloneTimeoutMs: number;
   maxFileBytes: number;
   maxTotalBytes: number;
   /** Static analysis mode (controls whether analysis/FACTS.json is generated). */
@@ -90,6 +92,7 @@ export function getConfig(): PreflightConfig {
     githubToken: process.env.GITHUB_TOKEN,
     context7ApiKey: process.env.CONTEXT7_API_KEY,
     context7McpUrl: process.env.CONTEXT7_MCP_URL ?? 'https://mcp.context7.com/mcp',
+    gitCloneTimeoutMs: envNumber('PREFLIGHT_GIT_CLONE_TIMEOUT_MS', 5 * 60_000),
     maxFileBytes: envNumber('PREFLIGHT_MAX_FILE_BYTES', 512 * 1024),
     maxTotalBytes: envNumber('PREFLIGHT_MAX_TOTAL_BYTES', 50 * 1024 * 1024),
     analysisMode,

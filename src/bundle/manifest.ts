@@ -8,6 +8,16 @@ export type RepoInput =
       ref?: string; // optional branch/tag/sha
     }
   | {
+      /**
+       * Import a repository from a local directory (e.g., extracted ZIP).
+       * `repo` is the logical identifier in owner/repo form (used for storage layout and dedup).
+       */
+      kind: 'local';
+      repo: string; // owner/repo (logical id)
+      path: string; // local directory path
+      ref?: string; // optional label for the local snapshot
+    }
+  | {
       kind: 'deepwiki';
       url: string;
     };
@@ -19,8 +29,15 @@ export type BundleIndexConfig = {
 };
 
 export type BundleRepo = {
-  kind: 'github' | 'deepwiki';
+  kind: 'github' | 'local' | 'deepwiki';
   id: string; // owner/repo or URL
+  /**
+   * Source of the snapshot for this repo.
+   * - github: git shallow clone or GitHub archive (zipball) fallback
+   * - local: local directory import
+   * - deepwiki: deepwiki fetch
+   */
+  source?: 'git' | 'archive' | 'local' | 'deepwiki';
   headSha?: string;
   fetchedAt: string; // ISO
   notes?: string[];
@@ -40,6 +57,11 @@ export type BundleManifestV1 = {
   bundleId: string;
   createdAt: string;
   updatedAt: string;
+  /**
+   * Stable input fingerprint used for de-duplication.
+   * When present, two bundles with the same fingerprint were created from the same normalized inputs.
+   */
+  fingerprint?: string;
   // NEW: Human-readable metadata
   displayName?: string; // e.g., "React Framework"
   description?: string; // Brief description of the bundle

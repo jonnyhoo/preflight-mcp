@@ -53,7 +53,7 @@ function isProbablyBinary(buf: Buffer): boolean {
   return false;
 }
 
-function classifyKind(repoRelativePathPosix: string): IngestedFileKind {
+export function classifyIngestedFileKind(repoRelativePathPosix: string): IngestedFileKind {
   const base = path.posix.basename(repoRelativePathPosix).toLowerCase();
   const ext = path.posix.extname(repoRelativePathPosix).toLowerCase();
 
@@ -186,7 +186,7 @@ export async function ingestRepoToBundle(params: {
 
     totalBytes += st.size;
 
-    const kind = classifyKind(f.relPosix);
+    const kind = classifyIngestedFileKind(f.relPosix);
     const sha256 = sha256Hex(Buffer.from(normalized, 'utf8'));
 
     const bundleNormRelativePath = `${params.bundleNormPrefixPosix}/${f.relPosix}`;
