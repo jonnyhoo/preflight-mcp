@@ -34,21 +34,49 @@ export function normalizeRelativePath(p: string): string {
 }
 
 export function safeJoin(rootDir: string, relativePath: string): string {
-  // Block absolute paths BEFORE normalization.
-  // This catches Unix-style /etc/passwd and Windows-style C:\path.
   const trimmed = relativePath.trim();
-  if (trimmed.startsWith('/') || trimmed.startsWith('\\') || /^[a-zA-Z]:/.test(trimmed)) {
-    throw new Error('Unsafe path traversal attempt');
+  
+  // Early rejection of obviously malicious patterns
+  if (!trimmed || trimmed.length > 4096) {
+    throw new Error('Invalid path: empty or too long');
   }
-
-  // Convert to platform separator for join, but validate containment by resolving.
+  
+  // Block UNC paths (\\server\share or \\?\C:\path)
+  if (trimmed.startsWith('\\\\')) {
+    throw new Error('Unsafe path traversal attempt: UNC path not allowed');
+  }
+  
+  // Block Windows device paths (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
+  const devicePattern = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$/i;
+  const baseName = path.basename(trimmed);
+  if (devicePattern.test(baseName)) {
+    throw new Error('Unsafe path: Windows device name not allowed');
+  }
+  
+  // Normalize FIRST to canonicalize the path
   const norm = normalizeRelativePath(relativePath);
-
+  
+  // After normalization, check for absolute path indicators
+  if (norm.startsWith('/') || /^[a-zA-Z]:/.test(norm)) {
+    throw new Error('Unsafe path traversal attempt: absolute path after normalization');
+  }
+  
+  // Check for null bytes (path injection)
+  if (norm.includes('\0')) {
+    throw new Error('Unsafe path: null byte not allowed');
+  }
+  
+  // Resolve and validate containment
   const joined = path.resolve(rootDir, norm.split('/').join(path.sep));
   const rootResolved = path.resolve(rootDir);
-  const rel = path.relative(rootResolved, joined);
-  if (rel.startsWith('..') || path.isAbsolute(rel)) {
-    throw new Error('Unsafe path traversal attempt');
+  
+  // Ensure normalized form of joined path starts with root
+  const joinedNorm = path.normalize(joined);
+  const rootNorm = path.normalize(rootResolved);
+  
+  if (!joinedNorm.startsWith(rootNorm + path.sep) && joinedNorm !== rootNorm) {
+    throw new Error('Unsafe path traversal attempt: path escapes root directory');
   }
+  
   return joined;
 }

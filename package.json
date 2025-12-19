@@ -4,6 +4,29 @@
   "description": "MCP server that creates evidence-based preflight bundles for GitHub repositories and library docs.",
   "type": "module",
   "license": "MIT",
+  "author": "preflight-mcp contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jonnyhoo/preflight-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jonnyhoo/preflight-mcp/issues"
+  },
+  "homepage": "https://github.com/jonnyhoo/preflight-mcp#readme",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "llm",
+    "github",
+    "repository",
+    "documentation",
+    "search",
+    "fts5",
+    "sqlite",
+    "claude",
+    "agents"
+  ],
   "bin": {
     "preflight-mcp": "dist/index.js"
   },

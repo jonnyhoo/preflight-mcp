@@ -1,5 +1,30 @@
 import path from 'node:path';
 
+/**
+ * Validate bundle ID to prevent path traversal attacks.
+ * Only allows: alphanumeric, hyphens, underscores
+ */
+export function validateBundleId(bundleId: string): void {
+  if (!bundleId || bundleId.length === 0) {
+    throw new Error('Bundle ID cannot be empty');
+  }
+  
+  if (bundleId.length > 128) {
+    throw new Error('Bundle ID too long (max 128 characters)');
+  }
+  
+  // Allow only alphanumeric, hyphen, and underscore (no dots or slashes)
+  const safeIdPattern = /^[a-zA-Z0-9_-]+$/;
+  if (!safeIdPattern.test(bundleId)) {
+    throw new Error(`Invalid bundle ID: contains unsafe characters. ID: ${bundleId}`);
+  }
+  
+  // Prevent IDs starting with dot (hidden files)
+  if (bundleId.startsWith('.')) {
+    throw new Error('Invalid bundle ID: cannot start with dot');
+  }
+}
+
 export type BundlePaths = {
   bundleId: string;
   rootDir: string;
@@ -14,6 +39,9 @@ export type BundlePaths = {
 };
 
 export function getBundlePaths(storageDir: string, bundleId: string): BundlePaths {
+  // Validate bundle ID to prevent path traversal
+  validateBundleId(bundleId);
+  
   const rootDir = path.join(storageDir, bundleId);
   const indexesDir = path.join(rootDir, 'indexes');
   return {

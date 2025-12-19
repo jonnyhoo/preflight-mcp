@@ -2,6 +2,7 @@ import { PreflightScheduler } from '../core/scheduler.js';
 import { BundleAutoUpdateJob } from '../jobs/bundle-auto-update-job.js';
 import { StorageCleanupJob } from '../jobs/storage-cleanup-job.js';
 import { HealthCheckJob } from '../jobs/health-check-job.js';
+import { TmpCleanupJob } from '../jobs/tmp-cleanup-job.js';
 import { getStorageManager } from '../storage/storage-adapter.js';
 import { compressData, decompressData, detectCompressionType } from '../storage/compression.js';
 import { logger, createModuleLogger } from '../logging/logger.js';
@@ -104,6 +105,10 @@ export class OptimizedPreflightServer {
 		// 健康检查任务 - 每30分钟执行一次
 		PreflightScheduler.build(HealthCheckJob).schedule('*/30 * * * *');
 		moduleLogger.info('Health check job scheduled (every 30 minutes)');
+
+		// 临时目录清理任务 - 每6小时执行一次
+		PreflightScheduler.build(TmpCleanupJob).schedule('0 */6 * * *');
+		moduleLogger.info('Temporary directory cleanup job scheduled (every 6 hours)');
 
 		moduleLogger.info('All scheduled jobs configured', {
 			totalJobs: PreflightScheduler.getAllJobsStatus()

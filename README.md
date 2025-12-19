@@ -1,16 +1,21 @@
 # preflight-mcp
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org/)
+[![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-blue)](https://modelcontextprotocol.io/)
+
 > **English** | [中文](./README.zh-CN.md)
 
-An MCP (Model Context Protocol) **stdio** server
+An MCP (Model Context Protocol) **stdio** server that creates evidence-based preflight bundles for GitHub repositories and library documentation.
 
 Each bundle contains:
 - A local copy of repo docs + code (normalized text)
 - A lightweight **full-text search index** (SQLite FTS5)
 - Agent-facing entry files: `START_HERE.md`, `AGENTS.md`, and `OVERVIEW.md` (factual-only, with evidence pointers)
 
-## What you get
-- **12 tools** to create/update/repair/search/verify/read bundles (plus resources)
+## Features
+
+- **12 MCP tools** to create/update/repair/search/verify/read bundles (plus resources)
 - **De-duplication**: prevent repeated indexing of the same normalized inputs
 - **Resilient GitHub fetching**: configurable git clone timeout + GitHub archive (zipball) fallback
 - **Offline repair**: rebuild missing/empty derived artifacts (index/guides/overview) without re-fetching
@@ -20,26 +25,97 @@ Each bundle contains:
 - **Multi-path mirror backup** for cloud storage redundancy
 - **Resilient storage** with automatic failover when mounts are unavailable
 
+## Table of Contents
+
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Tools](#tools-12-total)
+- [Environment Variables](#environment-variables)
+- [Contributing](#contributing)
+- [License](#license)
+
 ## Requirements
+
 - Node.js >= 18
 - `git` available on PATH
 
-## Install
-Local dev:
-- `npm install`
-- `npm run build`
+## Installation
 
-Publish install (after you publish to npm):
-- `npm install -g preflight-mcp`
+### From npm (after published)
 
-## Use (stdio MCP server)
-This server communicates over stdin/stdout, so you typically run it via an MCP host (e.g. mcp-hub).
+```bash
+npm install -g preflight-mcp
+```
 
-Example MCP host command:
-- `preflight-mcp`
+### Local Development
 
-Or, for local dev:
-- `node dist/index.js`
+```bash
+git clone https://github.com/jonnyhoo/preflight-mcp.git
+cd preflight-mcp
+npm install
+npm run build
+```
+
+## Quick Start
+
+### 1. Configure MCP Host (e.g., Claude Desktop)
+
+Add to your MCP configuration file:
+
+```json
+{
+  "mcpServers": {
+    "preflight": {
+      "command": "npx",
+      "args": ["preflight-mcp"]
+    }
+  }
+}
+```
+
+Or for local development:
+
+```json
+{
+  "mcpServers": {
+    "preflight": {
+      "command": "node",
+      "args": ["path/to/preflight-mcp/dist/index.js"]
+    }
+  }
+}
+```
+
+### 2. Create Your First Bundle
+
+Ask your AI assistant:
+
+```
+"Create a bundle for the repository octocat/Hello-World"
+```
+
+This will:
+- Clone the repository
+- Index all docs and code
+- Generate searchable SQLite FTS5 index
+- Create `START_HERE.md`, `AGENTS.md`, and `OVERVIEW.md`
+
+### 3. Search the Bundle
+
+```
+"Search for 'GitHub' in the bundle"
+```
+
+### 4. Test Locally (Optional)
+
+Run end-to-end smoke test:
+
+```bash
+npm run smoke
+```
+
+This will test bundle creation, search, and update operations.
 
 ## Smoke test
 Runs an end-to-end stdio client that:
@@ -258,3 +334,43 @@ export PREFLIGHT_STORAGE_DIRS="$HOME/OneDrive/preflight;$HOME/Dropbox/preflight"
 ### Important notes
 - **Avoid concurrent access**: Only use on one machine at a time (SQLite conflicts)
 - **Wait for sync**: After updates, wait for cloud sync before switching machines
+
+## Contributing
+
+We welcome contributions! Please see our [Contributing Guide](./CONTRIBUTING.md) for details on:
+
+- Development setup
+- Code style guidelines
+- Testing requirements
+- Pull request process
+
+Please also read our [Code of Conduct](./CODE_OF_CONDUCT.md) before contributing.
+
+## Support
+
+If you encounter any issues or have questions:
+
+- **Issues**: [GitHub Issues](https://github.com/jonnyhoo/preflight-mcp/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/jonnyhoo/preflight-mcp/discussions)
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](./LICENSE) file for details.
+
+The MIT License allows you to:
+- Use commercially
+- Modify
+- Distribute
+- Use privately
+
+With the only requirement being to include the original copyright and license notice.
+
+## Acknowledgments
+
+- Built on the [Model Context Protocol](https://modelcontextprotocol.io/)
+- Uses SQLite FTS5 for efficient full-text search
+- Inspired by the need for evidence-based AI assistance
+
+---
+
+Made with ❤️ for the AI developer community

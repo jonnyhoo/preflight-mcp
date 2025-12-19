@@ -138,7 +138,10 @@ export class Scheduler {
 				}
 				jobTask.retryTimeout = setTimeout(() => {
 					jobTask.retryTimeout = undefined;
-					void this.executeJob(jobName, job, true);
+					// Properly handle Promise rejection
+					this.executeJob(jobName, job, true).catch((err) => {
+						logger.error(`Unhandled error in retry for job ${jobName}`, err instanceof Error ? err : undefined);
+					});
 				}, delay);
 				jobTask.retryTimeout.unref?.();
 			} else {

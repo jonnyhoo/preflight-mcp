@@ -168,20 +168,26 @@ export async function incrementalIndexUpdate(
       const now = new Date().toISOString();
       
       for (const f of updateFiles) {
-        // Delete old lines
-        deleteLines.run(f.bundleNormRelativePath);
-        
-        // Insert new lines
-        const text = fsSync.readFileSync(f.bundleNormAbsPath, 'utf8');
-        const lines = text.split('\n');
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i] ?? '';
-          if (!line.trim()) continue;
-          insertLine.run(line, f.bundleNormRelativePath, f.repoId, f.kind, i + 1);
+        try {
+          // Delete old lines
+          deleteLines.run(f.bundleNormRelativePath);
+          
+          // Insert new lines
+          const text = fsSync.readFileSync(f.bundleNormAbsPath, 'utf8');
+          const lines = text.split('\n');
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i] ?? '';
+            if (!line.trim()) continue;
+            insertLine.run(line, f.bundleNormRelativePath, f.repoId, f.kind, i + 1);
+          }
+          
+          // Update metadata
+          upsertMeta.run(f.bundleNormRelativePath, f.sha256, now);
+        } catch (err) {
+          // Log error but continue with other files to avoid transaction rollback
+          console.error(`Failed to index file ${f.bundleNormRelativePath}:`, err);
+          throw err; // Re-throw to trigger transaction rollback and ensure finally block runs
         }
-        
-        // Update metadata
-        upsertMeta.run(f.bundleNormRelativePath, f.sha256, now);
       }
     });
 
@@ -190,25 +196,40 @@ export async function incrementalIndexUpdate(
       const now = new Date().toISOString();
       
       for (const f of newFiles) {
-        const text = fsSync.readFileSync(f.bundleNormAbsPath, 'utf8');
-        const lines = text.split('\n');
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i] ?? '';
-          if (!line.trim()) continue;
-          insertLine.run(line, f.bundleNormRelativePath, f.repoId, f.kind, i + 1);
+        try {
+          const text = fsSync.readFileSync(f.bundleNormAbsPath, 'utf8');
+          const lines = text.split('\n');
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i] ?? '';
+            if (!line.trim()) continue;
+            insertLine.run(line, f.bundleNormRelativePath, f.repoId, f.kind, i + 1);
+          }
+          
+          // Insert metadata
+          upsertMeta.run(f.bundleNormRelativePath, f.sha256, now);
+        } catch (err) {
+          console.error(`Failed to index file ${f.bundleNormRelativePath}:`, err);
+          throw err; // Re-throw to trigger transaction rollback and ensure finally block runs
         }
-        
-        // Insert metadata
-        upsertMeta.run(f.bundleNormRelativePath, f.sha256, now);
       }
     });
 
-    // Execute transactions
+    // Execute transactions in batches to avoid memory overflow
+    // Process 100 files at a time to keep memory usage bounded
+    const BATCH_SIZE = 100;
+    
     if (filesToUpdate.length > 0) {
-      updateTransaction(filesToUpdate);
+      for (let i = 0; i < filesToUpdate.length; i += BATCH_SIZE) {
+        const batch = filesToUpdate.slice(i, i + BATCH_SIZE);
+        updateTransaction(batch);
+      }
     }
+    
     if (filesToIndex.length > 0) {
-      insertTransaction(filesToIndex);
+      for (let i = 0; i < filesToIndex.length; i += BATCH_SIZE) {
+        const batch = filesToIndex.slice(i, i + BATCH_SIZE);
+        insertTransaction(batch);
+      }
     }
 
     return {
@@ -290,22 +311,32 @@ export async function rebuildIndex(
         if (f.kind === 'doc' && !opts.includeDocs) continue;
         if (f.kind === 'code' && !opts.includeCode) continue;
 
-        // Read file synchronously inside transaction for better performance.
-        const text = fsSync.readFileSync(f.bundleNormAbsPath, 'utf8');
-        const lines = text.split('\n');
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i] ?? '';
-          // Skip empty lines to keep the index smaller.
-          if (!line.trim()) continue;
-          insertLine.run(line, f.bundleNormRelativePath, f.repoId, f.kind, i + 1);
+        try {
+          // Read file synchronously inside transaction for better performance.
+          const text = fsSync.readFileSync(f.bundleNormAbsPath, 'utf8');
+          const lines = text.split('\n');
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i] ?? '';
+            // Skip empty lines to keep the index smaller.
+            if (!line.trim()) continue;
+            insertLine.run(line, f.bundleNormRelativePath, f.repoId, f.kind, i + 1);
+          }
+          
+          // Store file metadata for incremental updates
+          insertMeta.run(f.bundleNormRelativePath, f.sha256, now);
+        } catch (err) {
+          console.error(`Failed to index file ${f.bundleNormRelativePath}:`, err);
+          throw err;
         }
-        
-        // Store file metadata for incremental updates
-        insertMeta.run(f.bundleNormRelativePath, f.sha256, now);
       }
     });
 
-    insertMany(files);
+    // Process files in batches to avoid memory overflow
+    const BATCH_SIZE = 100;
+    for (let i = 0; i < files.length; i += BATCH_SIZE) {
+      const batch = files.slice(i, i + BATCH_SIZE);
+      insertMany(batch);
+    }
   } finally {
     db.close();
   }

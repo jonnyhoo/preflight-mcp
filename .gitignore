@@ -1,5 +1,10 @@
+# Dependencies
 node_modules/
+package-lock.json.backup
+
+# Build output
 dist/
+*.tsbuildinfo
 
 # Smoke test output
 .preflight-test-bundles/
@@ -8,6 +13,8 @@ dist/
 # Test output directories
 .test-bundle/
 .test-output/
+coverage/
+.nyc_output/
 
 # Default bundle storage (if pointed inside repo)
 .preflight-mcp/
@@ -15,10 +22,75 @@ dist/
 # Logs
 *.log
 logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
 
 # npm pack
 preflight-mcp-*.tgz
+*.tgz
 
-# IDE
+# Environment variables and secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.crt
+
+# IDE and editors
 .vscode/
+!.vscode/extensions.json
+!.vscode/settings.json.example
 .idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.vscode-test/
+*.code-workspace
+
+# OS files
+.DS_Store
+.DS_Store?
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+.temp/
+tmp/
+
+# Python (if any Python scripts exist)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+.venv/
+
+# Backup files
+*.bak
+*.backup
+*~.nib
+
+# Test reports
+test-results/
+junit.xml
+
+# SQLite databases (for testing)
+*.sqlite
+*.sqlite3
+*.db
+!tests/fixtures/*.db
+
+# Sensitive or local config
+config.local.json
+secrets.json

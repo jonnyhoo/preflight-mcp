@@ -22,6 +22,7 @@ import { ingestContext7Libraries, type Context7LibrarySummary } from './context7
 import { ingestDeepWikiRepo, type DeepWikiSummary } from './deepwiki.js';
 import { analyzeBundleStatic, type AnalysisMode } from './analysis.js';
 import { autoDetectTags, generateDisplayName, generateDescription } from './tagging.js';
+import { bundleCreationLimiter } from '../core/concurrency-limiter.js';
 
 export type CreateBundleInput = {
   repos: RepoInput[];
@@ -165,7 +166,22 @@ async function readDedupIndex(storageDir: string): Promise<DedupIndexV1> {
 async function writeDedupIndex(storageDir: string, idx: DedupIndexV1): Promise<void> {
   const p = dedupIndexPath(storageDir);
   await ensureDir(path.dirname(p));
-  await fs.writeFile(p, JSON.stringify(idx, null, 2) + '\n', 'utf8');
+  
+  // Use atomic write (write to temp file, then rename) to prevent corruption
+  const tmpPath = `${p}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+  try {
+    await fs.writeFile(tmpPath, JSON.stringify(idx, null, 2) + '\n', 'utf8');
+    // Atomic rename on POSIX; near-atomic on Windows
+    await fs.rename(tmpPath, p);
+  } catch (err) {
+    // Clean up temp file on error
+    try {
+      await fs.unlink(tmpPath);
+    } catch {
+      // Ignore cleanup errors
+    }
+    throw err;
+  }
 }
 
 async function updateDedupIndexBestEffort(cfg: PreflightConfig, fingerprint: string, bundleId: string, bundleUpdatedAt: string): Promise<void> {
@@ -529,28 +545,49 @@ async function mirrorBundleToBackups(
   const mirrored: string[] = [];
   const failed: Array<{ path: string; error: string }> = [];
 
-  for (const backupDir of backupDirs) {
-    if (backupDir === primaryDir) continue; // Skip primary
+  // Mirror to all backup dirs in parallel for better performance
+  const mirrorPromises = backupDirs
+    .filter(dir => dir !== primaryDir) // Skip primary
+    .map(async (backupDir) => {
+      const destPath = path.join(backupDir, bundleId);
 
-    const destPath = path.join(backupDir, bundleId);
+      try {
+        // Check if backup location is available
+        const parentAvailable = await isParentAvailable(destPath);
+        if (!parentAvailable) {
+          return { success: false, path: backupDir, error: 'Mount not available' };
+        }
 
-    try {
-      // Check if backup location is available
-      const parentAvailable = await isParentAvailable(destPath);
-      if (!parentAvailable) {
-        failed.push({ path: backupDir, error: 'Mount not available' });
-        continue;
+        // Ensure backup dir exists
+        await ensureDir(backupDir);
+
+        // Remove old and copy new
+        await rmIfExists(destPath);
+        await copyDir(srcPath, destPath);
+        return { success: true, path: backupDir };
+      } catch (err) {
+        return { 
+          success: false, 
+          path: backupDir, 
+          error: err instanceof Error ? err.message : String(err) 
+        };
       }
+    });
 
-      // Ensure backup dir exists
-      await ensureDir(backupDir);
-
-      // Remove old and copy new
-      await rmIfExists(destPath);
-      await copyDir(srcPath, destPath);
-      mirrored.push(backupDir);
-    } catch (err) {
-      failed.push({ path: backupDir, error: err instanceof Error ? err.message : String(err) });
+  // Wait for all mirror operations to complete
+  const results = await Promise.allSettled(mirrorPromises);
+  
+  for (const result of results) {
+    if (result.status === 'fulfilled') {
+      const { success, path: backupPath, error } = result.value;
+      if (success) {
+        mirrored.push(backupPath);
+      } else {
+        failed.push({ path: backupPath, error: error ?? 'Unknown error' });
+      }
+    } else {
+      // Promise rejection (shouldn't happen with try-catch, but handle it)
+      failed.push({ path: 'unknown', error: result.reason?.message ?? String(result.reason) });
     }
   }
 
@@ -880,6 +917,17 @@ async function generateFactsBestEffort(params: {
 }
 
 export async function createBundle(
+  cfg: PreflightConfig,
+  input: CreateBundleInput,
+  options?: CreateBundleOptions
+): Promise<BundleSummary> {
+  // Apply concurrency limiting to prevent DoS attacks
+  return await bundleCreationLimiter.run(async () => {
+    return await createBundleInternal(cfg, input, options);
+  });
+}
+
+async function createBundleInternal(
   cfg: PreflightConfig,
   input: CreateBundleInput,
   options?: CreateBundleOptions

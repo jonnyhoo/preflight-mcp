@@ -14,7 +14,7 @@ Thank you for your interest in contributing to preflight-mcp! This document prov
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/preflight-mcp.git
+git clone https://github.com/jonnyhoo/preflight-mcp.git
 cd preflight-mcp
 
 # Install dependencies

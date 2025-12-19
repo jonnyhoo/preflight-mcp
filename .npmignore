@@ -1,0 +1,77 @@
+# Source files (dist/ is already specified in package.json "files" field)
+src/
+tests/
+scripts/
+
+# Documentation (keep README.md, LICENSE, CONTRIBUTING.md)
+*.md
+!README.md
+!LICENSE
+!CONTRIBUTING.md
+!CODE_OF_CONDUCT.md
+
+# Config files
+tsconfig.json
+jest.config.js
+.eslintrc.*
+.prettierrc.*
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# Development files
+*.test.ts
+*.spec.ts
+.editorconfig
+
+# Build artifacts
+*.tsbuildinfo
+
+# Test files and coverage
+coverage/
+.nyc_output/
+test-results/
+
+# Examples and demos
+examples/
+demos/
+
+# Development directories
+.vscode/
+.idea/
+
+# Logs
+logs/
+*.log
+
+# Temp files
+tmp/
+.cache/
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+k8s-*.yaml
+
+# Deployment configs
+deployment-configs.json
+
+# Environment files
+.env*
+!.env.example
+
+# Release checklist
+RELEASE_CHECKLIST.md
+
+# Test bundles
+.preflight-test-bundles/
+.test-bundle/
+.test-output/
