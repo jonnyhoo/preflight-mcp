@@ -1,287 +1,316 @@
 # preflight-mcp
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org/)
+[![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-blue)](https://modelcontextprotocol.io/)
+
 > [English](./README.md) | **中文**
 
-一个 MCP (Model Context Protocol) **stdio** 服务器
-
-## 📦 Bundle 包含内容
+一个 MCP (Model Context Protocol) **stdio** 服务器，用于为 GitHub 仓库与库文档生成“基于证据”的 preflight bundles。
 
 每个 bundle 包含：
 - 仓库文档 + 代码的本地副本（规范化文本）
-- 轻量级**全文搜索索引**（SQLite FTS5）
-- 面向 AI Agent 的入口文件：`START_HERE.md`、`AGENTS.md` 和 `OVERVIEW.md`（仅事实，带证据指针）
+- 轻量级 **全文搜索索引**（SQLite FTS5）
+- 面向 Agent 的入口文件：`START_HERE.md`、`AGENTS.md`、`OVERVIEW.md`（仅事实，带证据指针）
 
-## ✨ 功能特性
+## Features
 
-- **12 个工具** - 创建/更新/修复/搜索/验证/读取 bundles
-- **去重** - 防止重复索引同一组（规范化后）输入
-- **更可靠的 GitHub 获取** - 可配置 git clone 超时 + GitHub archive(zipball) 兜底
-- **离线修复** - 索引/导读/指南缺失或为空时可重建（无需重新拉取）
-- **静态事实提取** - 生成 `analysis/FACTS.json`（非 LLM）
-- **基于证据的校验** - 用证据定位来减少幻觉
-- **资源访问** - 通过 `preflight://...` URI 读取 bundle 文件
-- **多路径镜像备份** - 云存储冗余
-- **弹性存储** - 挂载点不可用时自动故障转移
-- **任务调度系统** - 自动化的 bundle 更新和存储清理
-- **压缩系统** - 支持 Gzip、Brotli、Deflate
-- **结构化日志** - 完整的日志记录和监控
+- **12 个 MCP 工具**：create/update/repair/search/verify/read bundles（外加 resources）
+- **去重**：避免对相同的规范化输入重复索引
+- **更可靠的 GitHub 获取**：可配置 git clone 超时 + GitHub archive（zipball）兜底
+- **离线修复**：无需重新抓取，重建缺失/为空的派生物（index/guides/overview）
+- **静态事实提取**：生成 `analysis/FACTS.json`（非 LLM）
+- **基于证据的校验**：减少幻觉
+- **Resources**：通过 `preflight://...` URI 读取 bundle 文件
+- **多路径镜像备份**：云存储冗余
+- **弹性存储**：挂载点不可用时自动故障转移
 
----
+## Table of Contents
 
-## 🔧 系统要求
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Tools](#tools-12-total)
+- [Environment Variables](#environment-variables)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Requirements
 
 - Node.js >= 18
-- `git` 命令可用（在 PATH 中）
+- `git` available on PATH
 
----
+## Installation
 
-## 📥 安装
+### From npm (after published)
 
-### 本地开发
-```bash
-npm install
-npm run build
-```
-
-### 全局安装（发布到 npm 后）
 ```bash
 npm install -g preflight-mcp
 ```
 
----
-
-## 🚀 使用方法
-
-### 作为 MCP 服务器运行
-此服务器通过 stdin/stdout 通信，通常通过 MCP 主机运行（如 mcp-hub）。
+### Local Development
 
 ```bash
-# 直接运行
-preflight-mcp
-
-# 或本地开发
-node dist/index.js
+git clone https://github.com/jonnyhoo/preflight-mcp.git
+cd preflight-mcp
+npm install
+npm run build
 ```
 
-### 运行测试
-```bash
-# 运行单元测试
-npm test
+## Quick Start
 
-# 运行 smoke 测试（端到端）
-npm run smoke
+### 1. Configure MCP Host (e.g., Claude Desktop)
 
-# 类型检查
-npm run typecheck
-```
+在你的 MCP 配置文件中加入：
 
-> **注意**: smoke 测试需要从 GitHub 克隆 `octocat/Hello-World`，需要网络访问。
-
----
-
-## 🛠️ 工具列表（共 12 个）
-
-### 1. `preflight_list_bundles`
-列出存储中的所有 bundle（稳定、最小化输出）。
-
-### 2. `preflight_find_bundle`
-给定输入（repos/libraries/topics），计算指纹并查找是否已有 bundle。
-- 用途：UI/Agent 先查再决定是 create 还是 update。
-
-### 3. `preflight_create_bundle`
-从一个或多个输入创建新的 bundle。
-
-关键语义（强一致性）：
-- 默认 **去重**：相同规范化输入已经存在 bundle 时会拒绝创建。
-- 通过 `ifExists` 指定策略：
-  - `error`（默认）：拒绝重复创建
-  - `returnExisting`：直接返回已有 bundle（不抓取）
-  - `updateExisting`：更新已有 bundle（显式写盘行为）后返回
-  - `createNew`：绕过去重强制新建
-- GitHub 获取：浅克隆；若 `git clone` 失败，会使用 GitHub zipball 兜底。
-- 支持 `local`：从本地目录导入（例如你手动下载 zip 解压后的目录）。
-
-**输入示例**:
 ```json
 {
-  "repos": [
-    { "kind": "github", "repo": "owner/repo" },
-    { "kind": "local", "repo": "owner/repo", "path": "/path/to/dir" },
-    { "kind": "deepwiki", "url": "https://deepwiki.com/owner/repo" }
-  ],
-  "libraries": ["nextjs", "react"],
-  "topics": ["routing", "api"],
-  "ifExists": "error"
+  "mcpServers": {
+    "preflight": {
+      "command": "npx",
+      "args": ["preflight-mcp"]
+    }
+  }
 }
 ```
 
-### 4. `preflight_read_file`
-从 bundle 读取文件（OVERVIEW.md、START_HERE.md、AGENTS.md 或任意仓库文件）。
+或（本地开发）直接指向构建产物：
 
-### 5. `preflight_bundle_info`
-获取 bundle 详情：repos、更新时间、索引信息、资源 URI 等。
+```json
+{
+  "mcpServers": {
+    "preflight": {
+      "command": "node",
+      "args": ["path/to/preflight-mcp/dist/index.js"]
+    }
+  }
+}
+```
 
-### 6. `preflight_repair_bundle`
-离线修复（不抓取）：当索引/导读/指南文件缺失或为空时，重建派生物。
-- 可重建：`indexes/search.sqlite3`、`OVERVIEW.md`、`START_HERE.md`、`AGENTS.md`
+### 2. Create Your First Bundle
 
-### 7. `preflight_delete_bundle`
-永久删除/移除一个 bundle。
+对你的 AI 助手说：
 
-### 8. `preflight_update_bundle`
-刷新/同步 bundle 与最新的仓库更改。
+```
+"为仓库 octocat/Hello-World 创建 bundle"
+```
 
-可选参数：
-- `checkOnly`: true 时仅检查是否有更新，不应用
-- `force`: true 时强制重建（即使没有检测到更改）
+它会：
+- 克隆仓库
+- 索引所有文档与代码
+- 生成可搜索的 SQLite FTS5 索引
+- 生成 `START_HERE.md`、`AGENTS.md`、`OVERVIEW.md`
 
-### 9. `preflight_update_all_bundles`
-批量更新所有 bundles。
+### 3. Search the Bundle
 
-### 10. `preflight_search_bundle`
-在已导入的文档/代码中进行全文搜索（基于行的 SQLite FTS5）。
+```
+"在 bundle 里搜索 'GitHub'"
+```
 
-重要说明：**该工具严格只读**。
-- `ensureFresh` / `maxAgeHours` 参数已 **废弃**，如果传入会直接报错。
-- 如需更新：先调用 `preflight_update_bundle`，再搜索。
-- 如需修复：先调用 `preflight_repair_bundle`，再搜索。
+### 4. Test Locally (Optional)
 
-### 11. `preflight_search_by_tags`
-按标签筛选后跨多个 bundle 搜索（基于行的 SQLite FTS5）。
+运行端到端 smoke 测试：
 
-说明：该工具只读，不会自动 repair/update。
-- 如果某些 bundle 因索引缺失/损坏而无法搜索，会在输出的 `warnings` 中列出。
+```bash
+npm run smoke
+```
 
-可选参数：
-- `tags`: 标签过滤（例如 `["mcp", "agents"]`）
-- `scope`: 搜索范围（`docs` / `code` / `all`）
-- `limit`: 跨 bundle 的总命中数量上限
+这会测试 bundle 创建、搜索、更新等核心操作。
 
-输出新增字段：
-- `warnings?: [{ bundleId, kind, message }]`（非致命错误列表）
-- `warningsTruncated?: true`（warnings 被截断）
+## Smoke test
+Runs an end-to-end stdio client that:
+- spawns the server
+- calls `preflight_create_bundle`
+- reads `preflight://bundles` and `START_HERE.md`
+- searches the bundle
+- calls `preflight_update_bundle`
 
-### 12. `preflight_verify_claim`
-在 bundle 中查找声明/陈述的证据。
+Command:
+- `npm run smoke`
 
-重要说明：**该工具严格只读**。
-- `ensureFresh` / `maxAgeHours` 参数已 **废弃**，如果传入会直接报错。
-- 如需更新：先调用 `preflight_update_bundle`，再验证。
-- 如需修复：先调用 `preflight_repair_bundle`，再验证。
+Note: the smoke test clones `octocat/Hello-World` from GitHub, so it needs internet access.
 
----
+## Tools (12 total)
 
-## 📚 资源
+### `preflight_list_bundles`
+List bundle IDs in storage.
+- Triggers: "show bundles", "查看bundle", "有哪些bundle"
 
+### `preflight_create_bundle`
+Create a new bundle from one or more inputs.
+- Triggers: "index this repo", "学习这个项目", "创建bundle"
+
+Key semantics:
+- **De-dup by default**: if a bundle already exists for the same normalized inputs, creation is rejected.
+- Use `ifExists` to control behavior:
+  - `error` (default): reject duplicate
+  - `returnExisting`: return the existing bundle without fetching
+  - `updateExisting`: update the existing bundle then return it
+  - `createNew`: bypass de-duplication
+- GitHub ingest uses **shallow clone**; if `git clone` fails, it will fall back to **GitHub archive (zipball)**.
+- Supports `repos.kind: "local"` to ingest from a local directory (e.g. an extracted zip).
+
+Input (example):
+- `repos`: `[{ kind: "github", repo: "owner/repo" }, { kind: "local", repo: "owner/repo", path: "/path/to/dir" }, { kind: "deepwiki", url: "https://deepwiki.com/owner/repo" }]`
+- `libraries`: `["nextjs", "react"]` (Context7; optional)
+- `topics`: `["routing", "api"]` (Context7 topic filter; optional)
+- `ifExists`: `"error" | "returnExisting" | "updateExisting" | "createNew"`
+
+### `preflight_read_file`
+Read a file from bundle (OVERVIEW.md, START_HERE.md, AGENTS.md, or any repo file).
+- Triggers: "查看概览", "项目概览", "看README"
+
+### `preflight_bundle_info`
+Get bundle details: repos, update time, stats.
+- Triggers: "bundle详情", "仓库信息"
+
+### `preflight_delete_bundle`
+Delete/remove a bundle permanently.
+- Triggers: "删除bundle", "移除仓库"
+
+### `preflight_update_bundle`
+Refresh/sync a bundle with latest repo changes.
+- Triggers: "更新bundle", "同步仓库", "刷新索引"
+
+Optional parameters:
+- `checkOnly`: If true, only check for updates without applying.
+- `force`: If true, force rebuild even if no changes detected.
+
+### `preflight_update_all_bundles`
+Batch update all bundles at once.
+- Triggers: "批量更新", "全部刷新"
+
+### `preflight_find_bundle`
+Check whether a bundle already exists for the given inputs (no fetching, no changes).
+- Use when your UI/agent wants to decide whether to create/update.
+
+### `preflight_repair_bundle`
+Offline repair for a bundle (no fetching): rebuild missing/empty derived artifacts.
+- Rebuilds `indexes/search.sqlite3`, `START_HERE.md`, `AGENTS.md`, `OVERVIEW.md` when missing/empty.
+- Use when: search fails due to index corruption, bundle files were partially deleted, etc.
+
+### `preflight_search_bundle`
+Full-text search across ingested docs/code (line-based SQLite FTS5).
+- Triggers: "搜索bundle", "在仓库中查找", "搜代码"
+
+Important: **this tool is strictly read-only**.
+- `ensureFresh` / `maxAgeHours` are **deprecated** and will error if provided.
+- To update: call `preflight_update_bundle`, then search again.
+- To repair: call `preflight_repair_bundle`, then search again.
+
+### `preflight_search_by_tags`
+Search across multiple bundles filtered by tags (line-based SQLite FTS5).
+- Triggers: "search in MCP bundles", "search in all bundles", "在MCP项目中搜索", "搜索所有agent"
+
+Notes:
+- This tool is read-only and **does not auto-repair**.
+- If some bundles fail to search (e.g. missing/corrupt index), they will be reported in `warnings`.
+
+Optional parameters:
+- `tags`: Filter bundles by tags (e.g., `["mcp", "agents"]`)
+- `scope`: Search scope (`docs`, `code`, or `all`)
+- `limit`: Max total hits across all bundles
+
+Output additions:
+- `warnings?: [{ bundleId, kind, message }]` (non-fatal per-bundle errors)
+- `warningsTruncated?: true` if warnings were capped
+
+### `preflight_verify_claim`
+Find evidence for a claim/statement in bundle.
+- Triggers: "验证说法", "找证据", "这个对吗"
+
+Important: **this tool is strictly read-only**.
+- `ensureFresh` / `maxAgeHours` are **deprecated** and will error if provided.
+- To update: call `preflight_update_bundle`, then verify again.
+- To repair: call `preflight_repair_bundle`, then verify again.
+
+## Resources
 ### `preflight://bundles`
-bundles 及其主要入口文件的静态 JSON 列表。
+Static JSON listing of bundles and their main entry files.
 
 ### `preflight://bundle/{bundleId}/file/{encodedPath}`
-读取 bundle 内的特定文件。
+Read a specific file inside a bundle.
 
-**示例**:
+Examples:
 - `preflight://bundle/<id>/file/START_HERE.md`
 - `preflight://bundle/<id>/file/repos%2Fowner%2Frepo%2Fnorm%2FREADME.md`
 
-## 🧾 错误语义（稳定、可解析，便于 UI 编排）
-大多数工具错误会用稳定前缀包装：
+## Error semantics (stable, UI-friendly)
+Most tool errors are wrapped with a stable, machine-parseable prefix:
 - `[preflight_error kind=<kind>] <message>`
 
-常见 kind：
-- `bundle_not_found` / `file_not_found`
-- `invalid_path`（路径越界/穿越尝试）
+Common kinds:
+- `bundle_not_found`
+- `file_not_found`
+- `invalid_path` (unsafe path traversal attempt)
 - `permission_denied`
 - `index_missing_or_corrupt`
 - `deprecated_parameter`
 - `unknown`
 
-UI/Agent 推荐按 kind 决策下一步：
-- `index_missing_or_corrupt` → 调 `preflight_repair_bundle`
-- 需要更新语义 → 调 `preflight_update_bundle`
+This is designed so UIs/agents can reliably decide whether to:
+- call `preflight_update_bundle`
+- call `preflight_repair_bundle`
+- prompt the user for a different bundleId/path
 
----
+## Environment variables
+### Storage
+- `PREFLIGHT_STORAGE_DIR`: bundle storage dir (default: `~/.preflight-mcp/bundles`)
+- `PREFLIGHT_STORAGE_DIRS`: **multi-path mirror backup** (semicolon-separated, e.g., `D:\cloud1\preflight;E:\cloud2\preflight`)
+- `PREFLIGHT_TMP_DIR`: temp checkout dir (default: OS temp `preflight-mcp/`)
+- `PREFLIGHT_MAX_FILE_BYTES`: max bytes per file (default: 512 KiB)
+- `PREFLIGHT_MAX_TOTAL_BYTES`: max bytes per repo ingest (default: 50 MiB)
 
-## ⚙️ 环境变量
-
-### 存储配置
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `PREFLIGHT_STORAGE_DIR` | bundle 存储目录 | `~/.preflight-mcp/bundles` |
-| `PREFLIGHT_STORAGE_DIRS` | 多路径镜像备份（分号分隔） | - |
-| `PREFLIGHT_TMP_DIR` | 临时检出目录 | OS temp `preflight-mcp/` |
-| `PREFLIGHT_MAX_FILE_BYTES` | 每个文件的最大字节数 | 512 KiB |
-| `PREFLIGHT_MAX_TOTAL_BYTES` | 每个仓库导入的最大字节数 | 50 MiB |
-
-### 分析配置
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `PREFLIGHT_ANALYSIS_MODE` | 静态分析模式：`none`、`quick`（生成 `analysis/FACTS.json`） | `quick` |
+### Analysis
+- `PREFLIGHT_ANALYSIS_MODE`: Static analysis mode - `none` or `quick` (default: `quick`). Generates `analysis/FACTS.json`.
 
 ### GitHub & Context7
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `GITHUB_TOKEN` | GitHub API 令牌（公开仓库通常不需要；用于 GitHub API/zipball 兜底等） | - |
-| `PREFLIGHT_GIT_CLONE_TIMEOUT_MS` | git clone 最大允许时间（毫秒），超时后会尝试 zipball 兜底 | 5 分钟 |
-| `CONTEXT7_API_KEY` | Context7 API 密钥 | - |
-| `CONTEXT7_MCP_URL` | Context7 MCP 端点 | 默认端点 |
+- `GITHUB_TOKEN`: optional; used for GitHub API/auth patterns and GitHub archive fallback (public repos usually work without it)
+- `PREFLIGHT_GIT_CLONE_TIMEOUT_MS`: optional; max time to allow `git clone` before failing over to archive (default: 5 minutes)
+- `CONTEXT7_API_KEY`: optional; enables higher Context7 limits (runs without a key but may be rate-limited)
+- `CONTEXT7_MCP_URL`: optional; defaults to Context7 MCP endpoint
 
----
+## Bundle layout (on disk)
+Inside a bundle directory:
+- `manifest.json` (includes `fingerprint`, `displayName`, `tags`, and per-repo `source`)
+- `START_HERE.md`
+- `AGENTS.md`
+- `OVERVIEW.md`
+- `indexes/search.sqlite3`
+- **`analysis/FACTS.json`** (static analysis)
+- `repos/<owner>/<repo>/raw/...`
+- `repos/<owner>/<repo>/norm/...` (GitHub/local snapshots)
+- `deepwiki/<owner>/<repo>/norm/index.md` (DeepWiki sources)
+- `deepwiki/<owner>/<repo>/meta.json`
+- `libraries/context7/<...>/meta.json`
+- `libraries/context7/<...>/docs-page-1.md` (or `topic-<topic>-page-1.md`)
 
-## 📁 Bundle 目录结构
+## Multi-device sync & mirror backup
 
-```
-bundle-id/
-├── manifest.json           # Bundle 元数据
-├── START_HERE.md          # 入口指南
-├── AGENTS.md              # Agent 指南
-├── OVERVIEW.md            # 项目概览
-├── indexes/
-│   └── search.sqlite3     # FTS5 搜索索引
-├── analysis/
-│   ├── FACTS.json         # 静态分析结果
-├── repos/
-│   └── <owner>/<repo>/
-│       ├── raw/...        # 原始文件
-│       └── norm/...       # 规范化文件
-├── deepwiki/
-│   └── <owner>/<repo>/
-│       ├── norm/index.md
-│       └── meta.json
-└── libraries/
-    └── context7/
-        ├── meta.json
-        └── docs-page-1.md
-```
+If you work from multiple computers or want redundant cloud backups:
 
----
-
-## 🔄 多设备同步与镜像备份
-
-### 单路径（简单）
+### Single path (simple)
 ```powershell
 # Windows
 $env:PREFLIGHT_STORAGE_DIR = "D:\OneDrive\preflight-bundles"
 ```
-
 ```bash
 # macOS/Linux
 export PREFLIGHT_STORAGE_DIR="$HOME/Dropbox/preflight-bundles"
 ```
 
-### 多路径镜像（冗余）
-写入所有路径，从第一个可用路径读取：
-
+### Multi-path mirror (redundancy)
+Writes to all paths, reads from first available:
 ```powershell
-# Windows - 分号分隔
+# Windows - semicolon separated
 $env:PREFLIGHT_STORAGE_DIRS = "D:\OneDrive\preflight;E:\GoogleDrive\preflight"
 ```
-
 ```bash
 # macOS/Linux
 export PREFLIGHT_STORAGE_DIRS="$HOME/OneDrive/preflight;$HOME/Dropbox/preflight"
 ```
 
-### MCP 主机配置（Claude Desktop）
+### MCP host config (Claude Desktop)
 ```json
 {
   "mcpServers": {
@@ -296,118 +325,51 @@ export PREFLIGHT_STORAGE_DIRS="$HOME/OneDrive/preflight;$HOME/Dropbox/preflight"
 }
 ```
 
-### 弹性存储特性
-- **自动故障转移**: 主路径不可用时，自动使用第一个可用的备份
-- **镜像同步**: 所有写入都镜像到可用的备份路径
-- **挂载恢复**: 路径重新上线时，下次写入时自动同步
-- **非阻塞**: 不可用的路径会被静默跳过
+### Resilient storage features
+- **Auto-failover**: If primary path is unavailable, automatically uses first available backup
+- **Mirror sync**: All writes are mirrored to available backup paths
+- **Mount recovery**: When a path comes back online, it syncs automatically on next write
+- **Non-blocking**: Unavailable paths are skipped without errors
 
-### 重要说明
-- **避免并发访问**: 同一时间只在一台机器上使用（避免 SQLite 冲突）
-- **等待同步**: 更新后，在切换机器前等待云同步完成
+### Important notes
+- **Avoid concurrent access**: Only use on one machine at a time (SQLite conflicts)
+- **Wait for sync**: After updates, wait for cloud sync before switching machines
 
----
+## Contributing
 
-## 🏗️ 项目架构
+欢迎贡献！请查看 [Contributing Guide](./CONTRIBUTING.md) 了解：
+- 开发环境搭建
+- 代码风格
+- 测试要求
+- PR 流程
 
-```
-src/
-├── index.ts                 # 入口点
-├── server.ts               # MCP 服务器主文件
-├── config.ts               # 配置管理
-├── core/
-│   └── scheduler.ts        # 任务调度系统
-├── jobs/
-│   ├── bundle-auto-update-job.ts   # 自动更新任务
-│   ├── health-check-job.ts         # 健康检查任务
-│   └── storage-cleanup-job.ts      # 存储清理任务
-├── storage/
-│   ├── storage-adapter.ts  # 存储抽象层
-│   └── compression.ts      # 压缩系统
-├── logging/
-│   └── logger.ts           # 结构化日志
-├── server/
-│   └── optimized-server.ts # 优化服务器集成
-├── bundle/
-│   ├── service.ts          # Bundle 服务
-│   ├── analysis.ts         # 静态分析（FACTS.json）
-│   ├── facts.ts            # 事实提取
-│   └── ...                 # 其他 bundle 相关模块
-├── search/
-│   └── sqliteFts.ts        # SQLite FTS5 搜索
-└── mcp/
-    └── uris.ts             # URI 处理
-```
+在贡献之前，也请阅读 [Code of Conduct](./CODE_OF_CONDUCT.md)。
 
----
+## Support
 
-## 🧪 测试
+如果你遇到问题或有疑问：
 
-项目包含完整的测试套件（会持续增长，以 `npm test` 输出为准）：
+- **Issues**: [GitHub Issues](https://github.com/jonnyhoo/preflight-mcp/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/jonnyhoo/preflight-mcp/discussions)
 
-```bash
-# 运行所有测试
-npm test
+## License
 
-# 测试覆盖范围：
-# - 调度器系统 (3 tests)
-# - Bundle 自动更新任务 (2 tests)
-# - 存储清理任务 (2 tests)
-# - 健康检查任务 (2 tests)
-# - 存储适配器系统 (4 tests)
-# - 压缩系统 (5 tests)
-# - 日志系统 (3 tests)
-# - 优化服务器集成 (4 tests)
-# - 性能基准测试 (2 tests)
-# - 集成测试 (1 test)
-```
+本项目基于 MIT License 发布，详见 [LICENSE](./LICENSE)。
+
+MIT License 允许你：
+- 商用
+- 修改
+- 分发
+- 私用
+
+唯一要求是保留原始版权与许可证声明。
+
+## Acknowledgments
+
+- Built on the [Model Context Protocol](https://modelcontextprotocol.io/)
+- Uses SQLite FTS5 for efficient full-text search
+- Inspired by the need for evidence-based AI assistance
 
 ---
 
-## 📊 近期变更要点（面向使用者）
-
-这一段只列出会影响工具使用/语义边界的变更（避免“只是代码变了但文档不变”）：
-
-### 1) 工具语义更严格
-- `preflight_search_bundle` / `preflight_verify_claim`：严格只读，不再隐式 update/repair（相关参数已废弃）。
-- update/repair 必须显式调用对应工具。
-
-### 2) 去重与查找
-- 新增输入指纹（fingerprint）与去重策略。
-- 新增 `preflight_find_bundle` 便于 UI 先查再决定 create/update。
-
-### 3) 获取可靠性增强
-- git clone 超时可配置，失败时 GitHub zipball 兜底。
-- 支持 local 目录导入（例如你手动下载 zip 解压后导入）。
-
-### 4) 离线修复与可观测错误
-- 新增 `preflight_repair_bundle`：离线重建索引/导读/指南。
-- 错误输出采用稳定前缀：`[preflight_error kind=...]`，方便 UI 编排。
-- `preflight_search_by_tags` 增加 `warnings`，不再静默吞错。
-
----
-
-## 📝 开发命令
-
-```bash
-# 开发模式（热重载）
-npm run dev
-
-# 构建
-npm run build
-
-# 类型检查
-npm run typecheck
-
-# 运行测试
-npm test
-
-# Smoke 测试
-npm run smoke
-```
-
----
-
-## 📄 许可证
-
-MIT
+Made with ❤️ for the AI developer community
