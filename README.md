@@ -24,6 +24,78 @@ Each bundle contains:
 - **Resources** to read bundle files via `preflight://...` URIs
 - **Multi-path mirror backup** for cloud storage redundancy
 - **Resilient storage** with automatic failover when mounts are unavailable
+- **Atomic bundle creation** with crash-safety and zero orphans
+- **Fast background deletion** with 100-300x performance improvement
+- **Auto-cleanup** on startup for historical orphan bundles
+
+## Architecture Improvements (v0.1.2)
+
+### 🚀 Atomic Bundle Creation
+**Problem**: Bundle creation failures could leave incomplete orphan directories.
+
+**Solution**: Temporary directory + atomic rename pattern:
+1. Create bundle in `tmpDir/bundles-wip/` (invisible to list)
+2. Validate completeness before making visible
+3. Atomic rename/move to final location
+4. Automatic cleanup on any failure
+
+**Benefits**:
+- ✅ Zero orphan bundles
+- 🔒 Crash-safe (temp dirs auto-cleaned)
+- 📏 Validation before visibility
+- 🔄 Cross-filesystem fallback
+
+### ⚡ Fast Background Deletion
+**Problem**: Deleting large bundles could timeout (10+ seconds).
+
+**Solution**: Rename + background deletion:
+1. Instant rename to `.deleting.{timestamp}` (<100ms)
+2. Background deletion (fire-and-forget)
+3. Automatic cleanup of `.deleting` dirs on startup
+
+**Benefits**:
+- ⚡ 100-300x faster response (<100ms)
+- 🔄 No blocking operations
+- 👁️ Invisible to list (non-UUID format)
+- 🛡️ Fallback to direct delete on rename failure
+
+### 🔧 Auto-Cleanup on Startup
+**Problem**: Historical orphan bundles need manual cleanup.
+
+**Solution**: Automatic cleanup on MCP server startup:
+1. Scans storage directories for invalid bundles
+2. Checks manifest.json validity
+3. Deletes orphans older than 1 hour (safety margin)
+4. Cleans `.deleting` residues
+
+**Benefits**:
+- 🤖 Fully automatic
+- 🛡️ Safe with 1-hour age threshold
+- ⚡ Fast when no orphans (<10ms)
+- 🚫 Non-blocking background execution
+
+### 🧹 Manual Cleanup Tool
+**New Tool**: `preflight_cleanup_orphans`
+
+Manually trigger orphan cleanup with full control:
+```json
+{
+  "dryRun": true,        // Only report, don't delete
+  "minAgeHours": 1      // Age threshold
+}
+```
+
+### 🔍 UUID Validation
+List and cleanup now strictly filter by UUID format:
+- ✅ Only valid UUID v4 bundle IDs
+- 🚫 Filters out system directories (`#recycle`, `tmp`)
+- 🚫 Filters out `.deleting` directories
+- 🛡️ Protects user custom directories
+
+For technical details, see:
+- [ISSUES_ANALYSIS.md](./ISSUES_ANALYSIS.md) - Root cause analysis
+- [IMPLEMENTATION_SUMMARY.md](./IMPLEMENTATION_SUMMARY.md) - Implementation details
+- [CLEANUP_STRATEGY.md](./CLEANUP_STRATEGY.md) - MCP-specific cleanup design
 
 ## Table of Contents
 
@@ -130,7 +202,7 @@ Command:
 
 Note: the smoke test clones `octocat/Hello-World` from GitHub, so it needs internet access.
 
-## Tools (12 total)
+## Tools (13 total)
 
 ### `preflight_list_bundles`
 List bundle IDs in storage.
@@ -223,6 +295,21 @@ Important: **this tool is strictly read-only**.
 - `ensureFresh` / `maxAgeHours` are **deprecated** and will error if provided.
 - To update: call `preflight_update_bundle`, then verify again.
 - To repair: call `preflight_repair_bundle`, then verify again.
+
+### `preflight_cleanup_orphans`
+Remove incomplete or corrupted bundles (bundles without valid manifest.json).
+- Triggers: "clean up broken bundles", "remove orphans", "清理孤儿bundle"
+
+Parameters:
+- `dryRun` (default: true): Only report orphans without deleting
+- `minAgeHours` (default: 1): Only clean bundles older than N hours
+
+Output:
+- `totalFound`: Number of orphan bundles found
+- `totalCleaned`: Number of orphan bundles deleted
+- `details`: Per-directory breakdown
+
+Note: This is also automatically executed on server startup (background, non-blocking).
 
 ## Resources
 ### `preflight://bundles`

@@ -25,6 +25,7 @@ import { wrapPreflightError } from './mcp/errorKinds.js';
 import { searchIndex, verifyClaimInIndex, type SearchScope, type EvidenceType } from './search/sqliteFts.js';
 import { logger } from './logging/logger.js';
 import { runSearchByTags } from './tools/searchByTags.js';
+import { cleanupOnStartup, cleanupOrphanBundles } from './bundle/cleanup.js';
 
 const CreateRepoInputSchema = z.union([
   z.object({
@@ -147,10 +148,15 @@ const ReadFileInputSchema = {
 export async function startServer(): Promise<void> {
   const cfg = getConfig();
 
+  // Run orphan bundle cleanup on startup (non-blocking, best-effort)
+  cleanupOnStartup(cfg).catch(() => {
+    // Errors already logged, don't block server startup
+  });
+
   const server = new McpServer(
     {
       name: 'preflight-mcp',
-      version: '0.1.0',
+      version: '0.1.1',
       description: 'Create evidence-based preflight bundles for repositories (docs + code) with SQLite FTS search.',
     },
     {
@@ -1140,6 +1146,52 @@ export async function startServer(): Promise<void> {
         return {
           content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
           structuredContent: out,
+        };
+      } catch (err) {
+        throw wrapPreflightError(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    'preflight_cleanup_orphans',
+    {
+      title: 'Cleanup orphan bundles',
+      description: 'Remove incomplete or corrupted bundles (bundles without valid manifest.json). Safe to run anytime. Use when: "clean up broken bundles", "remove orphans", "清理孤儿bundle", "清除损坏的bundle".',
+      inputSchema: {
+        dryRun: z.boolean().default(true).describe('If true, only report orphans without deleting. Set to false to actually delete.'),
+        minAgeHours: z.number().default(1).describe('Only clean bundles older than N hours (safety margin to avoid race conditions).'),
+      },
+      outputSchema: {
+        totalFound: z.number(),
+        totalCleaned: z.number(),
+        details: z.array(
+          z.object({
+            storageDir: z.string(),
+            found: z.array(z.string()),
+            cleaned: z.array(z.string()),
+            skipped: z.array(z.object({ bundleId: z.string(), reason: z.string() })),
+          })
+        ),
+      },
+      annotations: {
+        destructiveHint: true,
+      },
+    },
+    async (args) => {
+      try {
+        const result = await cleanupOrphanBundles(cfg, {
+          minAgeHours: args.minAgeHours,
+          dryRun: args.dryRun,
+        });
+
+        const summary = args.dryRun
+          ? `Found ${result.totalFound} orphan bundle(s) (DRY RUN - not deleted)`
+          : `Cleaned ${result.totalCleaned} of ${result.totalFound} orphan bundle(s)`;
+
+        return {
+          content: [{ type: 'text', text: summary }],
+          structuredContent: result,
         };
       } catch (err) {
         throw wrapPreflightError(err);

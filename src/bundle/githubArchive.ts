@@ -11,7 +11,7 @@ function nowIso(): string {
 
 function githubHeaders(cfg: PreflightConfig): Record<string, string> {
   const headers: Record<string, string> = {
-    'User-Agent': 'preflight-mcp/0.1.0',
+    'User-Agent': 'preflight-mcp/0.1.1',
     Accept: 'application/vnd.github+json',
   };
   if (cfg.githubToken) {

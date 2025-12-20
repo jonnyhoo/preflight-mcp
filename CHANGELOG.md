@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2025-12-19
+
 ### Added
+- **New MCP tools**:
+  - `preflight_find_bundle`: Check whether a bundle exists for given inputs (no fetching)
+  - `preflight_repair_bundle`: Offline repair for missing/empty derived artifacts
 - **Custom Error Types** (`src/errors.ts`): Structured error handling with error codes and context
 - **Centralized Utils** (`src/utils/index.ts`): Common utility functions to reduce code duplication
 - **Differentiated Claim Verification**: `verify_claim` tool now provides:
@@ -27,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Documentation**: Consolidated multiple scattered docs into standard GitHub structure
 
 ### Fixed
+- npm package now includes the full tool set (12 tools) in published `dist/`.
 - Empty catch blocks now properly logged instead of silently ignored
 
 ## [0.1.0] - 2024-12-18

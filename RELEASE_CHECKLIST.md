@@ -51,7 +51,7 @@ Use this checklist before publishing to GitHub or npm.
   - `README.md` (Support section links)
   - `CONTRIBUTING.md` (clone URL)
 - [ ] **Initial Commit** - All files committed to git
-- [ ] **Git Tags** - Create version tag (e.g., `v0.1.0`)
+- [ ] **Git Tags** - Create version tag (e.g., `v0.1.1`)
 - [ ] **Remote Added** - GitHub remote configured
 
 ### Pre-Publication
@@ -72,9 +72,9 @@ Use this checklist before publishing to GitHub or npm.
 
 git add .
 git commit -m "chore: prepare for initial release"
-git tag v0.1.0
+git tag v0.1.1
 git push origin main
-git push origin v0.1.0
+git push origin v0.1.1
 ```
 
 ### 2. npm Publication (Optional)

@@ -954,18 +954,21 @@ async function createBundleInternal(
 
   // Use effective storage dir (falls back if primary unavailable)
   const effectiveStorageDir = await getEffectiveStorageDirForWrite(cfg);
-  await ensureDir(cfg.tmpDir);
-
-  const paths = getBundlePaths(effectiveStorageDir, bundleId);
-  await ensureDir(paths.rootDir);
-
-  let bundleCreated = false;
+  
+  // Create bundle in temporary directory for atomic creation
+  const tmpBundlesDir = path.join(cfg.tmpDir, 'bundles-wip');
+  await ensureDir(tmpBundlesDir);
+  
+  const tmpPaths = getBundlePaths(tmpBundlesDir, bundleId);
+  await ensureDir(tmpPaths.rootDir);
+  
+  const finalPaths = getBundlePaths(effectiveStorageDir, bundleId);
 
   const allIngestedFiles: IngestedFile[] = [];
   const reposSummary: BundleSummary['repos'] = [];
 
   try {
-    bundleCreated = true; // Mark that bundle directory was created
+    // All operations happen in tmpPaths (temporary directory)
 
     for (const repoInput of input.repos) {
       if (repoInput.kind === 'github') {
@@ -973,7 +976,7 @@ async function createBundleInternal(
         const { headSha, files, skipped, notes, source } = await cloneAndIngestGitHubRepo({
           cfg,
           bundleId,
-          storageDir: effectiveStorageDir,
+          storageDir: tmpBundlesDir,
           owner,
           repo,
           ref: repoInput.ref,
@@ -992,7 +995,7 @@ async function createBundleInternal(
         const { files, skipped } = await ingestLocalRepo({
           cfg,
           bundleId,
-          storageDir: effectiveStorageDir,
+          storageDir: tmpBundlesDir,
           owner,
           repo,
           localPath: repoInput.path,
@@ -1005,7 +1008,7 @@ async function createBundleInternal(
         // DeepWiki integration: fetch and convert to Markdown.
         const deepwikiResult = await ingestDeepWikiRepo({
           cfg,
-          bundlePaths: paths,
+          bundlePaths: tmpPaths,
           url: repoInput.url,
         });
         allIngestedFiles.push(...deepwikiResult.files);
@@ -1022,12 +1025,12 @@ async function createBundleInternal(
   let librariesSummary: Context7LibrarySummary[] | undefined;
   if (input.libraries?.length) {
     // Clean libraries dir in case something wrote here earlier.
-    await rmIfExists(paths.librariesDir);
-    await ensureDir(paths.librariesDir);
+    await rmIfExists(tmpPaths.librariesDir);
+    await ensureDir(tmpPaths.librariesDir);
 
     const libIngest = await ingestContext7Libraries({
       cfg,
-      bundlePaths: paths,
+      bundlePaths: tmpPaths,
       libraries: input.libraries,
       topics: input.topics,
     });
@@ -1037,7 +1040,7 @@ async function createBundleInternal(
   }
 
   // Build index.
-  await rebuildIndex(paths.searchDbPath, allIngestedFiles, {
+  await rebuildIndex(tmpPaths.searchDbPath, allIngestedFiles, {
     includeDocs: true,
     includeCode: true,
   });
@@ -1088,12 +1091,12 @@ async function createBundleInternal(
       },
     };
 
-  await writeManifest(paths.manifestPath, manifest);
+  await writeManifest(tmpPaths.manifestPath, manifest);
 
   // Guides.
-  await writeAgentsMd(paths.agentsPath);
+  await writeAgentsMd(tmpPaths.agentsPath);
   await writeStartHereMd({
-    targetPath: paths.startHerePath,
+    targetPath: tmpPaths.startHerePath,
     bundleId,
     repos: reposSummary.map((r) => ({ id: r.id, headSha: r.headSha })),
     libraries: librariesSummary,
@@ -1110,27 +1113,22 @@ async function createBundleInternal(
 
   const overviewMd = await generateOverviewMarkdown({
     bundleId,
-    bundleRootDir: paths.rootDir,
+    bundleRootDir: tmpPaths.rootDir,
     repos: perRepoOverviews,
     libraries: librariesSummary,
   });
-  await writeOverviewFile(paths.overviewPath, overviewMd);
+  await writeOverviewFile(tmpPaths.overviewPath, overviewMd);
 
     // Generate static facts (FACTS.json). This is intentionally non-LLM and safe to keep inside bundles.
     await generateFactsBestEffort({
       bundleId,
-      bundleRoot: paths.rootDir,
+      bundleRoot: tmpPaths.rootDir,
       files: allIngestedFiles,
       mode: cfg.analysisMode,
     });
 
-  // Mirror to backup storage directories (non-blocking on failures)
-  if (cfg.storageDirs.length > 1) {
-    await mirrorBundleToBackups(effectiveStorageDir, cfg.storageDirs, bundleId);
-  }
-
-    // CRITICAL: Validate bundle completeness before finalizing
-    const validation = await validateBundleCompleteness(paths.rootDir);
+    // CRITICAL: Validate bundle completeness BEFORE atomic move
+    const validation = await validateBundleCompleteness(tmpPaths.rootDir);
 
     if (!validation.isValid) {
       const errorMsg = `Bundle creation incomplete. Missing: ${validation.missingComponents.join(', ')}`;
@@ -1138,7 +1136,35 @@ async function createBundleInternal(
       throw new Error(errorMsg);
     }
 
-    // Update de-duplication index (best-effort). This is intentionally after validation.
+    // ATOMIC OPERATION: Move from temp to final location
+    // This is atomic on most filesystems - bundle becomes visible only when complete
+    logger.info(`Moving bundle ${bundleId} from temp to final location (atomic)`);
+    await ensureDir(effectiveStorageDir);
+    
+    try {
+      // Try rename first (atomic, but only works on same filesystem)
+      await fs.rename(tmpPaths.rootDir, finalPaths.rootDir);
+      logger.info(`Bundle ${bundleId} moved atomically to ${finalPaths.rootDir}`);
+    } catch (renameErr) {
+      // Rename failed - likely cross-filesystem. Fall back to copy+delete
+      const errCode = (renameErr as NodeJS.ErrnoException).code;
+      if (errCode === 'EXDEV') {
+        logger.warn(`Cross-filesystem move detected for ${bundleId}, falling back to copy`);
+        await copyDir(tmpPaths.rootDir, finalPaths.rootDir);
+        await rmIfExists(tmpPaths.rootDir);
+        logger.info(`Bundle ${bundleId} copied to ${finalPaths.rootDir}`);
+      } else {
+        // Some other error, rethrow
+        throw renameErr;
+      }
+    }
+
+    // Mirror to backup storage directories (non-blocking on failures)
+    if (cfg.storageDirs.length > 1) {
+      await mirrorBundleToBackups(effectiveStorageDir, cfg.storageDirs, bundleId);
+    }
+
+    // Update de-duplication index (best-effort). This is intentionally after atomic move.
     await updateDedupIndexBestEffort(cfg, fingerprint, bundleId, createdAt);
 
     const summary = {
@@ -1152,15 +1178,18 @@ async function createBundleInternal(
     return summary;
 
   } catch (err) {
-    // If bundle directory was created, clean it up
-    if (bundleCreated) {
-      logger.error(`Bundle creation failed, cleaning up: ${bundleId}`, err instanceof Error ? err : undefined);
-      await cleanupFailedBundle(cfg, bundleId);
-    }
+    // Clean up temp directory on failure
+    logger.error(`Bundle creation failed, cleaning up temp: ${bundleId}`, err instanceof Error ? err : undefined);
+    await rmIfExists(tmpPaths.rootDir);
 
     // Enhance error message
     const errorMsg = err instanceof Error ? err.message : String(err);
     throw new Error(`Failed to create bundle: ${errorMsg}`);
+  } finally {
+    // Ensure temp directory is cleaned up (double safety)
+    await rmIfExists(tmpPaths.rootDir).catch(() => {
+      // Ignore cleanup errors
+    });
   }
 }
 
@@ -1712,11 +1741,23 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
   return { summary, changed };
 }
 
+/**
+ * Check if a string is a valid UUID (v4 format).
+ * Bundle IDs should be UUIDs with dashes.
+ */
+function isValidBundleId(id: string): boolean {
+  // UUID v4 format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  return uuidRegex.test(id);
+}
+
 /** List bundles from a single storage directory. */
 export async function listBundles(storageDir: string): Promise<string[]> {
   try {
     const entries = await fs.readdir(storageDir, { withFileTypes: true });
-    return entries.filter((e) => e.isDirectory()).map((e) => e.name);
+    return entries
+      .filter((e) => e.isDirectory() && isValidBundleId(e.name))
+      .map((e) => e.name);
   } catch {
     return [];
   }
@@ -1768,19 +1809,50 @@ export async function clearBundle(storageDir: string, bundleId: string): Promise
   await rmIfExists(p.rootDir);
 }
 
-/** Clear bundle from ALL storage directories (mirror delete). */
+/**
+ * Clear bundle from ALL storage directories (mirror delete).
+ * Uses fast rename + background deletion to avoid blocking.
+ */
 export async function clearBundleMulti(storageDirs: string[], bundleId: string): Promise<boolean> {
   let deleted = false;
+  
   for (const dir of storageDirs) {
     try {
-      if (await bundleExists(dir, bundleId)) {
+      const paths = getBundlePaths(dir, bundleId);
+      
+      // Check if the bundle directory exists
+      try {
+        await fs.stat(paths.rootDir);
+      } catch {
+        // Directory doesn't exist, skip
+        continue;
+      }
+      
+      // Fast deletion strategy: rename first (instant), then delete in background
+      const deletingPath = `${paths.rootDir}.deleting.${Date.now()}`;
+      
+      try {
+        // Rename is atomic and instant on most filesystems
+        await fs.rename(paths.rootDir, deletingPath);
+        deleted = true;
+        
+        // Background deletion (fire-and-forget)
+        // The renamed directory is invisible to listBundles (not a valid UUID)
+        rmIfExists(deletingPath).catch((err) => {
+          logger.warn(`Background deletion failed for ${bundleId}: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      } catch (err) {
+        // Rename failed (maybe concurrent deletion), try direct delete as fallback
+        logger.warn(`Rename failed for ${bundleId}, falling back to direct delete`);
         await clearBundle(dir, bundleId);
         deleted = true;
       }
-    } catch {
+    } catch (err) {
       // Skip unavailable paths
+      logger.debug(`Failed to delete bundle from ${dir}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
+  
   return deleted;
 }
 

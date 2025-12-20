@@ -27,7 +27,7 @@ All pre-release preparation tasks have been completed successfully!
 | `package.json` metadata | ✅ Complete | Added author, repository, bugs, homepage, keywords |
 | License field | ✅ Set | MIT |
 | Keywords | ✅ Added | mcp, model-context-protocol, ai, llm, github, etc. |
-| Version | ✅ Set | 0.1.0 (ready for initial release) |
+| Version | ✅ Set | 0.1.1 |
 | Files field | ✅ Configured | Only dist/ will be published |
 
 ### 3. Code Quality ✅
@@ -125,16 +125,16 @@ Add these topics to your repository:
 git remote add origin https://github.com/YOUR-USERNAME/preflight-mcp.git
 git branch -M main
 git add .
-git commit -m "chore: prepare for v0.1.0 release"
-git tag v0.1.0
+git commit -m "chore: prepare for v0.1.1 release"
+git tag v0.1.1
 git push -u origin main
-git push origin v0.1.0
+git push origin v0.1.1
 ```
 
 ### 5. Create GitHub Release
 - Go to repository → Releases → Create new release
-- Tag: v0.1.0
-- Title: "preflight-mcp v0.1.0 - Initial Release"
+- Tag: v0.1.1
+- Title: "preflight-mcp v0.1.1"
 - Description: Include key features and installation instructions
 
 ### 6. Publish to npm (Optional)
@@ -187,5 +187,5 @@ After publishing:
 **Status**: ✅ **Ready for publication after updating repository URLs**
 
 **Prepared**: 2025-12-19  
-**Version**: 0.1.0  
+**Version**: 0.1.1  
 **License**: MIT

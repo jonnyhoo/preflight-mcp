@@ -61,7 +61,7 @@ async function fetchDeepWikiPage(url: string, timeoutMs = 30000): Promise<{ cont
   try {
     const res = await fetch(url, {
       headers: {
-        'User-Agent': 'preflight-mcp/0.1.0',
+        'User-Agent': 'preflight-mcp/0.1.1',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       },
       signal: controller.signal,
