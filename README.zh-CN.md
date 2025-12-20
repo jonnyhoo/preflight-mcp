@@ -15,7 +15,7 @@
 
 ## Features
 
-- **12 个 MCP 工具**：create/update/repair/search/verify/read bundles（外加 resources）
+- **13 个 MCP 工具**：create/update/repair/search/verify/read/cleanup（外加 resources）
 - **去重**：避免对相同的规范化输入重复索引
 - **更可靠的 GitHub 获取**：可配置 git clone 超时 + GitHub archive（zipball）兜底
 - **离线修复**：无需重新抓取，重建缺失/为空的派生物（index/guides/overview）
@@ -24,13 +24,18 @@
 - **Resources**：通过 `preflight://...` URI 读取 bundle 文件
 - **多路径镜像备份**：云存储冗余
 - **弹性存储**：挂载点不可用时自动故障转移
+- **原子创建 + 零孤儿**：临时目录 + 原子重命名，崩溃安全
+- **后台快速删除**：<100ms 响应，实际删除在后台进行
+- **启动自动清理**：历史孤儿目录自动清理（非阻塞）
 
 ## Table of Contents
 
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
-- [Tools](#tools-12-total)
+- [Architecture Improvements (v0.1.2)](#architecture-improvements-v012)
+- [Upgrade to v0.1.2](#upgrade-to-v012)
+- [Tools](#tools-13-total)
 - [Environment Variables](#environment-variables)
 - [Contributing](#contributing)
 - [License](#license)
@@ -130,7 +135,34 @@ Command:
 
 Note: the smoke test clones `octocat/Hello-World` from GitHub, so it needs internet access.
 
-## Tools (12 total)
+## Architecture Improvements (v0.1.2)
+
+### 🚀 原子创建（Crash-safe）
+- 在 `tmpDir/bundles-wip/` 下构建，校验通过后原子重命名到最终目录
+- 失败会自动清理临时目录，避免产生孤儿目录
+- 跨文件系统自动回退到 copy+delete
+
+### ⚡ 后台删除（Fast Delete）
+- 先将目录重命名为 `.deleting.{timestamp}`，响应<100ms
+- 真正的删除在后台完成；启动时会清理残留的 `.deleting` 目录
+
+### 🧹 启动自动清理（Auto-Cleanup）
+- 启动时后台扫描并清理无效 bundle（无有效 manifest.json）
+- 仅清理超过 1 小时的目录（安全阈值），非阻塞执行
+
+### 🔍 UUID 严格校验
+- 列表与清理逻辑只接受 UUID v4 作为 bundleId
+- 会自动过滤 `#recycle`、`tmp`、`.deleting` 等非 bundle 目录
+
+## Upgrade to v0.1.2
+- 无破坏性变更；升级后无需迁移步骤
+- 建议：运行一次手动清理工具查看状态：
+  ```json
+  { "dryRun": true, "minAgeHours": 1 }
+  ```
+- 删除现在是后台执行；列表中不会出现 `.deleting.*` 目录
+
+## Tools (13 total)
 
 ### `preflight_list_bundles`
 List bundle IDs in storage.
@@ -197,6 +229,15 @@ Important: **this tool is strictly read-only**.
 - `ensureFresh` / `maxAgeHours` are **deprecated** and will error if provided.
 - To update: call `preflight_update_bundle`, then search again.
 - To repair: call `preflight_repair_bundle`, then search again.
+
+### `preflight_cleanup_orphans`
+删除不完整或损坏的 bundle（缺少有效 manifest.json）。
+- 触发词："清理孤儿bundle", "删除坏目录"
+- 参数：
+  - `dryRun`（默认 true）：仅报告不删除
+  - `minAgeHours`（默认 1）：只清理超过 N 小时的目录
+- 输出：`totalFound`, `totalCleaned`, `details`
+- 说明：服务启动时也会自动执行后台清理（非阻塞）
 
 ### `preflight_search_by_tags`
 Search across multiple bundles filtered by tags (line-based SQLite FTS5).
