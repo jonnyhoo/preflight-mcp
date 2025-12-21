@@ -2,6 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 import { type PreflightConfig } from '../config.js';
+import { logger } from '../logging/logger.js';
 
 export type ConnectedContext7Client = {
   client: Client;
@@ -36,7 +37,9 @@ export async function connectContext7(cfg: PreflightConfig): Promise<ConnectedCo
   return {
     client,
     close: async () => {
-      await client.close().catch(() => undefined);
+      await client.close().catch((err) => {
+        logger.debug('Context7 client close failed (non-critical)', err instanceof Error ? err : undefined);
+      });
     },
   };
 }

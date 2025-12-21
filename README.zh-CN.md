@@ -15,7 +15,7 @@
 
 ## Features
 
-- **13 个 MCP 工具**：create/update/repair/search/verify/read/cleanup（外加 resources）
+- **16 个 MCP 工具**：create/update/repair/search/verify/evidence/trace/read/cleanup（外加 resources）
 - **去重**：避免对相同的规范化输入重复索引
 - **更可靠的 GitHub 获取**：可配置 git clone 超时 + GitHub archive（zipball）兜底
 - **离线修复**：无需重新抓取，重建缺失/为空的派生物（index/guides/overview）
@@ -35,7 +35,7 @@
 - [Quick Start](#quick-start)
 - [Architecture Improvements (v0.1.2)](#architecture-improvements-v012)
 - [Upgrade to v0.1.2](#upgrade-to-v012)
-- [Tools](#tools-13-total)
+- [Tools](#tools-16-total)
 - [Environment Variables](#environment-variables)
 - [Contributing](#contributing)
 - [License](#license)
@@ -162,7 +162,7 @@ Note: the smoke test clones `octocat/Hello-World` from GitHub, so it needs inter
   ```
 - 删除现在是后台执行；列表中不会出现 `.deleting.*` 目录
 
-## Tools (13 total)
+## Tools (16 total)
 
 ### `preflight_list_bundles`
 List bundle IDs in storage.
@@ -265,6 +265,18 @@ Important: **this tool is strictly read-only**.
 - To update: call `preflight_update_bundle`, then verify again.
 - To repair: call `preflight_repair_bundle`, then verify again.
 
+### `preflight_evidence_dependency_graph`
+生成目标文件/符号的“基于证据”的依赖图（imports + callers）。
+- 输出确定性（best-effort），并为每条边提供可追溯 source range。
+- `PREFLIGHT_AST_ENGINE=wasm` 时使用 Tree-sitter；否则回退到正则抽取。
+- 既输出 `imports`（file → module），也会在可解析时输出 `imports_resolved`（file → file）。
+
+### `preflight_trace_upsert`
+写入/更新 bundle 级 traceability links（commit↔ticket、symbol↔test、code↔doc 等）。
+
+### `preflight_trace_query`
+查询 traceability links（提供 `bundleId` 时更快；省略时可跨 bundle 扫描，带上限）。
+
 ## Resources
 ### `preflight://bundles`
 Static JSON listing of bundles and their main entry files.
@@ -302,8 +314,14 @@ This is designed so UIs/agents can reliably decide whether to:
 - `PREFLIGHT_MAX_FILE_BYTES`: max bytes per file (default: 512 KiB)
 - `PREFLIGHT_MAX_TOTAL_BYTES`: max bytes per repo ingest (default: 50 MiB)
 
-### Analysis
-- `PREFLIGHT_ANALYSIS_MODE`: Static analysis mode - `none` or `quick` (default: `quick`). Generates `analysis/FACTS.json`.
+### Analysis & evidence
+- `PREFLIGHT_ANALYSIS_MODE`: Static analysis mode - `none` | `quick` | `full` (default: `full`). Controls generation of `analysis/FACTS.json`.
+- `PREFLIGHT_AST_ENGINE`: AST engine used by some evidence tools - `wasm` (default) or `native`.
+
+### Built-in HTTP API
+- `PREFLIGHT_HTTP_ENABLED`: enable/disable REST API (default: true)
+- `PREFLIGHT_HTTP_HOST`: REST listen host (default: 127.0.0.1)
+- `PREFLIGHT_HTTP_PORT`: REST listen port (default: 37123)
 
 ### GitHub & Context7
 - `GITHUB_TOKEN`: optional; used for GitHub API/auth patterns and GitHub archive fallback (public repos usually work without it)
@@ -319,6 +337,7 @@ Inside a bundle directory:
 - `OVERVIEW.md`
 - `indexes/search.sqlite3`
 - **`analysis/FACTS.json`** (static analysis)
+- `trace/trace.sqlite3` (traceability links; created on demand)
 - `repos/<owner>/<repo>/raw/...`
 - `repos/<owner>/<repo>/norm/...` (GitHub/local snapshots)
 - `deepwiki/<owner>/<repo>/norm/index.md` (DeepWiki sources)

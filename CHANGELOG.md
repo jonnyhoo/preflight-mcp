@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **New MCP tools**:
+  - `preflight_evidence_dependency_graph` - Deterministic evidence-based dependency graph (imports + callers)
+  - `preflight_trace_upsert` / `preflight_trace_query` - Per-bundle traceability links (SQLite)
+
+### Changed
+- **Tools Count**: Updated from 13 to 16 total tools
+
+### Removed
+- Removed ad-hoc test utility scripts that were not part of npm scripts
+
 ## [0.1.2] - 2025-12-20
 
 ### Added
@@ -40,8 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `src/bundle/cleanup.ts` for centralized cleanup logic
 - Modified `src/bundle/service.ts` for atomic creation and fast deletion
 - Modified `src/server.ts` for startup cleanup integration
-- Removed obsolete test files (test_list.py, test_list.mjs, test_delete.mjs)
-- Kept working test utilities (test_list_sdk.mjs, check_bundles_health.mjs)
+- Removed obsolete test scripts used during development
 
 ## [0.1.1] - 2025-12-19
 

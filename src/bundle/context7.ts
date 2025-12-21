@@ -173,18 +173,40 @@ async function writeJson(targetPath: string, obj: unknown): Promise<void> {
   await fs.writeFile(targetPath, JSON.stringify(obj, null, 2) + '\n', 'utf8');
 }
 
+async function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function callOrThrow(client: Client, name: string, args: Record<string, unknown>): Promise<{
   text: string;
   structured?: Record<string, unknown>;
 }> {
-  const res = await client.callTool({ name, arguments: args });
-  if (res.isError) {
-    throw new Error(textFromToolResult(res) || `${name} failed`);
+  const maxRetries = 3;
+  let lastError: Error | undefined;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const res = await client.callTool({ name, arguments: args });
+      if (res.isError) {
+        throw new Error(textFromToolResult(res) || `${name} failed`);
+      }
+      return {
+        text: textFromToolResult(res),
+        structured: res.structuredContent as Record<string, unknown> | undefined,
+      };
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      
+      // Don't retry on last attempt
+      if (attempt < maxRetries - 1) {
+        // Exponential backoff: 1s, 2s, 4s
+        const delayMs = Math.pow(2, attempt) * 1000;
+        await sleep(delayMs);
+      }
+    }
   }
-  return {
-    text: textFromToolResult(res),
-    structured: res.structuredContent as Record<string, unknown> | undefined,
-  };
+
+  throw lastError || new Error(`${name} failed after ${maxRetries} retries`);
 }
 
 async function resolveContext7Id(client: Client, input: string): Promise<{ id?: string; notes: string[] }> {
@@ -194,43 +216,56 @@ async function resolveContext7Id(client: Client, input: string): Promise<{ id?: 
     return { id: trimmed, notes };
   }
 
-  try {
-    const res = await client.callTool({
-      name: 'resolve-library-id',
-      arguments: { libraryName: trimmed },
-    });
+  const maxRetries = 3;
+  let lastError: Error | undefined;
 
-    if (res.isError) {
-      notes.push(`resolve-library-id error: ${textFromToolResult(res)}`);
-      return { notes };
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const res = await client.callTool({
+        name: 'resolve-library-id',
+        arguments: { libraryName: trimmed },
+      });
+
+      if (res.isError) {
+        notes.push(`resolve-library-id error: ${textFromToolResult(res)}`);
+        return { notes };
+      }
+
+      const text = textFromToolResult(res);
+
+      // Prefer parsing the structured list output for better selection.
+      const parsed = parseResolveEntries(text);
+      const chosen = chooseBestEntry(parsed, trimmed);
+      if (chosen.id) {
+        notes.push(...chosen.notes);
+        return { id: chosen.id, notes };
+      }
+
+      // Fallback: regex/structured extraction.
+      const ids = extractContext7IdsFromResult(res);
+      if (ids.length === 0) {
+        notes.push('resolve-library-id returned no Context7 IDs');
+        return { notes };
+      }
+
+      if (ids.length > 1) {
+        notes.push(`resolve-library-id returned multiple IDs; using first: ${ids[0]}`);
+      }
+
+      return { id: ids[0], notes };
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      
+      // Don't retry on last attempt
+      if (attempt < maxRetries - 1) {
+        const delayMs = Math.pow(2, attempt) * 1000;
+        await sleep(delayMs);
+      }
     }
-
-    const text = textFromToolResult(res);
-
-    // Prefer parsing the structured list output for better selection.
-    const parsed = parseResolveEntries(text);
-    const chosen = chooseBestEntry(parsed, trimmed);
-    if (chosen.id) {
-      notes.push(...chosen.notes);
-      return { id: chosen.id, notes };
-    }
-
-    // Fallback: regex/structured extraction.
-    const ids = extractContext7IdsFromResult(res);
-    if (ids.length === 0) {
-      notes.push('resolve-library-id returned no Context7 IDs');
-      return { notes };
-    }
-
-    if (ids.length > 1) {
-      notes.push(`resolve-library-id returned multiple IDs; using first: ${ids[0]}`);
-    }
-
-    return { id: ids[0], notes };
-  } catch (err) {
-    notes.push(`resolve-library-id threw: ${err instanceof Error ? err.message : String(err)}`);
-    return { notes };
   }
+
+  notes.push(`resolve-library-id failed after ${maxRetries} retries: ${lastError?.message ?? 'unknown error'}`);
+  return { notes };
 }
 
 export async function ingestContext7Libraries(params: {

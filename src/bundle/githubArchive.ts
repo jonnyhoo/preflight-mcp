@@ -4,6 +4,7 @@ import path from 'node:path';
 import AdmZip from 'adm-zip';
 
 import { type PreflightConfig } from '../config.js';
+import { logger } from '../logging/logger.js';
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -107,7 +108,9 @@ export async function downloadAndExtractGitHubArchive(params: {
   const repoRoot = await findSingleTopLevelDir(extractDir);
 
   // Best-effort cleanup: remove zip file (keep extracted for caller to consume).
-  await fs.rm(zipPath, { force: true }).catch(() => undefined);
+  await fs.rm(zipPath, { force: true }).catch((err) => {
+    logger.debug(`Failed to cleanup zip file ${zipPath} (non-critical)`, err instanceof Error ? err : undefined);
+  });
 
   return { repoRoot, refUsed, fetchedAt: nowIso() };
 }

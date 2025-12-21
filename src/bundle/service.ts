@@ -177,8 +177,8 @@ async function writeDedupIndex(storageDir: string, idx: DedupIndexV1): Promise<v
     // Clean up temp file on error
     try {
       await fs.unlink(tmpPath);
-    } catch {
-      // Ignore cleanup errors
+    } catch (cleanupErr) {
+      logger.debug('Failed to cleanup temp dedup index file (non-critical)', cleanupErr instanceof Error ? cleanupErr : undefined);
     }
     throw err;
   }
@@ -195,8 +195,8 @@ async function updateDedupIndexBestEffort(cfg: PreflightConfig, fingerprint: str
       idx.byFingerprint[fingerprint] = { bundleId, bundleUpdatedAt };
       idx.updatedAt = nowIso();
       await writeDedupIndex(storageDir, idx);
-    } catch {
-      // best-effort
+    } catch (err) {
+      logger.debug(`Failed to update dedup index in ${storageDir} (best-effort)`, err instanceof Error ? err : undefined);
     }
   }
 }
@@ -1102,7 +1102,15 @@ async function createBundleInternal(
     libraries: librariesSummary,
   });
 
-  // Overview (S2: factual-only with evidence pointers).
+  // Generate static facts (FACTS.json) FIRST. This is intentionally non-LLM and safe to keep inside bundles.
+  await generateFactsBestEffort({
+    bundleId,
+    bundleRoot: tmpPaths.rootDir,
+    files: allIngestedFiles,
+    mode: cfg.analysisMode,
+  });
+
+  // Overview (S2: factual-only with evidence pointers) - generated AFTER FACTS.json
   const perRepoOverviews = reposSummary
     .filter((r) => r.kind === 'github' || r.kind === 'local')
     .map((r) => {
@@ -1118,14 +1126,6 @@ async function createBundleInternal(
     libraries: librariesSummary,
   });
   await writeOverviewFile(tmpPaths.overviewPath, overviewMd);
-
-    // Generate static facts (FACTS.json). This is intentionally non-LLM and safe to keep inside bundles.
-    await generateFactsBestEffort({
-      bundleId,
-      bundleRoot: tmpPaths.rootDir,
-      files: allIngestedFiles,
-      mode: cfg.analysisMode,
-    });
 
     // CRITICAL: Validate bundle completeness BEFORE atomic move
     const validation = await validateBundleCompleteness(tmpPaths.rootDir);
@@ -1187,8 +1187,8 @@ async function createBundleInternal(
     throw new Error(`Failed to create bundle: ${errorMsg}`);
   } finally {
     // Ensure temp directory is cleaned up (double safety)
-    await rmIfExists(tmpPaths.rootDir).catch(() => {
-      // Ignore cleanup errors
+    await rmIfExists(tmpPaths.rootDir).catch((err) => {
+      logger.debug('Failed to cleanup temp bundle directory in finally block (non-critical)', err instanceof Error ? err : undefined);
     });
   }
 }

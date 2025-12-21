@@ -26,6 +26,9 @@ import { searchIndex, verifyClaimInIndex, type SearchScope, type EvidenceType } 
 import { logger } from './logging/logger.js';
 import { runSearchByTags } from './tools/searchByTags.js';
 import { cleanupOnStartup, cleanupOrphanBundles } from './bundle/cleanup.js';
+import { startHttpServer } from './http/server.js';
+import { DependencyGraphInputSchema, generateDependencyGraph } from './evidence/dependencyGraph.js';
+import { TraceQueryInputSchema, TraceUpsertInputSchema, traceQuery, traceUpsert } from './trace/service.js';
 
 const CreateRepoInputSchema = z.union([
   z.object({
@@ -149,9 +152,12 @@ export async function startServer(): Promise<void> {
   const cfg = getConfig();
 
   // Run orphan bundle cleanup on startup (non-blocking, best-effort)
-  cleanupOnStartup(cfg).catch(() => {
-    // Errors already logged, don't block server startup
+  cleanupOnStartup(cfg).catch((err) => {
+    logger.debug('Startup cleanup failed (non-critical)', err instanceof Error ? err : undefined);
   });
+
+  // Start built-in REST API (best-effort). This must not interfere with MCP stdio transport.
+  startHttpServer(cfg);
 
   const server = new McpServer(
     {
@@ -924,7 +930,7 @@ export async function startServer(): Promise<void> {
         },
         searchIndexForBundleId: (bundleId, query, scope, limit) => {
           const paths = getBundlePathsForId(effectiveDir, bundleId);
-          return searchIndex(paths.searchDbPath, query, scope, limit);
+          return searchIndex(paths.searchDbPath, query, scope, limit, paths.rootDir);
         },
         toUri: (bundleId, p) => toBundleFileUri({ bundleId, relativePath: p }),
       });
@@ -1007,7 +1013,7 @@ export async function startServer(): Promise<void> {
 
         const paths = getBundlePathsForId(storageDir, args.bundleId);
 
-        const rawHits = searchIndex(paths.searchDbPath, args.query, args.scope as SearchScope, args.limit);
+        const rawHits = searchIndex(paths.searchDbPath, args.query, args.scope as SearchScope, args.limit, paths.rootDir);
 
         const hits = rawHits.map((h) => ({
           ...h,
@@ -1122,7 +1128,7 @@ export async function startServer(): Promise<void> {
 
         const paths = getBundlePathsForId(storageDir, args.bundleId);
 
-        const verification = verifyClaimInIndex(paths.searchDbPath, args.claim, args.scope as SearchScope, args.limit);
+        const verification = verifyClaimInIndex(paths.searchDbPath, args.claim, args.scope as SearchScope, args.limit, paths.rootDir);
 
       // Add URIs to evidence hits
       const addUri = (hit: typeof verification.supporting[0]) => ({
@@ -1143,6 +1149,107 @@ export async function startServer(): Promise<void> {
         related: verification.related.map(addUri),
       };
 
+        return {
+          content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
+          structuredContent: out,
+        };
+      } catch (err) {
+        throw wrapPreflightError(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    'preflight_evidence_dependency_graph',
+    {
+      title: 'Evidence: dependency graph (callers + imports)',
+      description:
+        'Generate an evidence-based dependency graph for a target file/symbol inside a bundle. Output is deterministic (FTS + regex) and every edge includes traceable sources (file + range). This tool is read-only.',
+      inputSchema: DependencyGraphInputSchema,
+      outputSchema: {
+        meta: z.any(),
+        facts: z.any(),
+        signals: z.any(),
+      },
+      annotations: {
+        readOnlyHint: true,
+      },
+    },
+    async (args) => {
+      try {
+        const out = await generateDependencyGraph(cfg, args);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
+          structuredContent: out,
+        };
+      } catch (err) {
+        throw wrapPreflightError(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    'preflight_trace_upsert',
+    {
+      title: 'Trace: upsert links',
+      description:
+        'Upsert traceability links (commit↔ticket, symbol↔test, code↔doc, etc.) for a bundle. Stores trace edges in a per-bundle SQLite database.',
+      inputSchema: TraceUpsertInputSchema,
+      outputSchema: {
+        bundleId: z.string(),
+        upserted: z.number().int(),
+        ids: z.array(z.string()),
+      },
+      annotations: {
+        openWorldHint: true,
+      },
+    },
+    async (args) => {
+      try {
+        const out = await traceUpsert(cfg, args);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
+          structuredContent: out,
+        };
+      } catch (err) {
+        throw wrapPreflightError(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    'preflight_trace_query',
+    {
+      title: 'Trace: query links',
+      description:
+        'Query traceability links. Provide bundleId for fast queries; if omitted, scans across bundles (capped). This tool is read-only.',
+      inputSchema: TraceQueryInputSchema,
+      outputSchema: {
+        bundleId: z.string().optional(),
+        scannedBundles: z.number().int().optional(),
+        truncated: z.boolean().optional(),
+        edges: z.array(
+          z.object({
+            id: z.string(),
+            source: z.object({ type: z.string(), id: z.string() }),
+            target: z.object({ type: z.string(), id: z.string() }),
+            type: z.string(),
+            confidence: z.number(),
+            method: z.enum(['exact', 'heuristic']),
+            sources: z.array(z.any()),
+            createdAt: z.string(),
+            updatedAt: z.string(),
+            bundleId: z.string().optional(),
+          })
+        ),
+      },
+      annotations: {
+        readOnlyHint: true,
+      },
+    },
+    async (args) => {
+      try {
+        const out = await traceQuery(cfg, args);
         return {
           content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
           structuredContent: out,

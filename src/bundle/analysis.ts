@@ -3,7 +3,7 @@ import { type IngestedFile } from './ingest.js';
 import { extractBundleFacts, writeFacts, type BundleFacts } from './facts.js';
 import { logger } from '../logging/logger.js';
 
-export type AnalysisMode = 'none' | 'quick';
+export type AnalysisMode = 'none' | 'quick' | 'full'; // 'full' enables Phase 2
 
 export type AnalysisResult = {
   facts?: BundleFacts;
@@ -28,6 +28,7 @@ export async function analyzeBundleStatic(params: {
     const facts = await extractBundleFacts({
       bundleRoot: params.bundleRoot,
       repos: params.repos,
+      enablePhase2: params.mode === 'full', // Enable Phase 2 module analysis for 'full' mode
     });
 
     const factsPath = path.join(params.bundleRoot, 'analysis', 'FACTS.json');
@@ -110,6 +111,58 @@ export function generateQuickSummary(facts: BundleFacts): string {
   sections.push(`- Has config files: ${facts.fileStructure.hasConfig ? 'Yes' : 'No'}`);
   if (facts.fileStructure.topLevelDirs.length > 0) {
     sections.push(`- Top-level directories: ${facts.fileStructure.topLevelDirs.join(', ')}`);
+  }
+  sections.push('');
+
+  // Phase 2: Modules (if available)
+  if (facts.modules && facts.modules.length > 0) {
+    sections.push('## Module Analysis');
+    sections.push(`- Total modules: ${facts.modules.length}`);
+
+    const roleCount = facts.modules.reduce((acc, m) => {
+      acc[m.role] = (acc[m.role] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+
+    sections.push(`- Core modules: ${roleCount['core'] || 0}`);
+    sections.push(`- Utility modules: ${roleCount['utility'] || 0}`);
+    sections.push(`- Test modules: ${roleCount['test'] || 0}`);
+    sections.push(`- Config modules: ${roleCount['config'] || 0}`);
+
+    const coreModules = facts.modules.filter(m => m.role === 'core').slice(0, 5);
+    if (coreModules.length > 0) {
+      sections.push('\n### Top Core Modules');
+      for (const mod of coreModules) {
+        sections.push(`- ${mod.path} (${mod.exports.length} exports, ${mod.loc} LOC)`);
+      }
+    }
+    sections.push('');
+  }
+
+  // Phase 2: Architecture patterns (if available)
+  if (facts.patterns && facts.patterns.length > 0) {
+    sections.push('## Architecture Patterns');
+    sections.push(facts.patterns.map(p => `- ${p}`).join('\n'));
+    sections.push('');
+  }
+
+  // Phase 2: Tech stack (if available)
+  if (facts.techStack) {
+    sections.push('## Technology Stack');
+    sections.push(`- Language: ${facts.techStack.language}`);
+    if (facts.techStack.runtime) {
+      sections.push(`- Runtime: ${facts.techStack.runtime}`);
+    }
+    if (facts.techStack.packageManager) {
+      sections.push(`- Package Manager: ${facts.techStack.packageManager}`);
+    }
+    if (facts.techStack.buildTools) {
+      sections.push(`- Build Tools: ${facts.techStack.buildTools.join(', ')}`);
+    }
+    if (facts.techStack.testFrameworks) {
+      sections.push(`- Test Frameworks: ${facts.techStack.testFrameworks.join(', ')}`);
+    }
+    sections.push('');
   }
 
   return sections.join('\n') + '\n';

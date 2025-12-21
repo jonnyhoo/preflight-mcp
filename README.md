@@ -15,7 +15,7 @@ Each bundle contains:
 
 ## Features
 
-- **12 MCP tools** to create/update/repair/search/verify/read bundles (plus resources)
+- **16 MCP tools** to create/update/repair/search/verify/read bundles, generate evidence graphs, and manage trace links (plus resources)
 - **De-duplication**: prevent repeated indexing of the same normalized inputs
 - **Resilient GitHub fetching**: configurable git clone timeout + GitHub archive (zipball) fallback
 - **Offline repair**: rebuild missing/empty derived artifacts (index/guides/overview) without re-fetching
@@ -102,7 +102,7 @@ For technical details, see:
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
-- [Tools](#tools-12-total)
+- [Tools](#tools-16-total)
 - [Environment Variables](#environment-variables)
 - [Contributing](#contributing)
 - [License](#license)
@@ -202,7 +202,7 @@ Command:
 
 Note: the smoke test clones `octocat/Hello-World` from GitHub, so it needs internet access.
 
-## Tools (13 total)
+## Tools (16 total)
 
 ### `preflight_list_bundles`
 List bundle IDs in storage.
@@ -296,6 +296,18 @@ Important: **this tool is strictly read-only**.
 - To update: call `preflight_update_bundle`, then verify again.
 - To repair: call `preflight_repair_bundle`, then verify again.
 
+### `preflight_evidence_dependency_graph`
+Generate an evidence-based dependency graph for a target file/symbol (imports + callers).
+- Deterministic output with source ranges for edges.
+- Uses Tree-sitter parsing when `PREFLIGHT_AST_ENGINE=wasm`; falls back to regex extraction otherwise.
+- Emits `imports` edges (file → module) and, when resolvable, `imports_resolved` edges (file → internal file).
+
+### `preflight_trace_upsert`
+Upsert traceability links (commit↔ticket, symbol↔test, code↔doc, etc.) for a bundle.
+
+### `preflight_trace_query`
+Query traceability links (fast when `bundleId` is provided; can scan across bundles when omitted).
+
 ### `preflight_cleanup_orphans`
 Remove incomplete or corrupted bundles (bundles without valid manifest.json).
 - Triggers: "clean up broken bundles", "remove orphans", "清理孤儿bundle"
@@ -348,8 +360,14 @@ This is designed so UIs/agents can reliably decide whether to:
 - `PREFLIGHT_MAX_FILE_BYTES`: max bytes per file (default: 512 KiB)
 - `PREFLIGHT_MAX_TOTAL_BYTES`: max bytes per repo ingest (default: 50 MiB)
 
-### Analysis
-- `PREFLIGHT_ANALYSIS_MODE`: Static analysis mode - `none` or `quick` (default: `quick`). Generates `analysis/FACTS.json`.
+### Analysis & evidence
+- `PREFLIGHT_ANALYSIS_MODE`: Static analysis mode - `none` | `quick` | `full` (default: `full`). Controls generation of `analysis/FACTS.json`.
+- `PREFLIGHT_AST_ENGINE`: AST engine used by some evidence tools - `wasm` (default) or `native`.
+
+### Built-in HTTP API
+- `PREFLIGHT_HTTP_ENABLED`: enable/disable REST API (default: true)
+- `PREFLIGHT_HTTP_HOST`: REST listen host (default: 127.0.0.1)
+- `PREFLIGHT_HTTP_PORT`: REST listen port (default: 37123)
 
 ### GitHub & Context7
 - `GITHUB_TOKEN`: optional; used for GitHub API/auth patterns and GitHub archive fallback (public repos usually work without it)
@@ -365,6 +383,7 @@ Inside a bundle directory:
 - `OVERVIEW.md`
 - `indexes/search.sqlite3`
 - **`analysis/FACTS.json`** (static analysis)
+- `trace/trace.sqlite3` (traceability links; created on demand)
 - `repos/<owner>/<repo>/raw/...`
 - `repos/<owner>/<repo>/norm/...` (GitHub/local snapshots)
 - `deepwiki/<owner>/<repo>/norm/index.md` (DeepWiki sources)

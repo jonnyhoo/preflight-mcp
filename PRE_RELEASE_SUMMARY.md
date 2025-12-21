@@ -27,7 +27,7 @@ All pre-release preparation tasks have been completed successfully!
 | `package.json` metadata | ✅ Complete | Added author, repository, bugs, homepage, keywords |
 | License field | ✅ Set | MIT |
 | Keywords | ✅ Added | mcp, model-context-protocol, ai, llm, github, etc. |
-| Version | ✅ Set | 0.1.1 |
+| Version | ✅ Set | 0.1.2 |
 | Files field | ✅ Configured | Only dist/ will be published |
 
 ### 3. Code Quality ✅
@@ -45,7 +45,7 @@ All pre-release preparation tasks have been completed successfully!
 |--------------|--------|----------|
 | Installation guide | ✅ Complete | npm and local dev instructions |
 | Quick start guide | ✅ Complete | Step-by-step MCP host configuration and first bundle creation |
-| API documentation | ✅ Complete | All 12 tools documented with triggers and examples |
+| API documentation | ✅ Complete | All 16 tools documented with triggers and examples |
 | Environment variables | ✅ Complete | All config options documented in README and .env.example |
 | Contributing guide | ✅ Linked | Clear link in README to CONTRIBUTING.md |
 | License info | ✅ Present | MIT License clearly stated at bottom of README |
@@ -125,16 +125,16 @@ Add these topics to your repository:
 git remote add origin https://github.com/YOUR-USERNAME/preflight-mcp.git
 git branch -M main
 git add .
-git commit -m "chore: prepare for v0.1.1 release"
-git tag v0.1.1
+git commit -m "chore: prepare for v0.1.2 release"
+git tag v0.1.2
 git push -u origin main
-git push origin v0.1.1
+git push origin v0.1.2
 ```
 
 ### 5. Create GitHub Release
 - Go to repository → Releases → Create new release
-- Tag: v0.1.1
-- Title: "preflight-mcp v0.1.1"
+- Tag: v0.1.2
+- Title: "preflight-mcp v0.1.2"
 - Description: Include key features and installation instructions
 
 ### 6. Publish to npm (Optional)
@@ -147,7 +147,7 @@ npm publish
 
 ## 📊 Project Statistics
 
-- **Total Tools**: 12 MCP tools + 2 resources
+- **Total Tools**: 16 MCP tools + 2 resources
 - **Security Level**: High (no vulnerabilities, comprehensive .gitignore)
 - **Documentation Quality**: Excellent (complete guides, examples, API docs)
 - **License**: MIT (commercial-friendly, permissive)
@@ -163,7 +163,7 @@ When announcing your project, emphasize:
 1. **Evidence-Based AI**: Reduces hallucinations with fact-based verification
 2. **Offline Capabilities**: Works without re-fetching with repair functionality
 3. **Multi-Storage Support**: Mirror backup across cloud services
-4. **12 MCP Tools**: Comprehensive bundle management
+4. **16 MCP Tools**: Bundle management + evidence graphs + trace links
 5. **SQLite FTS5**: Fast, embedded full-text search
 6. **De-duplication**: Smart duplicate detection
 7. **GitHub Fallback**: Archive support when git clone fails
@@ -187,5 +187,5 @@ After publishing:
 **Status**: ✅ **Ready for publication after updating repository URLs**
 
 **Prepared**: 2025-12-19  
-**Version**: 0.1.1  
+**Version**: 0.1.2  
 **License**: MIT

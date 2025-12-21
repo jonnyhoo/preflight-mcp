@@ -1,7 +1,9 @@
 import os from 'node:os';
 import path from 'node:path';
 
-export type AnalysisMode = 'none' | 'quick';
+export type AnalysisMode = 'none' | 'quick' | 'full'; // 'full' enables Phase 2 module analysis
+
+export type AstEngine = 'wasm' | 'native';
 
 export type PreflightConfig = {
   /** Primary storage directory (first in storageDirs, used for reading). */
@@ -18,6 +20,16 @@ export type PreflightConfig = {
   maxTotalBytes: number;
   /** Static analysis mode (controls whether analysis/FACTS.json is generated). */
   analysisMode: AnalysisMode;
+
+  /** AST engine for deterministic parsing (default: wasm). */
+  astEngine: AstEngine;
+
+  /** Enable built-in REST API server (default: true). */
+  httpEnabled: boolean;
+  /** REST server host (default: 127.0.0.1). */
+  httpHost: string;
+  /** REST server port (default: 37123). */
+  httpPort: number;
 
   // --- Limits and tuning parameters (previously hardcoded) ---
 
@@ -44,13 +56,29 @@ function envNumber(name: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+function envBoolean(name: string, fallback: boolean): boolean {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const v = raw.trim().toLowerCase();
+  if (v === '1' || v === 'true' || v === 'yes' || v === 'y' || v === 'on') return true;
+  if (v === '0' || v === 'false' || v === 'no' || v === 'n' || v === 'off') return false;
+  return fallback;
+}
+
+function parseAstEngine(raw: string | undefined): AstEngine {
+  const v = (raw ?? '').trim().toLowerCase();
+  if (v === 'native') return 'native';
+  return 'wasm';
+}
+
 function parseAnalysisMode(raw: string | undefined): AnalysisMode {
   const v = (raw ?? '').trim().toLowerCase();
   if (v === 'none') return 'none';
   if (v === 'quick') return 'quick';
-  // Back-compat: deep used to exist; treat it as quick (but never run LLM).
-  if (v === 'deep') return 'quick';
-  return 'quick';
+  if (v === 'full') return 'full'; // Phase 2 module analysis
+  // Back-compat: deep used to exist; treat it as full (for better analysis).
+  if (v === 'deep') return 'full';
+  return 'full'; // Default to full for better analysis
 }
 
 /**
@@ -80,10 +108,13 @@ export function getConfig(): PreflightConfig {
   const storageDirs = parseStorageDirs();
   const storageDir = storageDirs[0]!; // Primary for new bundles (always at least one from default)
 
-  const tmpDir =
-    process.env.PREFLIGHT_TMP_DIR ?? path.join(os.tmpdir(), 'preflight-mcp');
+  const tmpDir = process.env.PREFLIGHT_TMP_DIR ?? path.join(os.tmpdir(), 'preflight-mcp');
 
   const analysisMode = parseAnalysisMode(process.env.PREFLIGHT_ANALYSIS_MODE);
+
+  const httpEnabled = envBoolean('PREFLIGHT_HTTP_ENABLED', true);
+  const httpHost = (process.env.PREFLIGHT_HTTP_HOST ?? '127.0.0.1').trim() || '127.0.0.1';
+  const httpPort = envNumber('PREFLIGHT_HTTP_PORT', 37123);
 
   return {
     storageDir,
@@ -96,6 +127,12 @@ export function getConfig(): PreflightConfig {
     maxFileBytes: envNumber('PREFLIGHT_MAX_FILE_BYTES', 512 * 1024),
     maxTotalBytes: envNumber('PREFLIGHT_MAX_TOTAL_BYTES', 50 * 1024 * 1024),
     analysisMode,
+
+    astEngine: parseAstEngine(process.env.PREFLIGHT_AST_ENGINE),
+
+    httpEnabled,
+    httpHost,
+    httpPort,
 
     // Tuning parameters with defaults (can be overridden via env vars)
     maxContext7Libraries: envNumber('PREFLIGHT_MAX_CONTEXT7_LIBRARIES', 20),

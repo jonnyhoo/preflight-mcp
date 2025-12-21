@@ -62,7 +62,8 @@ describe('bundle de-duplication', () => {
   it('finds an existing bundle by scanning manifests and seeds the dedup index', async () => {
     const cfg = makeCfg(root);
 
-    const bundleId = 'bundle-1';
+    // Must be a valid bundleId directory name (listBundles filters by UUID-like format).
+    const bundleId = '00000000-0000-0000-0000-000000000001';
     const createdAt = iso(new Date('2025-01-01T00:00:00Z'));
     const updatedAt = iso(new Date('2025-01-02T00:00:00Z'));
 

@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { type IngestedFile } from './ingest.js';
 import type { Context7LibrarySummary } from './context7.js';
+import { readFacts, type BundleFacts } from './facts.js';
 
 type RepoOverviewInput = {
   repoId: string;
@@ -181,21 +182,222 @@ async function renderContext7LibraryFacts(bundleRootDir: string, lib: Context7Li
   return out;
 }
 
+/**
+ * Phase 3: Extract project purpose from README.md
+ */
+async function extractProjectPurpose(files: IngestedFile[]): Promise<string | null> {
+  const readme = files.find(f => f.repoRelativePath.toLowerCase() === 'readme.md');
+  if (!readme) return null;
+
+  try {
+    const content = await fs.readFile(readme.bundleNormAbsPath, 'utf8');
+    const lines = content.split('\n');
+    
+    // Skip title (first h1)
+    let startIdx = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i]?.startsWith('# ')) {
+        startIdx = i + 1;
+        break;
+      }
+    }
+
+    // Extract first paragraph (non-empty lines until empty line or next heading)
+    const paragraph: string[] = [];
+    for (let i = startIdx; i < Math.min(lines.length, startIdx + 20); i++) {
+      const line = lines[i]?.trim() || '';
+      if (!line || line.startsWith('#')) break;
+      paragraph.push(line);
+    }
+
+    return paragraph.join(' ').trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Phase 3: Format module list for display
+ */
+function formatCoreModules(facts: BundleFacts): string[] {
+  if (!facts.modules || facts.modules.length === 0) return [];
+
+  const coreModules = facts.modules
+    .filter(m => m.role === 'core')
+    .sort((a, b) => b.exports.length - a.exports.length)
+    .slice(0, 10);
+
+  if (coreModules.length === 0) return [];
+
+  const lines: string[] = [];
+  for (const mod of coreModules) {
+    const shortPath = mod.path.replace(/^repos\/[^\/]+\/[^\/]+\/norm\//, '');
+    lines.push(`- **${shortPath}**`);
+    lines.push(`  - Exports: ${mod.exports.slice(0, 5).join(', ')}${mod.exports.length > 5 ? ` (+${mod.exports.length - 5} more)` : ''}`);
+    lines.push(`  - Complexity: ${mod.complexity}, LOC: ${mod.loc}`);
+    lines.push(`  - Evidence: ${mod.path}:1`);
+  }
+
+  return lines;
+}
+
+/**
+ * Phase 3: Format standalone modules for reuse guidance
+ */
+function formatStandaloneModules(facts: BundleFacts): string[] {
+  if (!facts.modules || facts.modules.length === 0) return [];
+
+  const standalone = facts.modules
+    .filter(m => m.standalone && (m.role === 'core' || m.role === 'utility'))
+    .filter(m => m.exports.length > 0)
+    .slice(0, 5);
+
+  if (standalone.length === 0) return [];
+
+  const lines: string[] = [];
+  for (const mod of standalone) {
+    const shortPath = mod.path.replace(/^repos\/[^\/]+\/[^\/]+\/norm\//, '');
+    lines.push(`- **${shortPath}**`);
+    lines.push(`  - Can be used independently`);
+    lines.push(`  - Exports: ${mod.exports.slice(0, 3).join(', ')}`);
+    lines.push(`  - External deps: ${mod.imports.filter(i => !i.startsWith('.')).slice(0, 3).join(', ') || 'None'}`);
+  }
+
+  return lines;
+}
+
 export async function generateOverviewMarkdown(params: {
   bundleId: string;
   bundleRootDir: string;
   repos: RepoOverviewInput[];
   libraries?: Context7LibrarySummary[];
 }): Promise<string> {
-  const header = `# OVERVIEW.md - Preflight Bundle ${params.bundleId}
+  // Load FACTS.json if available
+  const factsPath = path.join(params.bundleRootDir, 'analysis', 'FACTS.json');
+  const facts = await readFacts(factsPath);
 
-This file is generated. It contains **only factual statements** with evidence pointers into bundle files.
+  const sections: string[] = [];
 
-`;
+  // Header
+  sections.push(`# ${params.repos[0]?.repoId || 'Project'} - Overview\r\n`);
 
-  const sections: string[] = [header];
+  // Phase 3: What is this?
+  if (facts) {
+    sections.push('## What is this?\r\n');
+    
+    // Try to get project purpose from README
+    const allFiles = params.repos.flatMap(r => r.files);
+    const purpose = await extractProjectPurpose(allFiles);
+    if (purpose) {
+      sections.push(`**Purpose**: ${purpose}\r\n`);
+    }
 
-  for (const r of params.repos) {
+    // Primary language and frameworks
+    if (facts.languages && facts.languages.length > 0) {
+      const primaryLang = facts.languages[0];
+      if (primaryLang) {
+        sections.push(`**Language**: ${primaryLang.language} (${primaryLang.fileCount} files)\r\n`);
+      }
+    }
+
+    if (facts.frameworks && facts.frameworks.length > 0) {
+      sections.push(`**Frameworks**: ${facts.frameworks.join(', ')}\r\n`);
+    }
+
+    // Tech stack (Phase 2)
+    if (facts.techStack) {
+      if (facts.techStack.runtime) {
+        sections.push(`**Runtime**: ${facts.techStack.runtime}\r\n`);
+      }
+      if (facts.techStack.packageManager) {
+        sections.push(`**Package Manager**: ${facts.techStack.packageManager}\r\n`);
+      }
+    }
+
+    sections.push('');
+  }
+
+  // Phase 3: Architecture
+  if (facts) {
+    sections.push('## Architecture\r\n');
+
+    // Entry points
+    if (facts.entryPoints && facts.entryPoints.length > 0) {
+      sections.push('### Entry Points\r\n');
+      for (const ep of facts.entryPoints.slice(0, 5)) {
+        const shortPath = ep.file.replace(/^repos\/[^\/]+\/[^\/]+\/norm\//, '');
+        sections.push(`- \`${shortPath}\` (${ep.type}). ${evidence(ep.evidence, 1, 1)}\r\n`);
+      }
+      sections.push('');
+    }
+
+    // Phase 2: Architecture patterns
+    if (facts.patterns && facts.patterns.length > 0) {
+      sections.push('### Design Patterns\r\n');
+      for (const pattern of facts.patterns) {
+        sections.push(`- ${pattern}\r\n`);
+      }
+      sections.push('');
+    }
+
+    // Phase 2: Core modules
+    const coreModuleLines = formatCoreModules(facts);
+    if (coreModuleLines.length > 0) {
+      sections.push('### Core Modules\r\n');
+      sections.push(...coreModuleLines.map(l => l + '\r\n'));
+      sections.push('');
+    }
+  }
+
+  // Dependencies
+  if (facts && (facts.dependencies.runtime.length > 0 || facts.dependencies.dev.length > 0)) {
+    sections.push('## Dependencies\r\n');
+
+    if (facts.dependencies.runtime.length > 0) {
+      sections.push(`### Production (${facts.dependencies.runtime.length})\r\n`);
+      for (const dep of facts.dependencies.runtime.slice(0, 15)) {
+        sections.push(`- ${dep.name}${dep.version ? ` ${dep.version}` : ''}\r\n`);
+      }
+      if (facts.dependencies.runtime.length > 15) {
+        sections.push(`- ... and ${facts.dependencies.runtime.length - 15} more\r\n`);
+      }
+      sections.push('');
+    }
+
+    if (facts.dependencies.dev.length > 0) {
+      sections.push(`### Development (${facts.dependencies.dev.length})\r\n`);
+      for (const dep of facts.dependencies.dev.slice(0, 10)) {
+        sections.push(`- ${dep.name}${dep.version ? ` ${dep.version}` : ''}\r\n`);
+      }
+      if (facts.dependencies.dev.length > 10) {
+        sections.push(`- ... and ${facts.dependencies.dev.length - 10} more\r\n`);
+      }
+      sections.push('');
+    }
+  }
+
+  // Phase 3: How to Reuse
+  if (facts) {
+    const standaloneLines = formatStandaloneModules(facts);
+    if (standaloneLines.length > 0) {
+      sections.push('## How to Reuse\r\n');
+      sections.push('### Standalone Modules\r\n');
+      sections.push('These modules can be extracted and used independently:\r\n\r\n');
+      sections.push(...standaloneLines.map(l => l + '\r\n'));
+      sections.push('');
+    }
+    
+    // Return Phase 3 format directly
+    return sections.join('\n') + '\n';
+  }
+
+  // Fallback to legacy format if no FACTS
+  {
+    const header = `# OVERVIEW.md - Preflight Bundle ${params.bundleId}\r\n\r\nThis file is generated. It contains **only factual statements** with evidence pointers into bundle files.\r\n\r\n`;
+    sections.splice(0, sections.length); // Clear Phase 3 sections
+    sections.push(header);
+
+    for (const r of params.repos) {
     sections.push(`## Repo: ${r.repoId}`);
 
     const metaFacts = await renderRepoMetaFacts(params.bundleRootDir, r.repoId);
@@ -250,6 +452,7 @@ This file is generated. It contains **only factual statements** with evidence po
         sections.push('- No library facts available.');
       }
       sections.push('');
+    }
     }
   }
 

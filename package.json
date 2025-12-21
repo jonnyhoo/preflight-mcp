@@ -48,10 +48,12 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.25.1",
+    "@vscode/tree-sitter-wasm": "^0.3.0",
     "adm-zip": "^0.5.16",
     "better-sqlite3": "^12.5.0",
     "ignore": "^7.0.5",
     "node-cron": "^4.2.1",
+    "web-tree-sitter": "^0.26.3",
     "zod": "^4.2.1"
   },
   "devDependencies": {

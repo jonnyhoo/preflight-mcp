@@ -25,6 +25,13 @@ export type SearchHit = {
   kind: 'doc' | 'code';
   lineNo: number;
   snippet: string;
+  context?: {
+    functionName?: string;
+    className?: string;
+    startLine: number;
+    endLine: number;
+    surroundingLines: string[];
+  };
 };
 
 async function ensureDir(p: string): Promise<void> {
@@ -342,6 +349,136 @@ export async function rebuildIndex(
   }
 }
 
+/**
+ * Extract code context for a search hit.
+ * Finds the surrounding function/class definition and surrounding lines.
+ */
+function extractContext(
+  fileContent: string,
+  hitLineNo: number
+): { functionName?: string; className?: string; startLine: number; endLine: number; surroundingLines: string[] } | undefined {
+  const lines = fileContent.split('\n');
+  const hitIndex = hitLineNo - 1; // Convert 1-based to 0-based
+
+  if (hitIndex < 0 || hitIndex >= lines.length) {
+    return undefined;
+  }
+
+  // Extract surrounding lines (±3 lines)
+  const surroundStart = Math.max(0, hitIndex - 3);
+  const surroundEnd = Math.min(lines.length - 1, hitIndex + 3);
+  const surroundingLines = lines.slice(surroundStart, surroundEnd + 1);
+
+  // Find function/class definition by scanning upwards (max 50 lines)
+  let functionName: string | undefined;
+  let className: string | undefined;
+  let startLine = hitLineNo;
+  let endLine = hitLineNo;
+
+  const scanStartIndex = Math.max(0, hitIndex - 50);
+
+  // Patterns for TypeScript/JavaScript/Python/Go functions and classes
+  const functionPatterns = [
+    // TypeScript/JavaScript
+    /^\s*(?:export\s+)?(?:async\s+)?function\s+([a-zA-Z_$][\w$]*)\s*\(/,
+    /^\s*(?:export\s+)?(?:const|let|var)\s+([a-zA-Z_$][\w$]*)\s*=\s*(?:async\s+)?\(/,
+    /^\s*(?:async\s+)?([a-zA-Z_$][\w$]*)\s*\([^)]*\)\s*\{/,
+    /^\s*([a-zA-Z_$][\w$]*)\s*:\s*(?:async\s+)?function\s*\(/,
+    // Python
+    /^\s*(?:async\s+)?def\s+([a-zA-Z_][\w]*)\s*\(/,
+    // Go
+    /^\s*func\s+(?:\([^)]*\)\s*)?([a-zA-Z_][\w]*)\s*\(/,
+  ];
+
+  const classPatterns = [
+    // TypeScript/JavaScript
+    /^\s*(?:export\s+)?(?:abstract\s+)?class\s+([a-zA-Z_$][\w$]*)/,
+    /^\s*(?:export\s+)?interface\s+([a-zA-Z_$][\w$]*)/,
+    /^\s*(?:export\s+)?type\s+([a-zA-Z_$][\w$]*)\s*=/,
+    // Python
+    /^\s*class\s+([a-zA-Z_][\w]*)\s*[:(]/,
+    // Go
+    /^\s*type\s+([a-zA-Z_][\w]*)\s+struct/,
+  ];
+
+  // Scan upward to find function or class definition
+  for (let i = hitIndex; i >= scanStartIndex; i--) {
+    const line = lines[i] ?? '';
+
+    // Try to match function patterns
+    if (!functionName) {
+      for (const pattern of functionPatterns) {
+        const match = line.match(pattern);
+        if (match?.[1]) {
+          functionName = match[1];
+          startLine = i + 1; // Convert to 1-based
+          break;
+        }
+      }
+    }
+
+    // Try to match class patterns (only if we haven't found function yet)
+    if (!className) {
+      for (const pattern of classPatterns) {
+        const match = line.match(pattern);
+        if (match?.[1]) {
+          className = match[1];
+          if (!functionName) {
+            startLine = i + 1;
+          }
+          break;
+        }
+      }
+    }
+
+    // If we found function name, stop scanning
+    if (functionName) {
+      break;
+    }
+  }
+
+  // Find end of the function/block by scanning downward for closing brace
+  // Simple bracket matching (stops at first balanced closing brace)
+  if (functionName || className) {
+    let braceCount = 0;
+    let foundOpenBrace = false;
+
+    for (let i = startLine - 1; i < lines.length && i < hitIndex + 100; i++) {
+      const line = lines[i] ?? '';
+
+      for (const char of line) {
+        if (char === '{') {
+          braceCount++;
+          foundOpenBrace = true;
+        } else if (char === '}') {
+          braceCount--;
+          if (foundOpenBrace && braceCount === 0) {
+            endLine = i + 1;
+            return {
+              functionName,
+              className,
+              startLine,
+              endLine,
+              surroundingLines,
+            };
+          }
+        }
+      }
+    }
+
+    // If we didn't find closing brace, estimate end line
+    endLine = Math.min(lines.length, startLine + 50);
+  }
+
+  return {
+    functionName,
+    className,
+    startLine,
+    endLine,
+    surroundingLines,
+  };
+}
+
 function tokenizeForSafeQuery(input: string): string[] {
   const s = input.trim();
   if (!s) return [];
@@ -373,7 +510,13 @@ export function buildFtsQuery(input: string): string {
   return tokens.map((t) => `"${t.replaceAll('"', '""')}"`).join(' OR ');
 }
 
-export function searchIndex(dbPath: string, query: string, scope: SearchScope, limit: number): SearchHit[] {
+export function searchIndex(
+  dbPath: string,
+  query: string,
+  scope: SearchScope,
+  limit: number,
+  bundleRoot?: string
+): SearchHit[] {
   const db = new Database(dbPath, { readonly: true });
   try {
     const ftsQuery = buildFtsQuery(query);
@@ -404,13 +547,45 @@ export function searchIndex(dbPath: string, query: string, scope: SearchScope, l
       snippet: string;
     }>;
 
-    return rows.map((r) => ({
-      path: r.path,
-      repo: r.repo,
-      kind: r.kind,
-      lineNo: r.lineNo,
-      snippet: r.snippet,
-    }));
+    // Cache for file contents to avoid re-reading same files
+    const fileCache = new Map<string, string>();
+
+    return rows.map((r) => {
+      const hit: SearchHit = {
+        path: r.path,
+        repo: r.repo,
+        kind: r.kind,
+        lineNo: r.lineNo,
+        snippet: r.snippet,
+      };
+
+      // Add context for code files if bundleRoot is provided
+      if (r.kind === 'code' && bundleRoot) {
+        try {
+          // r.path is bundleNormRelativePath (e.g., "repos/owner/repo/norm/path/to/file.ts")
+          // Construct absolute path to the normalized file
+          const filePath = path.join(bundleRoot, r.path);
+          
+          // Read file content (use cache to avoid re-reading)
+          let fileContent = fileCache.get(filePath);
+          if (!fileContent) {
+            fileContent = fsSync.readFileSync(filePath, 'utf8');
+            fileCache.set(filePath, fileContent);
+          }
+
+          // Extract context
+          const context = extractContext(fileContent, r.lineNo);
+          if (context) {
+            hit.context = context;
+          }
+        } catch (err) {
+          // Silently skip context extraction on error (file not found, etc.)
+          // Context is optional enhancement, shouldn't break search
+        }
+      }
+
+      return hit;
+    });
   } finally {
     db.close();
   }
@@ -598,10 +773,11 @@ export function verifyClaimInIndex(
   dbPath: string,
   claim: string,
   scope: SearchScope,
-  limit: number
+  limit: number,
+  bundleRoot?: string
 ): VerificationResult {
   // Get raw search results
-  const rawHits = searchIndex(dbPath, claim, scope, limit);
+  const rawHits = searchIndex(dbPath, claim, scope, limit, bundleRoot);
   
   // Extract tokens from claim for classification
   const claimTokens = tokenizeForSafeQuery(claim);
