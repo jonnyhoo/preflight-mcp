@@ -7,15 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2025-12-23
+
 ### Added
 - **New MCP tools**:
   - `preflight_evidence_dependency_graph` - Deterministic evidence-based dependency graph (imports + callers)
   - `preflight_trace_upsert` / `preflight_trace_query` - Per-bundle traceability links (SQLite)
 
 ### Changed
-- **Tools Count**: Updated from 13 to 16 total tools
+- **Tools Count**: Reduced from 16 to 12 total tools (streamlined API)
+- **`preflight_read_file`**: Now supports reading `manifest.json` for bundle details (replaces `preflight_bundle_info`)
+- **`preflight_create_bundle`**: Added LLM prompts suggesting `preflight_evidence_dependency_graph` and `preflight_trace_upsert` for code repos
 
 ### Removed
+- **`preflight_bundle_info`**: Merged into `preflight_read_file` (use `file="manifest.json"`)
+- **`preflight_find_bundle`**: Use `preflight_create_bundle` with `ifExists="returnExisting"` instead
+- **`preflight_update_all_bundles`**: Removed (batch updates can be done via individual `preflight_update_bundle` calls)
+- **`preflight_verify_claim`**: Removed (use `preflight_search_bundle` + LLM analysis instead)
+- **DeepWiki support**: Completely removed (repos.kind: "deepwiki" no longer supported)
 - Removed ad-hoc test utility scripts that were not part of npm scripts
 
 ## [0.1.2] - 2025-12-20

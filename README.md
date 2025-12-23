@@ -15,12 +15,11 @@ Each bundle contains:
 
 ## Features
 
-- **16 MCP tools** to create/update/repair/search/verify/read bundles, generate evidence graphs, and manage trace links (plus resources)
+- **12 MCP tools** to create/update/repair/search/read bundles, generate evidence graphs, and manage trace links
 - **De-duplication**: prevent repeated indexing of the same normalized inputs
 - **Resilient GitHub fetching**: configurable git clone timeout + GitHub archive (zipball) fallback
 - **Offline repair**: rebuild missing/empty derived artifacts (index/guides/overview) without re-fetching
 - **Static facts extraction** via `analysis/FACTS.json` (non-LLM)
-- **Evidence-based verification** to reduce hallucinations
 - **Resources** to read bundle files via `preflight://...` URIs
 - **Multi-path mirror backup** for cloud storage redundancy
 - **Resilient storage** with automatic failover when mounts are unavailable
@@ -28,81 +27,12 @@ Each bundle contains:
 - **Fast background deletion** with 100-300x performance improvement
 - **Auto-cleanup** on startup for historical orphan bundles
 
-## Architecture Improvements (v0.1.2)
-
-### 🚀 Atomic Bundle Creation
-**Problem**: Bundle creation failures could leave incomplete orphan directories.
-
-**Solution**: Temporary directory + atomic rename pattern:
-1. Create bundle in `tmpDir/bundles-wip/` (invisible to list)
-2. Validate completeness before making visible
-3. Atomic rename/move to final location
-4. Automatic cleanup on any failure
-
-**Benefits**:
-- ✅ Zero orphan bundles
-- 🔒 Crash-safe (temp dirs auto-cleaned)
-- 📏 Validation before visibility
-- 🔄 Cross-filesystem fallback
-
-### ⚡ Fast Background Deletion
-**Problem**: Deleting large bundles could timeout (10+ seconds).
-
-**Solution**: Rename + background deletion:
-1. Instant rename to `.deleting.{timestamp}` (<100ms)
-2. Background deletion (fire-and-forget)
-3. Automatic cleanup of `.deleting` dirs on startup
-
-**Benefits**:
-- ⚡ 100-300x faster response (<100ms)
-- 🔄 No blocking operations
-- 👁️ Invisible to list (non-UUID format)
-- 🛡️ Fallback to direct delete on rename failure
-
-### 🔧 Auto-Cleanup on Startup
-**Problem**: Historical orphan bundles need manual cleanup.
-
-**Solution**: Automatic cleanup on MCP server startup:
-1. Scans storage directories for invalid bundles
-2. Checks manifest.json validity
-3. Deletes orphans older than 1 hour (safety margin)
-4. Cleans `.deleting` residues
-
-**Benefits**:
-- 🤖 Fully automatic
-- 🛡️ Safe with 1-hour age threshold
-- ⚡ Fast when no orphans (<10ms)
-- 🚫 Non-blocking background execution
-
-### 🧹 Manual Cleanup Tool
-**New Tool**: `preflight_cleanup_orphans`
-
-Manually trigger orphan cleanup with full control:
-```json
-{
-  "dryRun": true,        // Only report, don't delete
-  "minAgeHours": 1      // Age threshold
-}
-```
-
-### 🔍 UUID Validation
-List and cleanup now strictly filter by UUID format:
-- ✅ Only valid UUID v4 bundle IDs
-- 🚫 Filters out system directories (`#recycle`, `tmp`)
-- 🚫 Filters out `.deleting` directories
-- 🛡️ Protects user custom directories
-
-For technical details, see:
-- [ISSUES_ANALYSIS.md](./ISSUES_ANALYSIS.md) - Root cause analysis
-- [IMPLEMENTATION_SUMMARY.md](./IMPLEMENTATION_SUMMARY.md) - Implementation details
-- [CLEANUP_STRATEGY.md](./CLEANUP_STRATEGY.md) - MCP-specific cleanup design
-
 ## Table of Contents
 
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
-- [Tools](#tools-16-total)
+- [Tools](#tools-12-total)
 - [Environment Variables](#environment-variables)
 - [Contributing](#contributing)
 - [License](#license)
@@ -187,29 +117,14 @@ Run end-to-end smoke test:
 npm run smoke
 ```
 
-This will test bundle creation, search, and update operations.
-
-## Smoke test
-Runs an end-to-end stdio client that:
-- spawns the server
-- calls `preflight_create_bundle`
-- reads `preflight://bundles` and `START_HERE.md`
-- searches the bundle
-- calls `preflight_update_bundle`
-
-Command:
-- `npm run smoke`
-
-Note: the smoke test clones `octocat/Hello-World` from GitHub, so it needs internet access.
-
-## Tools (16 total)
+## Tools (12 total)
 
 ### `preflight_list_bundles`
 List bundle IDs in storage.
 - Triggers: "show bundles", "查看bundle", "有哪些bundle"
 
 ### `preflight_create_bundle`
-Create a new bundle from one or more inputs.
+Create a new bundle from GitHub repos or local directories.
 - Triggers: "index this repo", "学习这个项目", "创建bundle"
 
 Key semantics:
@@ -220,21 +135,20 @@ Key semantics:
   - `updateExisting`: update the existing bundle then return it
   - `createNew`: bypass de-duplication
 - GitHub ingest uses **shallow clone**; if `git clone` fails, it will fall back to **GitHub archive (zipball)**.
-- Supports `repos.kind: "local"` to ingest from a local directory (e.g. an extracted zip).
+- Supports `repos.kind: "local"` to ingest from a local directory.
 
 Input (example):
-- `repos`: `[{ kind: "github", repo: "owner/repo" }, { kind: "local", repo: "owner/repo", path: "/path/to/dir" }, { kind: "deepwiki", url: "https://deepwiki.com/owner/repo" }]`
+- `repos`: `[{ kind: "github", repo: "owner/repo" }, { kind: "local", repo: "owner/repo", path: "/path/to/dir" }]`
 - `libraries`: `["nextjs", "react"]` (Context7; optional)
 - `topics`: `["routing", "api"]` (Context7 topic filter; optional)
 - `ifExists`: `"error" | "returnExisting" | "updateExisting" | "createNew"`
 
-### `preflight_read_file`
-Read a file from bundle (OVERVIEW.md, START_HERE.md, AGENTS.md, or any repo file).
-- Triggers: "查看概览", "项目概览", "看README"
+**Note**: If the bundle contains code files, consider using `preflight_evidence_dependency_graph` for dependency analysis or `preflight_trace_upsert` for trace links.
 
-### `preflight_bundle_info`
-Get bundle details: repos, update time, stats.
-- Triggers: "bundle详情", "仓库信息"
+### `preflight_read_file`
+Read a file from bundle (OVERVIEW.md, START_HERE.md, AGENTS.md, manifest.json, or any repo file).
+- Triggers: "查看概览", "项目概览", "看README", "bundle详情", "bundle状态", "仓库信息"
+- Use `file: "manifest.json"` to get bundle metadata (repos, timestamps, tags, etc.)
 
 ### `preflight_delete_bundle`
 Delete/remove a bundle permanently.
@@ -248,14 +162,6 @@ Optional parameters:
 - `checkOnly`: If true, only check for updates without applying.
 - `force`: If true, force rebuild even if no changes detected.
 
-### `preflight_update_all_bundles`
-Batch update all bundles at once.
-- Triggers: "批量更新", "全部刷新"
-
-### `preflight_find_bundle`
-Check whether a bundle already exists for the given inputs (no fetching, no changes).
-- Use when your UI/agent wants to decide whether to create/update.
-
 ### `preflight_repair_bundle`
 Offline repair for a bundle (no fetching): rebuild missing/empty derived artifacts.
 - Rebuilds `indexes/search.sqlite3`, `START_HERE.md`, `AGENTS.md`, `OVERVIEW.md` when missing/empty.
@@ -266,13 +172,12 @@ Full-text search across ingested docs/code (line-based SQLite FTS5).
 - Triggers: "搜索bundle", "在仓库中查找", "搜代码"
 
 Important: **this tool is strictly read-only**.
-- `ensureFresh` / `maxAgeHours` are **deprecated** and will error if provided.
 - To update: call `preflight_update_bundle`, then search again.
 - To repair: call `preflight_repair_bundle`, then search again.
 
 ### `preflight_search_by_tags`
 Search across multiple bundles filtered by tags (line-based SQLite FTS5).
-- Triggers: "search in MCP bundles", "search in all bundles", "在MCP项目中搜索", "搜索所有agent"
+- Triggers: "search in MCP bundles", "在MCP项目中搜索", "搜索所有agent"
 
 Notes:
 - This tool is read-only and **does not auto-repair**.
@@ -282,19 +187,6 @@ Optional parameters:
 - `tags`: Filter bundles by tags (e.g., `["mcp", "agents"]`)
 - `scope`: Search scope (`docs`, `code`, or `all`)
 - `limit`: Max total hits across all bundles
-
-Output additions:
-- `warnings?: [{ bundleId, kind, message }]` (non-fatal per-bundle errors)
-- `warningsTruncated?: true` if warnings were capped
-
-### `preflight_verify_claim`
-Find evidence for a claim/statement in bundle.
-- Triggers: "验证说法", "找证据", "这个对吗"
-
-Important: **this tool is strictly read-only**.
-- `ensureFresh` / `maxAgeHours` are **deprecated** and will error if provided.
-- To update: call `preflight_update_bundle`, then verify again.
-- To repair: call `preflight_repair_bundle`, then verify again.
 
 ### `preflight_evidence_dependency_graph`
 Generate an evidence-based dependency graph for a target file/symbol (imports + callers).
@@ -316,14 +208,10 @@ Parameters:
 - `dryRun` (default: true): Only report orphans without deleting
 - `minAgeHours` (default: 1): Only clean bundles older than N hours
 
-Output:
-- `totalFound`: Number of orphan bundles found
-- `totalCleaned`: Number of orphan bundles deleted
-- `details`: Per-directory breakdown
-
 Note: This is also automatically executed on server startup (background, non-blocking).
 
 ## Resources
+
 ### `preflight://bundles`
 Static JSON listing of bundles and their main entry files.
 
@@ -335,6 +223,7 @@ Examples:
 - `preflight://bundle/<id>/file/repos%2Fowner%2Frepo%2Fnorm%2FREADME.md`
 
 ## Error semantics (stable, UI-friendly)
+
 Most tool errors are wrapped with a stable, machine-parseable prefix:
 - `[preflight_error kind=<kind>] <message>`
 
@@ -344,7 +233,6 @@ Common kinds:
 - `invalid_path` (unsafe path traversal attempt)
 - `permission_denied`
 - `index_missing_or_corrupt`
-- `deprecated_parameter`
 - `unknown`
 
 This is designed so UIs/agents can reliably decide whether to:
@@ -353,6 +241,7 @@ This is designed so UIs/agents can reliably decide whether to:
 - prompt the user for a different bundleId/path
 
 ## Environment variables
+
 ### Storage
 - `PREFLIGHT_STORAGE_DIR`: bundle storage dir (default: `~/.preflight-mcp/bundles`)
 - `PREFLIGHT_STORAGE_DIRS`: **multi-path mirror backup** (semicolon-separated, e.g., `D:\cloud1\preflight;E:\cloud2\preflight`)
@@ -376,20 +265,19 @@ This is designed so UIs/agents can reliably decide whether to:
 - `CONTEXT7_MCP_URL`: optional; defaults to Context7 MCP endpoint
 
 ## Bundle layout (on disk)
+
 Inside a bundle directory:
 - `manifest.json` (includes `fingerprint`, `displayName`, `tags`, and per-repo `source`)
 - `START_HERE.md`
 - `AGENTS.md`
 - `OVERVIEW.md`
 - `indexes/search.sqlite3`
-- **`analysis/FACTS.json`** (static analysis)
+- `analysis/FACTS.json` (static analysis)
 - `trace/trace.sqlite3` (traceability links; created on demand)
 - `repos/<owner>/<repo>/raw/...`
 - `repos/<owner>/<repo>/norm/...` (GitHub/local snapshots)
-- `deepwiki/<owner>/<repo>/norm/index.md` (DeepWiki sources)
-- `deepwiki/<owner>/<repo>/meta.json`
 - `libraries/context7/<...>/meta.json`
-- `libraries/context7/<...>/docs-page-1.md` (or `topic-<topic>-page-1.md`)
+- `libraries/context7/<...>/docs-page-1.md`
 
 ## Multi-device sync & mirror backup
 
@@ -462,20 +350,6 @@ If you encounter any issues or have questions:
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](./LICENSE) file for details.
-
-The MIT License allows you to:
-- Use commercially
-- Modify
-- Distribute
-- Use privately
-
-With the only requirement being to include the original copyright and license notice.
-
-## Acknowledgments
-
-- Built on the [Model Context Protocol](https://modelcontextprotocol.io/)
-- Uses SQLite FTS5 for efficient full-text search
-- Inspired by the need for evidence-based AI assistance
 
 ---
 

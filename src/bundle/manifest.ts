@@ -16,10 +16,6 @@ export type RepoInput =
       repo: string; // owner/repo (logical id)
       path: string; // local directory path
       ref?: string; // optional label for the local snapshot
-    }
-  | {
-      kind: 'deepwiki';
-      url: string;
     };
 
 export type BundleIndexConfig = {
@@ -29,15 +25,14 @@ export type BundleIndexConfig = {
 };
 
 export type BundleRepo = {
-  kind: 'github' | 'local' | 'deepwiki';
-  id: string; // owner/repo or URL
+  kind: 'github' | 'local';
+  id: string; // owner/repo
   /**
    * Source of the snapshot for this repo.
    * - github: git shallow clone or GitHub archive (zipball) fallback
    * - local: local directory import
-   * - deepwiki: deepwiki fetch
    */
-  source?: 'git' | 'archive' | 'local' | 'deepwiki';
+  source?: 'git' | 'archive' | 'local';
   headSha?: string;
   fetchedAt: string; // ISO
   notes?: string[];

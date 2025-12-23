@@ -12,7 +12,7 @@ function nowIso(): string {
 
 function githubHeaders(cfg: PreflightConfig): Record<string, string> {
   const headers: Record<string, string> = {
-    'User-Agent': 'preflight-mcp/0.1.1',
+    'User-Agent': 'preflight-mcp/0.1.3',
     Accept: 'application/vnd.github+json',
   };
   if (cfg.githubToken) {
@@ -25,41 +25,61 @@ async function ensureDir(p: string): Promise<void> {
   await fs.mkdir(p, { recursive: true });
 }
 
-async function fetchJson<T>(url: string, headers: Record<string, string>): Promise<T> {
-  const res = await fetch(url, { headers });
-  if (!res.ok) {
-    throw new Error(`GitHub API error ${res.status}: ${res.statusText}`);
+/** Default timeout for GitHub API requests (30 seconds). */
+const DEFAULT_API_TIMEOUT_MS = 30_000;
+
+/** Default timeout for file downloads (5 minutes). */
+const DEFAULT_DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
+
+async function fetchJson<T>(url: string, headers: Record<string, string>, timeoutMs = DEFAULT_API_TIMEOUT_MS): Promise<T> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, { headers, signal: controller.signal });
+    if (!res.ok) {
+      throw new Error(`GitHub API error ${res.status}: ${res.statusText}`);
+    }
+    return (await res.json()) as T;
+  } finally {
+    clearTimeout(timeoutId);
   }
-  return (await res.json()) as T;
 }
 
-async function downloadToFile(url: string, headers: Record<string, string>, destPath: string): Promise<void> {
-  const res = await fetch(url, { headers, redirect: 'follow' });
-  if (!res.ok) {
-    throw new Error(`Download error ${res.status}: ${res.statusText}`);
+async function downloadToFile(url: string, headers: Record<string, string>, destPath: string, timeoutMs = DEFAULT_DOWNLOAD_TIMEOUT_MS): Promise<void> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, { headers, redirect: 'follow', signal: controller.signal });
+    if (!res.ok) {
+      throw new Error(`Download error ${res.status}: ${res.statusText}`);
+    }
+
+    // Use streaming if possible; otherwise fallback to arrayBuffer.
+    const anyRes = res as any;
+    const body = anyRes.body;
+
+    await ensureDir(path.dirname(destPath));
+
+    if (body && typeof body.pipe === 'function') {
+      // Node.js stream
+      const ws = (await import('node:fs')).createWriteStream(destPath);
+      await new Promise<void>((resolve, reject) => {
+        body.pipe(ws);
+        body.on('error', reject);
+        ws.on('error', reject);
+        ws.on('finish', () => resolve());
+      });
+      return;
+    }
+
+    // Web stream or no stream support.
+    const buf = Buffer.from(await res.arrayBuffer());
+    await fs.writeFile(destPath, buf);
+  } finally {
+    clearTimeout(timeoutId);
   }
-
-  // Use streaming if possible; otherwise fallback to arrayBuffer.
-  const anyRes = res as any;
-  const body = anyRes.body;
-
-  await ensureDir(path.dirname(destPath));
-
-  if (body && typeof body.pipe === 'function') {
-    // Node.js stream
-    const ws = (await import('node:fs')).createWriteStream(destPath);
-    await new Promise<void>((resolve, reject) => {
-      body.pipe(ws);
-      body.on('error', reject);
-      ws.on('error', reject);
-      ws.on('finish', () => resolve());
-    });
-    return;
-  }
-
-  // Web stream or no stream support.
-  const buf = Buffer.from(await res.arrayBuffer());
-  await fs.writeFile(destPath, buf);
 }
 
 async function extractZip(zipPath: string, destDir: string): Promise<void> {

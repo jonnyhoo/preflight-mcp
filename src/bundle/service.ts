@@ -19,7 +19,6 @@ import { writeAgentsMd, writeStartHereMd } from './guides.js';
 import { generateOverviewMarkdown, writeOverviewFile } from './overview.js';
 import { rebuildIndex } from '../search/sqliteFts.js';
 import { ingestContext7Libraries, type Context7LibrarySummary } from './context7.js';
-import { ingestDeepWikiRepo, type DeepWikiSummary } from './deepwiki.js';
 import { analyzeBundleStatic, type AnalysisMode } from './analysis.js';
 import { autoDetectTags, generateDisplayName, generateDescription } from './tagging.js';
 import { bundleCreationLimiter } from '../core/concurrency-limiter.js';
@@ -35,9 +34,9 @@ export type BundleSummary = {
   createdAt: string;
   updatedAt: string;
   repos: Array<{
-    kind: 'github' | 'local' | 'deepwiki';
+    kind: 'github' | 'local';
     id: string;
-    source?: 'git' | 'archive' | 'local' | 'deepwiki';
+    source?: 'git' | 'archive' | 'local';
     headSha?: string;
     notes?: string[];
   }>;
@@ -77,58 +76,25 @@ function normalizeList(values: string[] | undefined): string[] {
     .sort();
 }
 
-function normalizeDeepWikiUrl(raw: string): string {
-  const trimmed = raw.trim();
-  try {
-    const u = new URL(trimmed);
-    u.hash = '';
-    // Normalize host and strip trailing slash.
-    u.host = u.host.toLowerCase();
-    u.pathname = u.pathname.replace(/\/+$/g, '');
-    return u.toString();
-  } catch {
-    return trimmed;
-  }
-}
-
 function canonicalizeCreateInput(input: CreateBundleInput): {
   schemaVersion: 1;
-  repos: Array<
-    | { kind: 'github'; repo: string; ref?: string }
-    | { kind: 'deepwiki'; url: string }
-  >;
+  repos: Array<{ kind: 'github'; repo: string; ref?: string }>;
   libraries: string[];
   topics: string[];
 } {
   const repos = input.repos
     .map((r) => {
-      if (r.kind === 'github') {
-        const { owner, repo } = parseOwnerRepo(r.repo);
-        return {
-          kind: 'github' as const,
-          repo: `${owner.toLowerCase()}/${repo.toLowerCase()}`,
-          ref: (r.ref ?? '').trim() || undefined,
-        };
-      }
-
-      if (r.kind === 'local') {
-        // For de-duplication, treat local imports as equivalent to github imports of the same logical repo/ref.
-        const { owner, repo } = parseOwnerRepo(r.repo);
-        return {
-          kind: 'github' as const,
-          repo: `${owner.toLowerCase()}/${repo.toLowerCase()}`,
-          ref: (r.ref ?? '').trim() || undefined,
-        };
-      }
-
+      // For de-duplication, treat local imports as equivalent to github imports of the same logical repo/ref.
+      const { owner, repo } = parseOwnerRepo(r.repo);
       return {
-        kind: 'deepwiki' as const,
-        url: normalizeDeepWikiUrl(r.url),
+        kind: 'github' as const,
+        repo: `${owner.toLowerCase()}/${repo.toLowerCase()}`,
+        ref: (r.ref ?? '').trim() || undefined,
       };
     })
     .sort((a, b) => {
-      const ka = a.kind === 'github' ? `github:${a.repo}:${a.ref ?? ''}` : `deepwiki:${a.url}`;
-      const kb = b.kind === 'github' ? `github:${b.repo}:${b.ref ?? ''}` : `deepwiki:${b.url}`;
+      const ka = `github:${a.repo}:${a.ref ?? ''}`;
+      const kb = `github:${b.repo}:${b.ref ?? ''}`;
       return ka.localeCompare(kb);
     });
 
@@ -990,7 +956,8 @@ async function createBundleInternal(
           headSha,
           notes: [...notes, ...skipped].slice(0, 50),
         });
-      } else if (repoInput.kind === 'local') {
+      } else {
+        // Local repository
         const { owner, repo } = parseOwnerRepo(repoInput.repo);
         const { files, skipped } = await ingestLocalRepo({
           cfg,
@@ -1004,20 +971,6 @@ async function createBundleInternal(
 
         allIngestedFiles.push(...files);
         reposSummary.push({ kind: 'local', id: `${owner}/${repo}`, source: 'local', notes: skipped.slice(0, 50) });
-      } else {
-        // DeepWiki integration: fetch and convert to Markdown.
-        const deepwikiResult = await ingestDeepWikiRepo({
-          cfg,
-          bundlePaths: tmpPaths,
-          url: repoInput.url,
-        });
-        allIngestedFiles.push(...deepwikiResult.files);
-        reposSummary.push({
-          kind: 'deepwiki',
-          id: deepwikiResult.summary.repoId,
-          source: 'deepwiki',
-          notes: deepwikiResult.summary.notes,
-        });
       }
     }
 
@@ -1225,17 +1178,12 @@ export async function checkForUpdates(cfg: PreflightConfig, bundleId: string): P
       if (changed) hasUpdates = true;
 
       details.push({ repoId, currentSha: prev?.headSha, remoteSha, changed });
-    } else if (repoInput.kind === 'local') {
+    } else {
+      // Local: can't reliably detect whether local files changed without scanning; assume possible update.
       const { owner, repo } = parseOwnerRepo(repoInput.repo);
       const repoId = `${owner}/${repo}`;
-
-      // We can't reliably detect whether local files changed without scanning; assume possible update.
       const prev = manifest.repos.find((r) => r.id === repoId);
       details.push({ repoId, currentSha: prev?.headSha, changed: true });
-      hasUpdates = true;
-    } else {
-      // DeepWiki: can't easily detect changes, assume possible update
-      details.push({ repoId: repoInput.url, changed: true });
       hasUpdates = true;
     }
   }
@@ -1377,39 +1325,6 @@ async function scanBundleIndexableFiles(params: {
         bundleRelPosix: bundleRel,
         absPath: wf.absPath,
       });
-    }
-  }
-
-  // 3) deepwiki/<owner>/<repo>/norm/** (docs-only)
-  const deepwikiDir = path.join(params.bundleRootDir, 'deepwiki');
-  const dwSt = await statOrNull(deepwikiDir);
-  if (dwSt?.isDirectory()) {
-    // Only walk the norm subtrees.
-    const owners = await fs.readdir(deepwikiDir, { withFileTypes: true });
-    for (const ownerEnt of owners) {
-      if (!ownerEnt.isDirectory()) continue;
-      const owner = ownerEnt.name;
-      const ownerDir = path.join(deepwikiDir, owner);
-      const repos = await fs.readdir(ownerDir, { withFileTypes: true });
-      for (const repoEnt of repos) {
-        if (!repoEnt.isDirectory()) continue;
-        const repo = repoEnt.name;
-        const normDir = path.join(ownerDir, repo, 'norm');
-        const normSt = await statOrNull(normDir);
-        if (!normSt?.isDirectory()) continue;
-
-        for await (const wf of walkFilesNoIgnore(normDir)) {
-          if (!wf.relPosix.toLowerCase().endsWith('.md')) continue;
-          const bundleRel = `deepwiki/${owner}/${repo}/norm/${wf.relPosix}`;
-          await pushFile({
-            repoId: `deepwiki:${owner}/${repo}`,
-            kind: 'doc',
-            repoRelativePath: wf.relPosix,
-            bundleRelPosix: bundleRel,
-            absPath: wf.absPath,
-          });
-        }
-      }
     }
   }
 
@@ -1607,7 +1522,8 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
 
       allIngestedFiles.push(...files);
       reposSummary.push({ kind: 'github', id: repoId, source, headSha, notes: [...notes, ...skipped].slice(0, 50) });
-    } else if (repoInput.kind === 'local') {
+    } else {
+      // Local repository
       const { owner, repo } = parseOwnerRepo(repoInput.repo);
       const repoId = `${owner}/${repo}`;
 
@@ -1623,22 +1539,6 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
 
       allIngestedFiles.push(...files);
       reposSummary.push({ kind: 'local', id: repoId, source: 'local', notes: skipped.slice(0, 50) });
-      changed = true;
-    } else {
-      // DeepWiki integration: fetch and convert to Markdown.
-      const deepwikiResult = await ingestDeepWikiRepo({
-        cfg,
-        bundlePaths: paths,
-        url: repoInput.url,
-      });
-      allIngestedFiles.push(...deepwikiResult.files);
-      reposSummary.push({
-        kind: 'deepwiki',
-        id: deepwikiResult.summary.repoId,
-        source: 'deepwiki',
-        notes: deepwikiResult.summary.notes,
-      });
-      // Always mark as changed for DeepWiki since we can't easily detect content changes.
       changed = true;
     }
   }
