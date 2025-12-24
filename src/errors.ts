@@ -44,11 +44,24 @@ export class PreflightError extends Error {
 }
 
 /**
+ * Check if a string looks like a valid UUID v4.
+ */
+function isUuidFormat(id: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+}
+
+/**
  * Error thrown when a bundle is not found.
  */
 export class BundleNotFoundError extends PreflightError {
   constructor(bundleId: string) {
-    super(`Bundle not found: ${bundleId}`, 'BUNDLE_NOT_FOUND', {
+    const hint = isUuidFormat(bundleId)
+      ? '\nUse preflight_list_bundles to see available bundles.'
+      : `\nHint: bundleId must be a UUID (e.g., 025c6dcb-1234-5678-9abc-def012345678).\n` +
+        `      "${bundleId}" looks like a displayName, not a bundleId.\n` +
+        `      Use preflight_list_bundles to find the correct bundleId.`;
+    
+    super(`Bundle not found: ${bundleId}${hint}`, 'BUNDLE_NOT_FOUND', {
       context: { bundleId },
     });
     this.name = 'BundleNotFoundError';

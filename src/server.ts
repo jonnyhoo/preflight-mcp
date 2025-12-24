@@ -24,6 +24,7 @@ import { getProgressTracker, type TaskProgress } from './jobs/progressTracker.js
 import { readManifest } from './bundle/manifest.js';
 import { safeJoin, toBundleFileUri } from './mcp/uris.js';
 import { wrapPreflightError } from './mcp/errorKinds.js';
+import { BundleNotFoundError } from './errors.js';
 import { searchIndex, type SearchScope } from './search/sqliteFts.js';
 import { logger } from './logging/logger.js';
 import { runSearchByTags } from './tools/searchByTags.js';
@@ -132,7 +133,7 @@ export async function startServer(): Promise<void> {
   const server = new McpServer(
     {
       name: 'preflight-mcp',
-version: '0.1.6',
+version: '0.1.7',
       description: 'Create evidence-based preflight bundles for repositories (docs + code) with SQLite FTS search.',
     },
     {
@@ -359,7 +360,7 @@ version: '0.1.6',
       try {
         const storageDir = await findBundleStorageDir(cfg.storageDirs, args.bundleId);
         if (!storageDir) {
-          throw new Error(`Bundle not found: ${args.bundleId}`);
+          throw new BundleNotFoundError(args.bundleId);
         }
 
         const paths = getBundlePathsForId(storageDir, args.bundleId);
@@ -450,7 +451,7 @@ version: '0.1.6',
       try {
         const deleted = await clearBundleMulti(cfg.storageDirs, args.bundleId);
         if (!deleted) {
-          throw new Error(`Bundle not found: ${args.bundleId}`);
+          throw new BundleNotFoundError(args.bundleId);
         }
 
         server.sendResourceListChanged();
@@ -716,7 +717,7 @@ version: '0.1.6',
       try {
         const storageDir = await findBundleStorageDir(cfg.storageDirs, args.bundleId);
         if (!storageDir) {
-          throw new Error(`Bundle not found: ${args.bundleId}`);
+          throw new BundleNotFoundError(args.bundleId);
         }
 
         // checkOnly mode: just check for updates without applying
@@ -906,7 +907,7 @@ version: '0.1.6',
         // Resolve bundle location across storageDirs (more robust than a single effectiveDir).
         const storageDir = await findBundleStorageDir(cfg.storageDirs, args.bundleId);
         if (!storageDir) {
-          throw new Error(`Bundle not found: ${args.bundleId}`);
+          throw new BundleNotFoundError(args.bundleId);
         }
 
         if (args.ensureFresh) {

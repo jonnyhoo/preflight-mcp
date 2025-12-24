@@ -23,6 +23,7 @@ import { analyzeBundleStatic, type AnalysisMode } from './analysis.js';
 import { autoDetectTags, generateDisplayName, generateDescription } from './tagging.js';
 import { bundleCreationLimiter } from '../core/concurrency-limiter.js';
 import { getProgressTracker, type TaskPhase, formatBytes, calcPercent } from '../jobs/progressTracker.js';
+import { BundleNotFoundError } from '../errors.js';
 
 /** Progress callback for reporting bundle creation progress */
 export type BundleProgressCallback = (phase: TaskPhase, progress: number, message: string, total?: number) => void;
@@ -556,7 +557,7 @@ export async function assertBundleComplete(
 ): Promise<void> {
   const storageDir = await findBundleStorageDir(cfg.storageDirs, bundleId);
   if (!storageDir) {
-    throw new Error(`Bundle not found: ${bundleId}`);
+    throw new BundleNotFoundError(bundleId);
   }
 
   const bundleRoot = getBundlePaths(storageDir, bundleId).rootDir;
@@ -1655,7 +1656,7 @@ export async function repairBundle(cfg: PreflightConfig, bundleId: string, optio
 
   const storageDir = await findBundleStorageDir(cfg.storageDirs, bundleId);
   if (!storageDir) {
-    throw new Error(`Bundle not found: ${bundleId}`);
+    throw new BundleNotFoundError(bundleId);
   }
 
   const paths = getBundlePaths(storageDir, bundleId);
