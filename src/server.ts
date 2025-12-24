@@ -133,7 +133,7 @@ export async function startServer(): Promise<void> {
   const server = new McpServer(
     {
       name: 'preflight-mcp',
-version: '0.1.7',
+version: '0.1.8',
       description: 'Create evidence-based preflight bundles for repositories (docs + code) with SQLite FTS search.',
     },
     {
@@ -471,7 +471,7 @@ version: '0.1.7',
     'preflight_create_bundle',
     {
       title: 'Create bundle',
-      description: 'Create a new bundle from GitHub repos or local directories (or update an existing one if ifExists=updateExisting). Use when: "index this repo", "create bundle for", "add repo to preflight", "索引这个仓库", "创建bundle", "添加GitHub项目", "学习这个项目". NOTE: If the bundle contains code files, consider asking user if they want to generate dependency graph (preflight_evidence_dependency_graph) or establish trace links (preflight_trace_upsert).',
+      description: 'Create a new bundle from GitHub repos or local directories. IMPORTANT: Only call this tool when the user EXPLICITLY asks to create/index a repo. Do NOT automatically create bundles when search fails or bundle is not found - ASK the user first! Use when user says: "index this repo", "create bundle for", "创建bundle", "添加GitHub项目". If ifExists=updateExisting, updates an existing bundle.',
       inputSchema: CreateBundleInputSchema,
       outputSchema: {
         // Normal completion fields
@@ -955,11 +955,10 @@ version: '0.1.7',
     {
       title: 'Evidence: dependency graph (callers + imports)',
       description:
-        'Generate an evidence-based dependency graph. Two modes: ' +
-        '(1) TARGET MODE: provide target.file to analyze a specific file\'s imports and callers. ' +
-        '(2) GLOBAL MODE: omit target to generate a project-wide import graph of all code files. ' +
-        'For target mode, file path must be bundle-relative: repos/{owner}/{repo}/norm/{path}. ' +
-        'Use preflight_search_bundle to find file paths, or check OVERVIEW.md.',
+        'Generate an evidence-based dependency graph. IMPORTANT: Before running, ASK the user which bundle and which file/mode they want! ' +
+        'Two modes: (1) TARGET MODE: analyze a specific file (provide target.file). (2) GLOBAL MODE: project-wide graph (omit target). ' +
+        'Do NOT automatically choose bundle or mode - confirm with user first! ' +
+        'File path must be bundle-relative: repos/{owner}/{repo}/norm/{path}.',
       inputSchema: DependencyGraphInputSchema,
       outputSchema: {
         meta: z.any(),

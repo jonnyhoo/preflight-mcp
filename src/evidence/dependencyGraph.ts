@@ -104,6 +104,10 @@ export const DependencyGraphInputSchema = {
     'Target file/symbol to analyze. If omitted, generates a GLOBAL dependency graph of all code files in the bundle. ' +
     'Global mode shows import relationships between all files but may be truncated for large projects.'
   ),
+  force: z.boolean().default(false).describe(
+    'If true, regenerate the dependency graph even if cached. ' +
+    'Global mode results are cached in the bundle; use force=true to refresh.'
+  ),
   options: z
     .object({
       maxFiles: z.number().int().min(1).max(500).default(200),
@@ -326,6 +330,24 @@ export async function generateDependencyGraph(cfg: PreflightConfig, rawArgs: unk
   const paths = getBundlePathsForId(storageDir, args.bundleId);
   const manifest = await readManifest(paths.manifestPath);
 
+  // Global mode: check for cached result (unless force=true)
+  const isGlobalMode = !args.target;
+  if (isGlobalMode && !args.force) {
+    try {
+      const cached = await fs.readFile(paths.depsGraphPath, 'utf8');
+      const parsed = JSON.parse(cached) as DependencyGraphResult;
+      // Add note that this is from cache
+      parsed.signals.warnings = parsed.signals.warnings || [];
+      parsed.signals.warnings.unshift({
+        code: 'from_cache',
+        message: `Loaded from cache (generated at ${parsed.meta.generatedAt}). Use force=true to regenerate.`,
+      });
+      return parsed;
+    } catch {
+      // Cache miss - generate fresh
+    }
+  }
+
   const limits = {
     maxFiles: args.options.maxFiles,
     maxNodes: args.options.maxNodes,
@@ -379,7 +401,7 @@ export async function generateDependencyGraph(cfg: PreflightConfig, rawArgs: unk
 
   // Global mode: no target specified
   if (!args.target) {
-    return generateGlobalDependencyGraph({
+    const result = await generateGlobalDependencyGraph({
       cfg,
       args,
       paths,
@@ -396,6 +418,16 @@ export async function generateDependencyGraph(cfg: PreflightConfig, rawArgs: unk
       addEdge,
       bundleFileUri,
     });
+
+    // Save to cache
+    try {
+      await fs.mkdir(paths.depsDir, { recursive: true });
+      await fs.writeFile(paths.depsGraphPath, JSON.stringify(result, null, 2));
+    } catch {
+      // Ignore cache write errors
+    }
+
+    return result;
   }
 
   const targetFile = args.target.file.replaceAll('\\', '/');

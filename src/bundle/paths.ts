@@ -36,6 +36,10 @@ export type BundlePaths = {
   searchDbPath: string;
   reposDir: string;
   librariesDir: string;
+  /** Directory for dependency graph storage */
+  depsDir: string;
+  /** Global dependency graph JSON file */
+  depsGraphPath: string;
 };
 
 export function getBundlePaths(storageDir: string, bundleId: string): BundlePaths {
@@ -44,6 +48,7 @@ export function getBundlePaths(storageDir: string, bundleId: string): BundlePath
   
   const rootDir = path.join(storageDir, bundleId);
   const indexesDir = path.join(rootDir, 'indexes');
+  const depsDir = path.join(rootDir, 'deps');
   return {
     bundleId,
     rootDir,
@@ -55,6 +60,8 @@ export function getBundlePaths(storageDir: string, bundleId: string): BundlePath
     searchDbPath: path.join(indexesDir, 'search.sqlite3'),
     reposDir: path.join(rootDir, 'repos'),
     librariesDir: path.join(rootDir, 'libraries'),
+    depsDir,
+    depsGraphPath: path.join(depsDir, 'dependency-graph.json'),
   };
 }
 

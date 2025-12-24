@@ -59,7 +59,8 @@ export class BundleNotFoundError extends PreflightError {
       ? '\nUse preflight_list_bundles to see available bundles.'
       : `\nHint: bundleId must be a UUID (e.g., 025c6dcb-1234-5678-9abc-def012345678).\n` +
         `      "${bundleId}" looks like a displayName, not a bundleId.\n` +
-        `      Use preflight_list_bundles to find the correct bundleId.`;
+        `      Use preflight_list_bundles to find the correct bundleId.\n` +
+        `      DO NOT automatically create a new bundle - ASK the user first!`;
     
     super(`Bundle not found: ${bundleId}${hint}`, 'BUNDLE_NOT_FOUND', {
       context: { bundleId },
