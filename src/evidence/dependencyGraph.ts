@@ -92,13 +92,18 @@ export const DependencyGraphInputSchema = {
     file: z
       .string()
       .describe(
-        'Bundle-relative file path (posix). Example: repos/owner/repo/norm/src/index.ts'
+        'Bundle-relative file path (NOT absolute path). Format: repos/{owner}/{repo}/norm/{path}. ' +
+        'Example: repos/owner/repo/norm/src/index.ts or repos/jonnyhoo/langextract/norm/langextract/__init__.py. ' +
+        'Use preflight_search_bundle to discover the correct path if unsure.'
       ),
     symbol: z
       .string()
       .optional()
       .describe('Optional symbol name (function/class). If omitted, graph is file-level.'),
-  }),
+  }).optional().describe(
+    'Target file/symbol to analyze. If omitted, generates a GLOBAL dependency graph of all code files in the bundle. ' +
+    'Global mode shows import relationships between all files but may be truncated for large projects.'
+  ),
   options: z
     .object({
       maxFiles: z.number().int().min(1).max(500).default(200),
@@ -371,6 +376,27 @@ export async function generateDependencyGraph(cfg: PreflightConfig, rawArgs: unk
   };
 
   const bundleFileUri = (p: string) => toBundleFileUri({ bundleId: args.bundleId, relativePath: p });
+
+  // Global mode: no target specified
+  if (!args.target) {
+    return generateGlobalDependencyGraph({
+      cfg,
+      args,
+      paths,
+      manifest,
+      limits,
+      nodes,
+      edges,
+      warnings,
+      startedAt,
+      requestId,
+      timeBudgetMs,
+      checkBudget,
+      addNode,
+      addEdge,
+      bundleFileUri,
+    });
+  }
 
   const targetFile = args.target.file.replaceAll('\\', '/');
   const targetRepo = parseRepoNormPath(targetFile);
@@ -865,6 +891,43 @@ export async function generateDependencyGraph(cfg: PreflightConfig, rawArgs: unk
       });
     }
   } catch (err) {
+    // If target file not found, throw a helpful error instead of just warning
+    if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+      // Detect if path looks like an absolute filesystem path (wrong format)
+      const looksLikeAbsolutePath = /^[A-Za-z]:[\\/]|^\/(?:home|Users|var|tmp|etc)\//i.test(targetFile);
+      // Detect if path looks like correct bundle-relative format
+      const looksLikeBundleRelative = /^repos\/[^/]+\/[^/]+\/norm\//i.test(targetFile);
+
+      if (looksLikeAbsolutePath) {
+        throw new Error(
+          `Target file not found: ${targetFile}\n\n` +
+          `ERROR: You provided an absolute filesystem path, but file paths must be bundle-relative.\n` +
+          `Correct format: repos/{owner}/{repo}/norm/{path/to/file}\n` +
+          `Example: repos/owner/myrepo/norm/src/main.py\n\n` +
+          `Use preflight_search_bundle to find the correct file path.`
+        );
+      } else if (looksLikeBundleRelative) {
+        throw new Error(
+          `Target file not found: ${targetFile}\n\n` +
+          `The path format looks correct, but the file does not exist in the bundle.\n` +
+          `Possible causes:\n` +
+          `1. The bundle may be incomplete (download timed out or failed)\n` +
+          `2. The file path may have a typo\n\n` +
+          `Suggested actions:\n` +
+          `- Use preflight_search_bundle to verify available files\n` +
+          `- Use preflight_update_bundle with updateExisting:true to re-download\n` +
+          `- Check if repair shows "indexed 0 file(s)" which indicates incomplete bundle`
+        );
+      } else {
+        throw new Error(
+          `Target file not found: ${targetFile}\n\n` +
+          `File paths must be bundle-relative, NOT absolute filesystem paths.\n` +
+          `Correct format: repos/{owner}/{repo}/norm/{path/to/file}\n` +
+          `Example: repos/owner/myrepo/norm/src/main.py\n\n` +
+          `Use preflight_search_bundle to find the correct file path.`
+        );
+      }
+    }
     warnings.push({
       code: 'target_file_unreadable',
       message: `Failed to read target file for import extraction: ${err instanceof Error ? err.message : String(err)}`,
@@ -1023,4 +1086,320 @@ export async function generateDependencyGraph(cfg: PreflightConfig, rawArgs: unk
   };
 
   return out;
+}
+
+/**
+ * Global dependency graph mode: analyze all code files in the bundle.
+ * Generates import relationships between all files.
+ */
+async function generateGlobalDependencyGraph(ctx: {
+  cfg: PreflightConfig;
+  args: { bundleId: string; options: { maxFiles: number; maxNodes: number; maxEdges: number; timeBudgetMs: number } };
+  paths: { rootDir: string; reposDir: string; searchDbPath: string; manifestPath: string };
+  manifest: any;
+  limits: { maxFiles: number; maxNodes: number; maxEdges: number };
+  nodes: Map<string, GraphNode>;
+  edges: EvidenceItem[];
+  warnings: Array<{ code: string; message: string; evidenceIds?: string[] }>;
+  startedAt: number;
+  requestId: string;
+  timeBudgetMs: number;
+  checkBudget: (reason: string) => boolean;
+  addNode: (n: GraphNode) => void;
+  addEdge: (e: EvidenceItem) => void;
+  bundleFileUri: (p: string) => string;
+}): Promise<DependencyGraphResult> {
+  const {
+    cfg,
+    args,
+    paths,
+    manifest,
+    limits,
+    nodes,
+    edges,
+    warnings,
+    startedAt,
+    requestId,
+    timeBudgetMs,
+    checkBudget,
+    addNode,
+    addEdge,
+    bundleFileUri,
+  } = ctx;
+
+  let truncated = false;
+  let truncatedReason: string | undefined;
+  let filesProcessed = 0;
+  let usedAstCount = 0;
+
+  // Collect all code files
+  const codeExtensions = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.rs', '.java', '.rb', '.php']);
+  const codeFiles: string[] = [];
+
+  async function* walkDir(dir: string, prefix: string): AsyncGenerator<string> {
+    try {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      for (const ent of entries) {
+        if (checkBudget('timeBudget exceeded during file discovery')) return;
+        const relPath = prefix ? `${prefix}/${ent.name}` : ent.name;
+        if (ent.isDirectory()) {
+          yield* walkDir(path.join(dir, ent.name), relPath);
+        } else if (ent.isFile()) {
+          const ext = path.extname(ent.name).toLowerCase();
+          if (codeExtensions.has(ext)) {
+            yield relPath;
+          }
+        }
+      }
+    } catch {
+      // ignore unreadable directories
+    }
+  }
+
+  // Walk repos directory
+  for await (const relPath of walkDir(paths.reposDir, 'repos')) {
+    if (codeFiles.length >= limits.maxFiles) {
+      truncated = true;
+      truncatedReason = 'maxFiles reached during discovery';
+      break;
+    }
+    // Only include files under norm/ directories
+    if (relPath.includes('/norm/')) {
+      codeFiles.push(relPath);
+    }
+  }
+
+  warnings.push({
+    code: 'global_mode',
+    message: `Global dependency graph mode: analyzing ${codeFiles.length} code file(s). Results show import relationships between files.`,
+  });
+
+  // Process each file
+  const resolvedImportsCache = new Map<string, Map<string, string | null>>();
+
+  for (const filePath of codeFiles) {
+    if (checkBudget('timeBudget exceeded during file processing')) {
+      truncated = true;
+      truncatedReason = 'timeBudget exceeded';
+      break;
+    }
+
+    const fileId = `file:${filePath}`;
+    addNode({ id: fileId, kind: 'file', name: filePath, file: filePath });
+
+    // Read and extract imports
+    try {
+      const absPath = safeJoin(paths.rootDir, filePath);
+      const raw = await fs.readFile(absPath, 'utf8');
+      const normalized = raw.replace(/\r\n/g, '\n');
+      const lines = normalized.split('\n');
+
+      const extracted = await extractImportsForFile(cfg, filePath, normalized, lines, warnings);
+      if (extracted.usedAst) usedAstCount++;
+      filesProcessed++;
+
+      const fileRepo = parseRepoNormPath(filePath);
+      if (!fileRepo) continue;
+
+      // Resolve imports to files in the bundle
+      for (const imp of extracted.imports) {
+        if (checkBudget('timeBudget exceeded during import resolution')) break;
+
+        // Try to resolve the import to a file in the same repo
+        const resolvedFile = await resolveImportInRepo({
+          rootDir: paths.rootDir,
+          repoRoot: fileRepo.repoRoot,
+          importerRepoRel: fileRepo.repoRelativePath,
+          module: imp.module,
+          cache: resolvedImportsCache,
+        });
+
+        if (resolvedFile) {
+          const targetId = `file:${resolvedFile}`;
+          addNode({ id: targetId, kind: 'file', name: resolvedFile, file: resolvedFile });
+
+          const source: SourceRef = {
+            file: filePath,
+            range: imp.range,
+            uri: bundleFileUri(filePath),
+            snippet: clampSnippet(lines[imp.range.startLine - 1] ?? '', 200),
+          };
+          source.snippetSha256 = sha256Hex(source.snippet ?? '');
+
+          addEdge({
+            evidenceId: makeEvidenceId(['imports_resolved', fileId, targetId, String(imp.range.startLine)]),
+            kind: 'edge',
+            type: 'imports_resolved',
+            from: fileId,
+            to: targetId,
+            method: imp.method,
+            confidence: Math.min(0.85, imp.confidence),
+            sources: [source],
+            notes: [...imp.notes, `resolved import "${imp.module}" to ${resolvedFile}`],
+          });
+        }
+      }
+    } catch {
+      // Skip unreadable files
+    }
+  }
+
+  // Post-process warnings
+  warnings.push({
+    code: 'limitations',
+    message: usedAstCount > 0
+      ? `Global graph used AST parsing for ${usedAstCount}/${filesProcessed} files. Import resolution is best-effort. Only internal imports (resolved to files in the bundle) are shown.`
+      : 'Global graph used regex-based import extraction. Import resolution is best-effort. Only internal imports (resolved to files in the bundle) are shown.',
+  });
+
+  const importEdges = edges.filter((e) => e.type === 'imports_resolved').length;
+
+  return {
+    meta: {
+      requestId,
+      generatedAt: nowIso(),
+      timeMs: Date.now() - startedAt,
+      repo: {
+        bundleId: args.bundleId,
+        headSha: manifest.repos?.[0]?.headSha,
+      },
+      budget: {
+        timeBudgetMs,
+        truncated,
+        truncatedReason,
+        limits,
+      },
+    },
+    facts: {
+      nodes: Array.from(nodes.values()),
+      edges,
+    },
+    signals: {
+      stats: {
+        filesRead: filesProcessed,
+        searchHits: 0,
+        callEdges: 0,
+        importEdges,
+      },
+      warnings,
+    },
+  };
+}
+
+/**
+ * Resolve an import to a file path within the same repo.
+ */
+async function resolveImportInRepo(ctx: {
+  rootDir: string;
+  repoRoot: string; // e.g. repos/owner/repo/norm
+  importerRepoRel: string; // path relative to repoRoot
+  module: string;
+  cache: Map<string, Map<string, string | null>>;
+}): Promise<string | null> {
+  const { rootDir, repoRoot, importerRepoRel, module, cache } = ctx;
+
+  // Get or create cache for this repo
+  let repoCache = cache.get(repoRoot);
+  if (!repoCache) {
+    repoCache = new Map();
+    cache.set(repoRoot, repoCache);
+  }
+
+  const cacheKey = `${importerRepoRel}:${module}`;
+  const cached = repoCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
+  const ext = path.extname(importerRepoRel).toLowerCase();
+  const cleaned = (module.split(/[?#]/, 1)[0] ?? '').trim();
+  if (!cleaned) {
+    repoCache.set(cacheKey, null);
+    return null;
+  }
+
+  const bundlePathForRepoRel = (repoRel: string): string =>
+    `${repoRoot}/${repoRel.replaceAll('\\', '/')}`;
+
+  const normalizeDir = (d: string): string => (d === '.' ? '' : d);
+
+  // JS/TS resolution
+  const isJs = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'].includes(ext);
+  if (isJs) {
+    if (!cleaned.startsWith('.') && !cleaned.startsWith('/')) {
+      repoCache.set(cacheKey, null);
+      return null;
+    }
+
+    const importerDir = normalizeDir(path.posix.dirname(importerRepoRel));
+    const base = cleaned.startsWith('/')
+      ? path.posix.normalize(cleaned.slice(1))
+      : path.posix.normalize(path.posix.join(importerDir, cleaned));
+
+    const candidates: string[] = [];
+    const baseExt = path.posix.extname(base).toLowerCase();
+
+    if (baseExt) {
+      candidates.push(base);
+      if (['.js', '.mjs', '.cjs'].includes(baseExt)) {
+        const stem = base.slice(0, -baseExt.length);
+        candidates.push(`${stem}.ts`, `${stem}.tsx`, `${stem}.jsx`);
+      }
+    } else {
+      const exts = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
+      for (const e of exts) candidates.push(`${base}${e}`);
+      for (const e of exts) candidates.push(path.posix.join(base, `index${e}`));
+    }
+
+    for (const repoRel of candidates) {
+      const bundleRel = bundlePathForRepoRel(repoRel);
+      const abs = safeJoin(rootDir, bundleRel);
+      if (await fileExists(abs)) {
+        repoCache.set(cacheKey, bundleRel);
+        return bundleRel;
+      }
+    }
+  }
+
+  // Python resolution
+  if (ext === '.py') {
+    if (cleaned.startsWith('.')) {
+      // Relative import
+      const m = cleaned.match(/^(\.+)(.*)$/);
+      if (m) {
+        const dotCount = m[1]?.length ?? 0;
+        const rest = (m[2] ?? '').replace(/^\.+/, '');
+        let baseDir = normalizeDir(path.posix.dirname(importerRepoRel));
+        for (let i = 1; i < dotCount; i++) {
+          baseDir = normalizeDir(path.posix.dirname(baseDir));
+        }
+        const restPath = rest ? rest.replace(/\./g, '/') : '';
+        const candidates = restPath
+          ? [path.posix.join(baseDir, `${restPath}.py`), path.posix.join(baseDir, restPath, '__init__.py')]
+          : [path.posix.join(baseDir, '__init__.py')];
+
+        for (const repoRel of candidates) {
+          const bundleRel = bundlePathForRepoRel(repoRel);
+          const abs = safeJoin(rootDir, bundleRel);
+          if (await fileExists(abs)) {
+            repoCache.set(cacheKey, bundleRel);
+            return bundleRel;
+          }
+        }
+      }
+    } else {
+      // Absolute import - try common patterns
+      const modPath = cleaned.replace(/\./g, '/');
+      const candidates = [`${modPath}.py`, path.posix.join(modPath, '__init__.py')];
+      for (const repoRel of candidates) {
+        const bundleRel = bundlePathForRepoRel(repoRel);
+        const abs = safeJoin(rootDir, bundleRel);
+        if (await fileExists(abs)) {
+          repoCache.set(cacheKey, bundleRel);
+          return bundleRel;
+        }
+      }
+    }
+  }
+
+  repoCache.set(cacheKey, null);
+  return null;
 }

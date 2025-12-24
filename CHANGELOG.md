@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2025-12-24
+
+### Added
+- **Progress tracking**: Real-time progress reporting for `preflight_create_bundle` and `preflight_update_bundle`
+- **New MCP tool**: `preflight_get_task_status` - Check progress of bundle creation/update tasks
+- **In-progress lock mechanism**: Prevents duplicate bundle creation during MCP timeouts
+- **Bundle integrity check**: `assertBundleComplete()` validates bundle completeness before operations
+- **Global dependency graph mode**: Omit `target` parameter in `preflight_evidence_dependency_graph` to generate project-wide import graph
+- **Batch file reading**: Omit `file` parameter in `preflight_read_file` to read all key files in one call
+
+### Changed
+- **`preflight_read_file`**: Now supports batch mode (omit `file` to get all key files)
+- **`preflight_evidence_dependency_graph`**: Now supports global mode (omit `target` for project-wide graph)
+- **Error messages**: Improved guidance when target file not found (distinguishes path format errors vs incomplete bundles)
+- **Tools count**: 13 tools (merged `preflight_read_bundle_overview` into `preflight_read_file`)
+
+### Fixed
+- Duplicate bundle creation when MCP client times out but server continues working
+- Operations on incomplete bundles now fail early with helpful error messages
+- LLM repeatedly trying to fix path errors now gets clear guidance
+
 ## [0.1.3] - 2025-12-23
 
 ### Added

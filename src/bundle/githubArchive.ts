@@ -6,6 +6,9 @@ import AdmZip from 'adm-zip';
 import { type PreflightConfig } from '../config.js';
 import { logger } from '../logging/logger.js';
 
+/** Progress callback for download operations */
+export type DownloadProgressCallback = (downloadedBytes: number, totalBytes: number | undefined, message: string) => void;
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -46,7 +49,13 @@ async function fetchJson<T>(url: string, headers: Record<string, string>, timeou
   }
 }
 
-async function downloadToFile(url: string, headers: Record<string, string>, destPath: string, timeoutMs = DEFAULT_DOWNLOAD_TIMEOUT_MS): Promise<void> {
+async function downloadToFile(
+  url: string,
+  headers: Record<string, string>,
+  destPath: string,
+  timeoutMs = DEFAULT_DOWNLOAD_TIMEOUT_MS,
+  onProgress?: DownloadProgressCallback
+): Promise<void> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -56,14 +65,57 @@ async function downloadToFile(url: string, headers: Record<string, string>, dest
       throw new Error(`Download error ${res.status}: ${res.statusText}`);
     }
 
-    // Use streaming if possible; otherwise fallback to arrayBuffer.
-    const anyRes = res as any;
-    const body = anyRes.body;
+    // Get content length for progress reporting
+    const contentLengthHeader = res.headers.get('content-length');
+    const totalBytes = contentLengthHeader ? parseInt(contentLengthHeader, 10) : undefined;
 
     await ensureDir(path.dirname(destPath));
 
+    // Use streaming to report progress
+    const anyRes = res as any;
+    const body = anyRes.body;
+
+    if (body && typeof body[Symbol.asyncIterator] === 'function') {
+      // Async iterator for progress tracking
+      const fsModule = await import('node:fs');
+      const ws = fsModule.createWriteStream(destPath);
+      let downloadedBytes = 0;
+      let lastReportTime = Date.now();
+      const reportIntervalMs = 500; // Report at most every 500ms
+
+      try {
+        for await (const chunk of body) {
+          ws.write(chunk);
+          downloadedBytes += chunk.length;
+          
+          // Throttle progress reports
+          const now = Date.now();
+          if (onProgress && (now - lastReportTime > reportIntervalMs)) {
+            lastReportTime = now;
+            const percent = totalBytes ? Math.round((downloadedBytes / totalBytes) * 100) : 0;
+            const msg = totalBytes
+              ? `Downloaded ${formatBytes(downloadedBytes)} / ${formatBytes(totalBytes)} (${percent}%)`
+              : `Downloaded ${formatBytes(downloadedBytes)}`;
+            onProgress(downloadedBytes, totalBytes, msg);
+          }
+        }
+      } finally {
+        ws.end();
+        await new Promise<void>((resolve) => ws.on('finish', () => resolve()));
+      }
+      
+      // Final progress report
+      if (onProgress) {
+        const msg = totalBytes
+          ? `Downloaded ${formatBytes(downloadedBytes)} / ${formatBytes(totalBytes)} (100%)`
+          : `Downloaded ${formatBytes(downloadedBytes)}`;
+        onProgress(downloadedBytes, totalBytes, msg);
+      }
+      return;
+    }
+
     if (body && typeof body.pipe === 'function') {
-      // Node.js stream
+      // Node.js stream (fallback without progress)
       const ws = (await import('node:fs')).createWriteStream(destPath);
       await new Promise<void>((resolve, reject) => {
         body.pipe(ws);
@@ -74,12 +126,24 @@ async function downloadToFile(url: string, headers: Record<string, string>, dest
       return;
     }
 
-    // Web stream or no stream support.
+    // Web stream or no stream support (fallback without progress)
     const buf = Buffer.from(await res.arrayBuffer());
     await fs.writeFile(destPath, buf);
+    
+    if (onProgress) {
+      onProgress(buf.length, buf.length, `Downloaded ${formatBytes(buf.length)}`);
+    }
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+/** Format bytes for display */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)}GB`;
 }
 
 async function extractZip(zipPath: string, destDir: string): Promise<void> {
@@ -101,6 +165,7 @@ export async function downloadAndExtractGitHubArchive(params: {
   repo: string;
   ref?: string;
   destDir: string;
+  onProgress?: DownloadProgressCallback;
 }): Promise<{ repoRoot: string; refUsed: string; fetchedAt: string }> {
   const headers = githubHeaders(params.cfg);
 
@@ -120,7 +185,7 @@ export async function downloadAndExtractGitHubArchive(params: {
   const zipballUrl = `https://api.github.com/repos/${params.owner}/${params.repo}/zipball/${encodeURIComponent(refUsed)}`;
 
   await ensureDir(params.destDir);
-  await downloadToFile(zipballUrl, headers, zipPath);
+  await downloadToFile(zipballUrl, headers, zipPath, DEFAULT_DOWNLOAD_TIMEOUT_MS, params.onProgress);
 
   const extractDir = path.join(params.destDir, `extracted-${Date.now()}`);
   await extractZip(zipPath, extractDir);

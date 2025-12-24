@@ -47,6 +47,8 @@ export type PreflightConfig = {
   maxSearchLimit: number;
   /** Default search results limit (default: 30). */
   defaultSearchLimit: number;
+  /** In-progress lock timeout in ms (default: 30 minutes). */
+  inProgressLockTimeoutMs: number;
 };
 
 function envNumber(name: string, fallback: number): number {
@@ -142,5 +144,6 @@ export function getConfig(): PreflightConfig {
     defaultMaxAgeHours: envNumber('PREFLIGHT_DEFAULT_MAX_AGE_HOURS', 24),
     maxSearchLimit: envNumber('PREFLIGHT_MAX_SEARCH_LIMIT', 200),
     defaultSearchLimit: envNumber('PREFLIGHT_DEFAULT_SEARCH_LIMIT', 30),
+    inProgressLockTimeoutMs: envNumber('PREFLIGHT_IN_PROGRESS_LOCK_TIMEOUT_MS', 30 * 60_000),
   };
 }

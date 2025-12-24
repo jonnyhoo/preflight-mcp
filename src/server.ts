@@ -6,9 +6,12 @@ import * as z from 'zod';
 
 import { getConfig } from './config.js';
 import {
+  assertBundleComplete,
   bundleExists,
   checkForUpdates,
+  checkInProgressLock,
   clearBundleMulti,
+  computeCreateInputFingerprint,
   createBundle,
   findBundleStorageDir,
   getBundlePathsForId,
@@ -17,6 +20,7 @@ import {
   repairBundle,
   updateBundle,
 } from './bundle/service.js';
+import { getProgressTracker, type TaskProgress } from './jobs/progressTracker.js';
 import { readManifest } from './bundle/manifest.js';
 import { safeJoin, toBundleFileUri } from './mcp/uris.js';
 import { wrapPreflightError } from './mcp/errorKinds.js';
@@ -105,9 +109,12 @@ const RepairBundleInputSchema = {
   rebuildOverview: z.boolean().optional().describe('If true, rebuild OVERVIEW.md when missing/empty.'),
 };
 
-const ReadFileInputSchema = {
-  bundleId: z.string().describe('Bundle ID.'),
-  file: z.string().default('OVERVIEW.md').describe('File path relative to bundle root. Common files: OVERVIEW.md, START_HERE.md, AGENTS.md, manifest.json, or any repo file like repos/owner/repo/norm/README.md'),
+const GetTaskStatusInputSchema = {
+  taskId: z.string().optional().describe('Task ID to query (from BUNDLE_IN_PROGRESS error).'),
+  fingerprint: z.string().optional().describe('Fingerprint to query (computed from repos/libraries/topics).'),
+  repos: z.array(CreateRepoInputSchema).optional().describe('Repos to compute fingerprint from (alternative to fingerprint).'),
+  libraries: z.array(z.string()).optional().describe('Libraries for fingerprint computation.'),
+  topics: z.array(z.string()).optional().describe('Topics for fingerprint computation.'),
 };
 
 
@@ -125,7 +132,7 @@ export async function startServer(): Promise<void> {
   const server = new McpServer(
     {
       name: 'preflight-mcp',
-      version: '0.1.3',
+      version: '0.1.4',
       description: 'Create evidence-based preflight bundles for repositories (docs + code) with SQLite FTS search.',
     },
     {
@@ -328,13 +335,21 @@ export async function startServer(): Promise<void> {
   server.registerTool(
     'preflight_read_file',
     {
-      title: 'Read bundle file',
-      description: 'Read a file from bundle. Use when: "show overview", "read file", "查看概览", "项目概览", "看README", "查看文档", "bundle详情", "bundle状态", "仓库信息". Common files: OVERVIEW.md, START_HERE.md, AGENTS.md, manifest.json (for bundle metadata/status).',
-      inputSchema: ReadFileInputSchema,
+      title: 'Read bundle file(s)',
+      description:
+        'Read file(s) from bundle. Two modes: ' +
+        '(1) Omit "file" param → returns ALL key files (OVERVIEW.md, START_HERE.md, AGENTS.md, manifest.json, repo READMEs) in one call. ' +
+        '(2) Provide "file" param → returns that specific file. ' +
+        'Use when: "查看bundle", "show bundle", "read overview", "bundle概览", "项目信息".',
+      inputSchema: {
+        bundleId: z.string().describe('Bundle ID to read.'),
+        file: z.string().optional().describe('Specific file to read. If omitted, returns all key files (OVERVIEW.md, START_HERE.md, AGENTS.md, manifest.json, repo READMEs).'),
+      },
       outputSchema: {
         bundleId: z.string(),
-        file: z.string(),
-        content: z.string(),
+        file: z.string().optional(),
+        content: z.string().optional(),
+        files: z.record(z.string(), z.string().nullable()).optional(),
       },
       annotations: {
         readOnlyHint: true,
@@ -347,19 +362,68 @@ export async function startServer(): Promise<void> {
           throw new Error(`Bundle not found: ${args.bundleId}`);
         }
 
-        const bundleRoot = getBundlePathsForId(storageDir, args.bundleId).rootDir;
-        const absPath = safeJoin(bundleRoot, args.file);
+        const paths = getBundlePathsForId(storageDir, args.bundleId);
+        const bundleRoot = paths.rootDir;
 
-        const content = await fs.readFile(absPath, 'utf8');
+        // Single file mode
+        if (args.file) {
+          const absPath = safeJoin(bundleRoot, args.file);
+          const content = await fs.readFile(absPath, 'utf8');
+          const out = { bundleId: args.bundleId, file: args.file, content };
+          return {
+            content: [{ type: 'text', text: content }],
+            structuredContent: out,
+          };
+        }
 
-        const out = {
-          bundleId: args.bundleId,
-          file: args.file,
-          content,
-        };
+        // Batch mode: read all key files
+        const keyFiles = ['OVERVIEW.md', 'START_HERE.md', 'AGENTS.md', 'manifest.json'];
+        const files: Record<string, string | null> = {};
 
+        for (const file of keyFiles) {
+          try {
+            const absPath = safeJoin(bundleRoot, file);
+            files[file] = await fs.readFile(absPath, 'utf8');
+          } catch {
+            files[file] = null;
+          }
+        }
+
+        // Try to find and read repo README files
+        try {
+          const manifest = await readManifest(paths.manifestPath);
+          for (const repo of manifest.repos ?? []) {
+            if (!repo.id) continue;
+            const [owner, repoName] = repo.id.split('/');
+            if (!owner || !repoName) continue;
+
+            const readmeNames = ['README.md', 'readme.md', 'Readme.md', 'README.MD'];
+            for (const readmeName of readmeNames) {
+              const readmePath = `repos/${owner}/${repoName}/norm/${readmeName}`;
+              try {
+                const absPath = safeJoin(bundleRoot, readmePath);
+                files[readmePath] = await fs.readFile(absPath, 'utf8');
+                break;
+              } catch {
+                // Try next
+              }
+            }
+          }
+        } catch {
+          // Ignore manifest read errors
+        }
+
+        // Build combined text output
+        const textParts: string[] = [];
+        for (const [filePath, content] of Object.entries(files)) {
+          if (content) {
+            textParts.push(`=== ${filePath} ===\n${content}`);
+          }
+        }
+
+        const out = { bundleId: args.bundleId, files };
         return {
-          content: [{ type: 'text', text: content }],
+          content: [{ type: 'text', text: textParts.join('\n\n') || '(no files found)' }],
           structuredContent: out,
         };
       } catch (err) {
@@ -475,7 +539,35 @@ export async function startServer(): Promise<void> {
           content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
           structuredContent: out,
         };
-      } catch (err) {
+      } catch (err: any) {
+        // Handle BUNDLE_IN_PROGRESS error specially - provide useful info instead of just error
+        if (err?.code === 'BUNDLE_IN_PROGRESS') {
+          const elapsedSec = err.startedAt
+            ? Math.round((Date.now() - new Date(err.startedAt).getTime()) / 1000)
+            : 0;
+          
+          // Check current progress from tracker
+          const tracker = getProgressTracker();
+          const task = err.taskId ? tracker.getTask(err.taskId) : undefined;
+          
+          const out = {
+            status: 'in-progress',
+            message: `Bundle creation already in progress. Use preflight_get_task_status to check progress.`,
+            taskId: err.taskId,
+            fingerprint: err.fingerprint,
+            repos: err.repos,
+            startedAt: err.startedAt,
+            elapsedSeconds: elapsedSec,
+            currentPhase: task?.phase,
+            currentProgress: task?.progress,
+            currentMessage: task?.message,
+          };
+          
+          return {
+            content: [{ type: 'text', text: `⚠️ Bundle creation in progress (${elapsedSec}s elapsed). ${task ? `Current: ${task.phase} (${task.progress}%) - ${task.message}` : 'Use preflight_get_task_status to check progress.'}` }],
+            structuredContent: out,
+          };
+        }
         throw wrapPreflightError(err);
       }
     }
@@ -607,25 +699,42 @@ export async function startServer(): Promise<void> {
           };
         }
 
-        const { summary, changed } = await updateBundle(cfg, args.bundleId, { force: args.force });
+        // Create task for progress tracking
+        const tracker = getProgressTracker();
+        const fingerprint = `update-${args.bundleId}`;
+        const taskId = tracker.startTask(fingerprint, [args.bundleId]);
 
-        const resources = {
+        try {
+          const { summary, changed } = await updateBundle(cfg, args.bundleId, {
+            force: args.force,
+            onProgress: (phase, progress, message, total) => {
+              tracker.updateProgress(taskId, phase, progress, message, total);
+            },
+          });
+
+          tracker.completeTask(taskId, args.bundleId);
+
+          const resources = {
           startHere: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'START_HERE.md' }),
           agents: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'AGENTS.md' }),
           overview: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'OVERVIEW.md' }),
           manifest: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'manifest.json' }),
         };
 
-        const out = {
-          changed: args.force ? true : changed,
-          ...summary,
-          resources,
-        };
+          const out = {
+            changed: args.force ? true : changed,
+            ...summary,
+            resources,
+          };
 
-        return {
-          content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
-          structuredContent: out,
-        };
+          return {
+            content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
+            structuredContent: out,
+          };
+        } catch (updateErr) {
+          tracker.failTask(taskId, updateErr instanceof Error ? updateErr.message : String(updateErr));
+          throw updateErr;
+        }
       } catch (err) {
         throw wrapPreflightError(err);
       }
@@ -749,6 +858,9 @@ export async function startServer(): Promise<void> {
     },
     async (args) => {
       try {
+        // Check bundle completeness before any operation
+        await assertBundleComplete(cfg, args.bundleId);
+
         // Resolve bundle location across storageDirs (more robust than a single effectiveDir).
         const storageDir = await findBundleStorageDir(cfg.storageDirs, args.bundleId);
         if (!storageDir) {
@@ -800,7 +912,11 @@ export async function startServer(): Promise<void> {
     {
       title: 'Evidence: dependency graph (callers + imports)',
       description:
-        'Generate an evidence-based dependency graph for a target file/symbol inside a bundle. Output is deterministic (FTS + regex) and every edge includes traceable sources (file + range). This tool is read-only.',
+        'Generate an evidence-based dependency graph. Two modes: ' +
+        '(1) TARGET MODE: provide target.file to analyze a specific file\'s imports and callers. ' +
+        '(2) GLOBAL MODE: omit target to generate a project-wide import graph of all code files. ' +
+        'For target mode, file path must be bundle-relative: repos/{owner}/{repo}/norm/{path}. ' +
+        'Use preflight_search_bundle to find file paths, or check OVERVIEW.md.',
       inputSchema: DependencyGraphInputSchema,
       outputSchema: {
         meta: z.any(),
@@ -813,6 +929,9 @@ export async function startServer(): Promise<void> {
     },
     async (args) => {
       try {
+        // Check bundle completeness before generating dependency graph
+        await assertBundleComplete(cfg, args.bundleId);
+
         const out = await generateDependencyGraph(cfg, args);
         return {
           content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
@@ -842,6 +961,9 @@ export async function startServer(): Promise<void> {
     },
     async (args) => {
       try {
+        // Check bundle completeness before trace upsert
+        await assertBundleComplete(cfg, args.bundleId);
+
         const out = await traceUpsert(cfg, args);
         return {
           content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
@@ -885,6 +1007,11 @@ export async function startServer(): Promise<void> {
     },
     async (args) => {
       try {
+        // Check bundle completeness if bundleId is provided
+        if (args.bundleId) {
+          await assertBundleComplete(cfg, args.bundleId);
+        }
+
         const out = await traceQuery(cfg, args);
         return {
           content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
@@ -931,6 +1058,136 @@ export async function startServer(): Promise<void> {
         const summary = args.dryRun
           ? `Found ${result.totalFound} orphan bundle(s) (DRY RUN - not deleted)`
           : `Cleaned ${result.totalCleaned} of ${result.totalFound} orphan bundle(s)`;
+
+        return {
+          content: [{ type: 'text', text: summary }],
+          structuredContent: result,
+        };
+      } catch (err) {
+        throw wrapPreflightError(err);
+      }
+    }
+  );
+
+  // Get task status - for checking progress of in-progress bundle creations
+  server.registerTool(
+    'preflight_get_task_status',
+    {
+      title: 'Get task status',
+      description: 'Check status of bundle creation tasks (especially in-progress ones). Use when: "check bundle creation progress", "what is the status", "查看任务状态", "下载进度". Can query by taskId (from error), fingerprint, or repos.',
+      inputSchema: GetTaskStatusInputSchema,
+      outputSchema: {
+        found: z.boolean(),
+        task: z.object({
+          taskId: z.string(),
+          fingerprint: z.string(),
+          phase: z.string(),
+          progress: z.number(),
+          total: z.number().optional(),
+          message: z.string(),
+          startedAt: z.string(),
+          updatedAt: z.string(),
+          repos: z.array(z.string()),
+          bundleId: z.string().optional(),
+          error: z.string().optional(),
+        }).optional(),
+        inProgressLock: z.object({
+          bundleId: z.string(),
+          status: z.string(),
+          startedAt: z.string().optional(),
+          taskId: z.string().optional(),
+          repos: z.array(z.string()).optional(),
+          elapsedSeconds: z.number().optional(),
+        }).optional(),
+        activeTasks: z.array(z.object({
+          taskId: z.string(),
+          fingerprint: z.string(),
+          phase: z.string(),
+          progress: z.number(),
+          message: z.string(),
+          repos: z.array(z.string()),
+          startedAt: z.string(),
+        })).optional(),
+      },
+      annotations: {
+        readOnlyHint: true,
+      },
+    },
+    async (args) => {
+      try {
+        const tracker = getProgressTracker();
+        let result: {
+          found: boolean;
+          task?: TaskProgress;
+          inProgressLock?: {
+            bundleId: string;
+            status: string;
+            startedAt?: string;
+            taskId?: string;
+            repos?: string[];
+            elapsedSeconds?: number;
+          };
+          activeTasks?: TaskProgress[];
+        } = { found: false };
+
+        // Compute fingerprint if repos provided
+        let fingerprint = args.fingerprint;
+        if (!fingerprint && args.repos?.length) {
+          fingerprint = computeCreateInputFingerprint({
+            repos: args.repos,
+            libraries: args.libraries,
+            topics: args.topics,
+          });
+        }
+
+        // Query by taskId
+        if (args.taskId) {
+          const task = tracker.getTask(args.taskId);
+          if (task) {
+            result = { found: true, task };
+          }
+        }
+        // Query by fingerprint
+        else if (fingerprint) {
+          const task = tracker.getTaskByFingerprint(fingerprint);
+          if (task) {
+            result = { found: true, task };
+          }
+          
+          // Also check persistent in-progress lock
+          const lock = await checkInProgressLock(cfg, fingerprint);
+          if (lock) {
+            const elapsedSeconds = lock.startedAt
+              ? Math.round((Date.now() - new Date(lock.startedAt).getTime()) / 1000)
+              : undefined;
+            result.inProgressLock = {
+              bundleId: lock.bundleId,
+              status: lock.status ?? 'unknown',
+              startedAt: lock.startedAt,
+              taskId: lock.taskId,
+              repos: lock.repos,
+              elapsedSeconds,
+            };
+            result.found = true;
+          }
+        }
+        // If no specific query, return all active tasks
+        else {
+          const activeTasks = tracker.listActiveTasks();
+          if (activeTasks.length > 0) {
+            result = { found: true, activeTasks };
+          }
+        }
+
+        const summary = result.found
+          ? result.task
+            ? `Task ${result.task.taskId}: ${result.task.phase} (${result.task.progress}%) - ${result.task.message}`
+            : result.activeTasks
+              ? `${result.activeTasks.length} active task(s)`
+              : result.inProgressLock
+                ? `In-progress lock found (started ${result.inProgressLock.elapsedSeconds}s ago)`
+                : 'Status found'
+          : 'No matching task found';
 
         return {
           content: [{ type: 'text', text: summary }],

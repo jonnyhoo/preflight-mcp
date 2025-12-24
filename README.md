@@ -15,8 +15,12 @@ Each bundle contains:
 
 ## Features
 
-- **12 MCP tools** to create/update/repair/search/read bundles, generate evidence graphs, and manage trace links
-- **De-duplication**: prevent repeated indexing of the same normalized inputs
+- **13 MCP tools** to create/update/repair/search/read bundles, generate evidence graphs, and manage trace links
+- **Progress tracking**: Real-time progress reporting for long-running operations (create/update bundles)
+- **Bundle integrity check**: Prevents operations on incomplete bundles with helpful error messages
+- **De-duplication with in-progress lock**: Prevent duplicate bundle creation even during MCP timeouts
+- **Global dependency graph**: Generate project-wide import relationship graphs
+- **Batch file reading**: Read all key bundle files in a single call
 - **Resilient GitHub fetching**: configurable git clone timeout + GitHub archive (zipball) fallback
 - **Offline repair**: rebuild missing/empty derived artifacts (index/guides/overview) without re-fetching
 - **Static facts extraction** via `analysis/FACTS.json` (non-LLM)
@@ -117,7 +121,7 @@ Run end-to-end smoke test:
 npm run smoke
 ```
 
-## Tools (12 total)
+## Tools (13 total)
 
 ### `preflight_list_bundles`
 List bundle IDs in storage.
@@ -146,8 +150,10 @@ Input (example):
 **Note**: If the bundle contains code files, consider using `preflight_evidence_dependency_graph` for dependency analysis or `preflight_trace_upsert` for trace links.
 
 ### `preflight_read_file`
-Read a file from bundle (OVERVIEW.md, START_HERE.md, AGENTS.md, manifest.json, or any repo file).
-- Triggers: "查看概览", "项目概览", "看README", "bundle详情", "bundle状态", "仓库信息"
+Read file(s) from bundle. Two modes:
+- **Batch mode** (omit `file`): Returns ALL key files (OVERVIEW.md, START_HERE.md, AGENTS.md, manifest.json, repo READMEs) in one call
+- **Single file mode** (provide `file`): Returns that specific file
+- Triggers: "查看bundle", "bundle概览", "项目信息", "show bundle"
 - Use `file: "manifest.json"` to get bundle metadata (repos, timestamps, tags, etc.)
 
 ### `preflight_delete_bundle`
@@ -189,10 +195,12 @@ Optional parameters:
 - `limit`: Max total hits across all bundles
 
 ### `preflight_evidence_dependency_graph`
-Generate an evidence-based dependency graph for a target file/symbol (imports + callers).
+Generate an evidence-based dependency graph. Two modes:
+- **Target mode** (provide `target.file`): Analyze a specific file's imports and callers
+- **Global mode** (omit `target`): Generate project-wide import graph of all code files
 - Deterministic output with source ranges for edges.
 - Uses Tree-sitter parsing when `PREFLIGHT_AST_ENGINE=wasm`; falls back to regex extraction otherwise.
-- Emits `imports` edges (file → module) and, when resolvable, `imports_resolved` edges (file → internal file).
+- Emits `imports` edges (file → module) and `imports_resolved` edges (file → internal file).
 
 ### `preflight_trace_upsert`
 Upsert traceability links (commit↔ticket, symbol↔test, code↔doc, etc.) for a bundle.
@@ -209,6 +217,12 @@ Parameters:
 - `minAgeHours` (default: 1): Only clean bundles older than N hours
 
 Note: This is also automatically executed on server startup (background, non-blocking).
+
+### `preflight_get_task_status`
+Check status of bundle creation/update tasks (progress tracking).
+- Triggers: "check progress", "what is the status", "查看任务状态", "下载进度"
+- Query by `taskId` (from error), `fingerprint`, or `repos`
+- Shows: phase, progress percentage, message, elapsed time
 
 ## Resources
 

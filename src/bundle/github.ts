@@ -3,6 +3,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { logger } from '../logging/logger.js';
 
+/** Progress callback for git operations */
+export type GitProgressCallback = (phase: string, progress: number, message: string) => void;
+
 export type GitHubRepoRef = {
   owner: string;
   repo: string;
@@ -21,11 +24,30 @@ export function toCloneUrl(ref: GitHubRepoRef): string {
   return `https://github.com/${ref.owner}/${ref.repo}.git`;
 }
 
+/**
+ * Parse git clone progress from stderr.
+ * Git outputs progress like:
+ * - "Receiving objects:  45% (1234/2741)"
+ * - "Resolving deltas:  60% (100/167)"
+ */
+function parseGitProgress(line: string): { phase: string; percent: number } | null {
+  // Match patterns like "Receiving objects:  45% (1234/2741)"
+  const match = line.match(/(Receiving objects|Resolving deltas|Counting objects|Compressing objects):\s+(\d+)%/);
+  if (match) {
+    return {
+      phase: match[1]!,
+      percent: parseInt(match[2]!, 10),
+    };
+  }
+  return null;
+}
+
 async function runGit(
   args: string[],
-  opts?: { cwd?: string; timeoutMs?: number }
+  opts?: { cwd?: string; timeoutMs?: number; onProgress?: GitProgressCallback }
 ): Promise<{ stdout: string; stderr: string }> {
   const timeoutMs = opts?.timeoutMs ?? 5 * 60_000;
+  const onProgress = opts?.onProgress;
   
   return new Promise((resolve, reject) => {
     const child = spawn('git', args, {
@@ -83,7 +105,20 @@ async function runGit(
     });
 
     child.stderr?.on('data', (data) => {
-      stderr += data.toString('utf8');
+      const chunk = data.toString('utf8');
+      stderr += chunk;
+      
+      // Parse and report progress
+      if (onProgress) {
+        // Git progress can come in chunks, split by lines
+        const lines = chunk.split(/[\r\n]+/);
+        for (const line of lines) {
+          const progress = parseGitProgress(line);
+          if (progress) {
+            onProgress(progress.phase, progress.percent, `${progress.phase}: ${progress.percent}%`);
+          }
+        }
+      }
     });
 
     child.on('error', (err) => {
@@ -148,14 +183,15 @@ function validateGitRef(ref: string): void {
 export async function shallowClone(
   cloneUrl: string,
   destDir: string,
-  opts?: { ref?: string; timeoutMs?: number }
+  opts?: { ref?: string; timeoutMs?: number; onProgress?: GitProgressCallback }
 ): Promise<void> {
   await fs.mkdir(path.dirname(destDir), { recursive: true });
 
   // Clean dest if exists.
   await fs.rm(destDir, { recursive: true, force: true });
 
-  const args = ['-c', 'core.autocrlf=false', 'clone', '--depth', '1', '--no-tags', '--single-branch'];
+  // Use --progress to force progress output even when not attached to a terminal
+  const args = ['-c', 'core.autocrlf=false', 'clone', '--depth', '1', '--no-tags', '--single-branch', '--progress'];
   if (opts?.ref) {
     // Validate ref before using it in git command
     validateGitRef(opts.ref);
@@ -163,7 +199,7 @@ export async function shallowClone(
   }
   args.push(cloneUrl, destDir);
 
-  await runGit(args, { timeoutMs: opts?.timeoutMs ?? 15 * 60_000 });
+  await runGit(args, { timeoutMs: opts?.timeoutMs ?? 15 * 60_000, onProgress: opts?.onProgress });
 }
 
 export async function getLocalHeadSha(repoDir: string): Promise<string> {

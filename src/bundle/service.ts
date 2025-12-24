@@ -22,6 +22,10 @@ import { ingestContext7Libraries, type Context7LibrarySummary } from './context7
 import { analyzeBundleStatic, type AnalysisMode } from './analysis.js';
 import { autoDetectTags, generateDisplayName, generateDescription } from './tagging.js';
 import { bundleCreationLimiter } from '../core/concurrency-limiter.js';
+import { getProgressTracker, type TaskPhase, formatBytes, calcPercent } from '../jobs/progressTracker.js';
+
+/** Progress callback for reporting bundle creation progress */
+export type BundleProgressCallback = (phase: TaskPhase, progress: number, message: string, total?: number) => void;
 
 export type CreateBundleInput = {
   repos: RepoInput[];
@@ -54,14 +58,31 @@ export type CreateBundleOptions = {
    * - createNew: bypass de-duplication (back-compat)
    */
   ifExists?: CreateIfExistsPolicy;
+  /** Optional progress callback for reporting creation progress */
+  onProgress?: BundleProgressCallback;
 };
 
 const DEDUP_INDEX_FILE = '.preflight-dedup-index.json';
 
+type DedupEntryStatus = 'complete' | 'in-progress';
+
+type DedupEntry = {
+  bundleId: string;
+  bundleUpdatedAt: string;
+  /** Status of the bundle creation. 'complete' means done, 'in-progress' means still creating. */
+  status?: DedupEntryStatus;
+  /** Start time of in-progress creation (ISO string) */
+  startedAt?: string;
+  /** Task ID for in-progress creation */
+  taskId?: string;
+  /** Repos being processed (for display) */
+  repos?: string[];
+};
+
 type DedupIndexV1 = {
   schemaVersion: 1;
   updatedAt: string;
-  byFingerprint: Record<string, { bundleId: string; bundleUpdatedAt: string }>;
+  byFingerprint: Record<string, DedupEntry>;
 };
 
 function sha256Hex(text: string): string {
@@ -150,7 +171,13 @@ async function writeDedupIndex(storageDir: string, idx: DedupIndexV1): Promise<v
   }
 }
 
-async function updateDedupIndexBestEffort(cfg: PreflightConfig, fingerprint: string, bundleId: string, bundleUpdatedAt: string): Promise<void> {
+async function updateDedupIndexBestEffort(
+  cfg: PreflightConfig,
+  fingerprint: string,
+  bundleId: string,
+  bundleUpdatedAt: string,
+  status: DedupEntryStatus = 'complete'
+): Promise<void> {
   for (const storageDir of cfg.storageDirs) {
     try {
       const parentAvailable = await isParentAvailable(storageDir);
@@ -158,13 +185,120 @@ async function updateDedupIndexBestEffort(cfg: PreflightConfig, fingerprint: str
       await ensureDir(storageDir);
 
       const idx = await readDedupIndex(storageDir);
-      idx.byFingerprint[fingerprint] = { bundleId, bundleUpdatedAt };
+      idx.byFingerprint[fingerprint] = { bundleId, bundleUpdatedAt, status };
       idx.updatedAt = nowIso();
       await writeDedupIndex(storageDir, idx);
     } catch (err) {
       logger.debug(`Failed to update dedup index in ${storageDir} (best-effort)`, err instanceof Error ? err : undefined);
     }
   }
+}
+
+/**
+ * Set in-progress lock for a fingerprint. Returns false if already locked (not timed out).
+ */
+async function setInProgressLock(
+  cfg: PreflightConfig,
+  fingerprint: string,
+  taskId: string,
+  repos: string[]
+): Promise<{ locked: true } | { locked: false; existingEntry: DedupEntry }> {
+  const now = nowIso();
+  const nowMs = Date.now();
+
+  for (const storageDir of cfg.storageDirs) {
+    try {
+      if (!(await isPathAvailable(storageDir))) continue;
+      await ensureDir(storageDir);
+
+      const idx = await readDedupIndex(storageDir);
+      const existing = idx.byFingerprint[fingerprint];
+
+      // Check if there's an existing in-progress lock
+      if (existing?.status === 'in-progress' && existing.startedAt) {
+        const startedMs = new Date(existing.startedAt).getTime();
+        const elapsed = nowMs - startedMs;
+        
+        // If lock hasn't timed out, return the existing entry
+        if (elapsed < cfg.inProgressLockTimeoutMs) {
+          return { locked: false, existingEntry: existing };
+        }
+        // Lock timed out - will be overwritten
+        logger.warn(`In-progress lock timed out for fingerprint ${fingerprint.slice(0, 8)}...`);
+      }
+
+      // Set new in-progress lock
+      idx.byFingerprint[fingerprint] = {
+        bundleId: '', // Will be set on completion
+        bundleUpdatedAt: now,
+        status: 'in-progress',
+        startedAt: now,
+        taskId,
+        repos,
+      };
+      idx.updatedAt = now;
+      await writeDedupIndex(storageDir, idx);
+      
+      return { locked: true };
+    } catch (err) {
+      logger.debug(`Failed to set in-progress lock in ${storageDir}`, err instanceof Error ? err : undefined);
+    }
+  }
+
+  // If we couldn't write to any storage, assume we can proceed (best-effort)
+  return { locked: true };
+}
+
+/**
+ * Clear in-progress lock (on failure or completion with status='complete').
+ */
+async function clearInProgressLock(cfg: PreflightConfig, fingerprint: string): Promise<void> {
+  for (const storageDir of cfg.storageDirs) {
+    try {
+      if (!(await isPathAvailable(storageDir))) continue;
+
+      const idx = await readDedupIndex(storageDir);
+      const existing = idx.byFingerprint[fingerprint];
+      
+      // Only clear if it's in-progress
+      if (existing?.status === 'in-progress') {
+        delete idx.byFingerprint[fingerprint];
+        idx.updatedAt = nowIso();
+        await writeDedupIndex(storageDir, idx);
+      }
+    } catch (err) {
+      logger.debug(`Failed to clear in-progress lock in ${storageDir}`, err instanceof Error ? err : undefined);
+    }
+  }
+}
+
+/**
+ * Check if a fingerprint has an in-progress lock (not timed out).
+ */
+export async function checkInProgressLock(cfg: PreflightConfig, fingerprint: string): Promise<DedupEntry | null> {
+  const nowMs = Date.now();
+
+  for (const storageDir of cfg.storageDirs) {
+    try {
+      if (!(await isPathAvailable(storageDir))) continue;
+
+      const idx = await readDedupIndex(storageDir);
+      const existing = idx.byFingerprint[fingerprint];
+      
+      if (existing?.status === 'in-progress' && existing.startedAt) {
+        const startedMs = new Date(existing.startedAt).getTime();
+        const elapsed = nowMs - startedMs;
+        
+        if (elapsed < cfg.inProgressLockTimeoutMs) {
+          return existing;
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return null;
 }
 
 async function readBundleSummary(cfg: PreflightConfig, bundleId: string): Promise<BundleSummary> {
@@ -198,6 +332,8 @@ async function findExistingBundleByFingerprint(cfg: PreflightConfig, fingerprint
       if (!(await isPathAvailable(storageDir))) continue;
       const idx = await readDedupIndex(storageDir);
       const hit = idx.byFingerprint[fingerprint];
+      // Skip in-progress entries - they don't have a completed bundle yet
+      if (hit?.status === 'in-progress') continue;
       if (hit?.bundleId && (await bundleExistsMulti(cfg.storageDirs, hit.bundleId))) {
         return hit.bundleId;
       }
@@ -404,6 +540,41 @@ async function validateBundleCompleteness(bundleRoot: string): Promise<{
     isValid: missingComponents.length === 0,
     missingComponents,
   };
+}
+
+/**
+ * Assert that a bundle is complete and ready for operations.
+ * Throws an error with helpful guidance if the bundle is incomplete.
+ * Should be called at the entry point of tools that require a complete bundle
+ * (e.g., dependency graph, trace links, search).
+ */
+export async function assertBundleComplete(
+  cfg: PreflightConfig,
+  bundleId: string
+): Promise<void> {
+  const storageDir = await findBundleStorageDir(cfg.storageDirs, bundleId);
+  if (!storageDir) {
+    throw new Error(`Bundle not found: ${bundleId}`);
+  }
+
+  const bundleRoot = getBundlePaths(storageDir, bundleId).rootDir;
+  const { isValid, missingComponents } = await validateBundleCompleteness(bundleRoot);
+
+  if (!isValid) {
+    const issues = missingComponents.join('\n  - ');
+    throw new Error(
+      `Bundle is incomplete and cannot be used for this operation.\n\n` +
+      `Bundle ID: ${bundleId}\n` +
+      `Missing components:\n  - ${issues}\n\n` +
+      `This usually happens when:\n` +
+      `1. Bundle creation was interrupted (timeout, network error, etc.)\n` +
+      `2. Bundle download is still in progress\n\n` +
+      `Suggested actions:\n` +
+      `- Use preflight_update_bundle with force:true to re-download the repository\n` +
+      `- Or use preflight_delete_bundle and preflight_create_bundle to start fresh\n` +
+      `- Check preflight_get_task_status if creation might still be in progress`
+    );
+  }
 }
 
 /**
@@ -757,6 +928,7 @@ async function cloneAndIngestGitHubRepo(params: {
   owner: string;
   repo: string;
   ref?: string;
+  onProgress?: (phase: string, progress: number, message: string) => void;
 }): Promise<{
   headSha?: string;
   files: IngestedFile[];
@@ -782,7 +954,14 @@ async function cloneAndIngestGitHubRepo(params: {
   let refUsed: string | undefined = params.ref;
 
   try {
-    await shallowClone(cloneUrl, tmpCheckoutGit, { ref: params.ref, timeoutMs: params.cfg.gitCloneTimeoutMs });
+    params.onProgress?.('cloning', 0, `Cloning ${repoId}...`);
+    await shallowClone(cloneUrl, tmpCheckoutGit, {
+      ref: params.ref,
+      timeoutMs: params.cfg.gitCloneTimeoutMs,
+      onProgress: (phase, percent, msg) => {
+        params.onProgress?.('cloning', percent, `${repoId}: ${msg}`);
+      },
+    });
     headSha = await getLocalHeadSha(tmpCheckoutGit);
   } catch (err) {
     // Fallback: GitHub archive download (zipball) + extract.
@@ -790,12 +969,17 @@ async function cloneAndIngestGitHubRepo(params: {
     const msg = err instanceof Error ? err.message : String(err);
     notes.push(`git clone failed; used GitHub archive fallback: ${msg}`);
 
+    params.onProgress?.('downloading', 0, `Downloading ${repoId} archive...`);
     const archive = await downloadAndExtractGitHubArchive({
       cfg: params.cfg,
       owner: params.owner,
       repo: params.repo,
       ref: params.ref,
       destDir: tmpArchiveDir,
+      onProgress: (downloaded, total, msg) => {
+        const percent = total ? Math.round((downloaded / total) * 100) : 0;
+        params.onProgress?.('downloading', percent, `${repoId}: ${msg}`);
+      },
     });
 
     repoRootForIngest = archive.repoRoot;
@@ -899,6 +1083,16 @@ async function createBundleInternal(
   options?: CreateBundleOptions
 ): Promise<BundleSummary> {
   const fingerprint = computeCreateInputFingerprint(input);
+  const repoIds = input.repos.map((r) => r.repo);
+  const onProgress = options?.onProgress;
+  const tracker = getProgressTracker();
+
+  // Helper to report progress
+  const reportProgress = (phase: TaskPhase, progress: number, message: string, total?: number) => {
+    if (onProgress) {
+      onProgress(phase, progress, message, total);
+    }
+  };
 
   const ifExists: CreateIfExistsPolicy = options?.ifExists ?? 'error';
   if (ifExists !== 'createNew') {
@@ -913,6 +1107,31 @@ async function createBundleInternal(
       }
       throw new Error(`Bundle already exists for these inputs: ${existing}`);
     }
+  }
+
+  // Start tracking this task
+  const taskId = tracker.startTask(fingerprint, repoIds);
+  reportProgress('starting', 0, `Starting bundle creation for ${repoIds.join(', ')}`);
+
+  // Try to acquire in-progress lock
+  const lockResult = await setInProgressLock(cfg, fingerprint, taskId, repoIds);
+  if (!lockResult.locked) {
+    // Another task is already creating this bundle
+    const entry = lockResult.existingEntry;
+    const elapsedSec = entry.startedAt
+      ? Math.round((Date.now() - new Date(entry.startedAt).getTime()) / 1000)
+      : 0;
+    const msg = `Bundle creation already in progress (taskId: ${entry.taskId}, started ${elapsedSec}s ago). ` +
+      `Use preflight_get_task_status to check progress.`;
+    
+    // Throw a special error that can be caught and handled
+    const err = new Error(msg);
+    (err as any).code = 'BUNDLE_IN_PROGRESS';
+    (err as any).taskId = entry.taskId;
+    (err as any).fingerprint = fingerprint;
+    (err as any).repos = entry.repos;
+    (err as any).startedAt = entry.startedAt;
+    throw err;
   }
 
   const bundleId = crypto.randomUUID();
@@ -935,10 +1154,18 @@ async function createBundleInternal(
 
   try {
     // All operations happen in tmpPaths (temporary directory)
+    const totalRepos = input.repos.length;
+    let repoIndex = 0;
 
     for (const repoInput of input.repos) {
+      repoIndex++;
+      const repoProgress = Math.round((repoIndex - 1) / totalRepos * 40); // 0-40% for repo fetching
+      
       if (repoInput.kind === 'github') {
         const { owner, repo } = parseOwnerRepo(repoInput.repo);
+        reportProgress('cloning', repoProgress, `[${repoIndex}/${totalRepos}] Fetching ${owner}/${repo}...`);
+        tracker.updateProgress(taskId, 'cloning', repoProgress, `Fetching ${owner}/${repo}...`);
+        
         const { headSha, files, skipped, notes, source } = await cloneAndIngestGitHubRepo({
           cfg,
           bundleId,
@@ -946,6 +1173,12 @@ async function createBundleInternal(
           owner,
           repo,
           ref: repoInput.ref,
+          onProgress: (phase, percent, msg) => {
+            // Map clone/download progress to overall progress (0-40% range per repo)
+            const overallProgress = repoProgress + Math.round(percent * 0.4 / totalRepos);
+            reportProgress(phase as TaskPhase, overallProgress, `[${repoIndex}/${totalRepos}] ${msg}`);
+            tracker.updateProgress(taskId, phase as TaskPhase, overallProgress, msg);
+          },
         });
 
         allIngestedFiles.push(...files);
@@ -959,6 +1192,9 @@ async function createBundleInternal(
       } else {
         // Local repository
         const { owner, repo } = parseOwnerRepo(repoInput.repo);
+        reportProgress('ingesting', repoProgress, `[${repoIndex}/${totalRepos}] Ingesting local ${owner}/${repo}...`);
+        tracker.updateProgress(taskId, 'ingesting', repoProgress, `Ingesting local ${owner}/${repo}...`);
+        
         const { files, skipped } = await ingestLocalRepo({
           cfg,
           bundleId,
@@ -993,6 +1229,9 @@ async function createBundleInternal(
   }
 
   // Build index.
+  reportProgress('indexing', 50, `Building search index (${allIngestedFiles.length} files)...`);
+  tracker.updateProgress(taskId, 'indexing', 50, `Building search index (${allIngestedFiles.length} files)...`);
+  
   await rebuildIndex(tmpPaths.searchDbPath, allIngestedFiles, {
     includeDocs: true,
     includeCode: true,
@@ -1056,6 +1295,9 @@ async function createBundleInternal(
   });
 
   // Generate static facts (FACTS.json) FIRST. This is intentionally non-LLM and safe to keep inside bundles.
+  reportProgress('analyzing', 70, 'Analyzing code structure...');
+  tracker.updateProgress(taskId, 'analyzing', 70, 'Analyzing code structure...');
+  
   await generateFactsBestEffort({
     bundleId,
     bundleRoot: tmpPaths.rootDir,
@@ -1064,6 +1306,9 @@ async function createBundleInternal(
   });
 
   // Overview (S2: factual-only with evidence pointers) - generated AFTER FACTS.json
+  reportProgress('generating', 80, 'Generating overview...');
+  tracker.updateProgress(taskId, 'generating', 80, 'Generating overview...');
+  
   const perRepoOverviews = reposSummary
     .filter((r) => r.kind === 'github' || r.kind === 'local')
     .map((r) => {
@@ -1091,6 +1336,9 @@ async function createBundleInternal(
 
     // ATOMIC OPERATION: Move from temp to final location
     // This is atomic on most filesystems - bundle becomes visible only when complete
+    reportProgress('finalizing', 90, 'Finalizing bundle...');
+    tracker.updateProgress(taskId, 'finalizing', 90, 'Finalizing bundle...');
+    
     logger.info(`Moving bundle ${bundleId} from temp to final location (atomic)`);
     await ensureDir(effectiveStorageDir);
     
@@ -1118,7 +1366,11 @@ async function createBundleInternal(
     }
 
     // Update de-duplication index (best-effort). This is intentionally after atomic move.
-    await updateDedupIndexBestEffort(cfg, fingerprint, bundleId, createdAt);
+    await updateDedupIndexBestEffort(cfg, fingerprint, bundleId, createdAt, 'complete');
+
+    // Mark task complete
+    reportProgress('complete', 100, `Bundle created: ${bundleId}`);
+    tracker.completeTask(taskId, bundleId);
 
     const summary = {
       bundleId,
@@ -1134,9 +1386,18 @@ async function createBundleInternal(
     // Clean up temp directory on failure
     logger.error(`Bundle creation failed, cleaning up temp: ${bundleId}`, err instanceof Error ? err : undefined);
     await rmIfExists(tmpPaths.rootDir);
-
-    // Enhance error message
+    
+    // Clear in-progress lock on failure
+    await clearInProgressLock(cfg, fingerprint);
+    
+    // Mark task failed
     const errorMsg = err instanceof Error ? err.message : String(err);
+    tracker.failTask(taskId, errorMsg);
+
+    // Re-throw with enhanced message (unless it's already our BUNDLE_IN_PROGRESS error)
+    if ((err as any)?.code === 'BUNDLE_IN_PROGRESS') {
+      throw err;
+    }
     throw new Error(`Failed to create bundle: ${errorMsg}`);
   } finally {
     // Ensure temp directory is cleaned up (double safety)
@@ -1149,6 +1410,8 @@ async function createBundleInternal(
 export type UpdateBundleOptions = {
   checkOnly?: boolean;
   force?: boolean;
+  /** Optional progress callback for reporting update progress */
+  onProgress?: BundleProgressCallback;
 };
 
 /** Check if a bundle has upstream changes without applying updates. */
@@ -1478,17 +1741,33 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
   const manifest = await readManifest(paths.manifestPath);
 
   const updatedAt = nowIso();
+  const onProgress = options?.onProgress;
+
+  // Report progress helper
+  const reportProgress = (phase: TaskPhase, progress: number, message: string, total?: number) => {
+    if (onProgress) {
+      onProgress(phase, progress, message, total);
+    }
+  };
+
+  reportProgress('starting', 0, `Updating bundle ${bundleId}...`);
 
   let changed = false;
   const allIngestedFiles: IngestedFile[] = [];
   const reposSummary: BundleSummary['repos'] = [];
 
+  const totalRepos = manifest.inputs.repos.length;
+  let repoIndex = 0;
+
   // Rebuild everything obvious for now (simple + deterministic).
   for (const repoInput of manifest.inputs.repos) {
+    repoIndex++;
     if (repoInput.kind === 'github') {
       const { owner, repo } = parseOwnerRepo(repoInput.repo);
       const repoId = `${owner}/${repo}`;
       const cloneUrl = toCloneUrl({ owner, repo });
+
+      reportProgress('cloning', calcPercent(repoIndex - 1, totalRepos), `Checking ${repoId}...`, totalRepos);
 
       let remoteSha: string | undefined;
       try {
@@ -1502,6 +1781,8 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
         changed = true;
       }
 
+      reportProgress('downloading', calcPercent(repoIndex - 1, totalRepos), `Fetching ${repoId}...`, totalRepos);
+
       const { headSha, files, skipped, notes, source } = await cloneAndIngestGitHubRepo({
         cfg,
         bundleId,
@@ -1509,6 +1790,9 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
         owner,
         repo,
         ref: repoInput.ref,
+        onProgress: (phase, progress, message) => {
+          reportProgress(phase as TaskPhase, progress, message);
+        },
       });
 
       if (prev?.headSha && headSha && headSha !== prev.headSha) {
@@ -1546,6 +1830,7 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
   // Context7 libraries (best-effort).
   let librariesSummary: Context7LibrarySummary[] | undefined;
   if (manifest.inputs.libraries?.length) {
+    reportProgress('downloading', 80, 'Fetching Context7 libraries...');
     await rmIfExists(paths.librariesDir);
     await ensureDir(paths.librariesDir);
 
@@ -1561,6 +1846,7 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
   }
 
   // Rebuild index.
+  reportProgress('indexing', 85, `Rebuilding search index (${allIngestedFiles.length} files)...`);
   await rebuildIndex(paths.searchDbPath, allIngestedFiles, {
     includeDocs: manifest.index.includeDocs,
     includeCode: manifest.index.includeCode,
@@ -1590,6 +1876,7 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
   await writeManifest(paths.manifestPath, newManifest);
 
   // Regenerate guides + overview.
+  reportProgress('generating', 90, 'Regenerating guides and overview...');
   await writeAgentsMd(paths.agentsPath);
   await writeStartHereMd({
     targetPath: paths.startHerePath,
@@ -1615,6 +1902,7 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
   await writeOverviewFile(paths.overviewPath, overviewMd);
 
   // Refresh static facts (FACTS.json) after update.
+  reportProgress('analyzing', 95, 'Analyzing bundle...');
   await generateFactsBestEffort({
     bundleId,
     bundleRoot: paths.rootDir,
@@ -1623,12 +1911,15 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
   });
 
   // Mirror to backup storage directories (non-blocking on failures)
+  reportProgress('finalizing', 98, 'Finalizing update...');
   if (cfg.storageDirs.length > 1) {
     await mirrorBundleToBackups(effectiveStorageDir, cfg.storageDirs, bundleId);
   }
 
   // Keep the de-duplication index fresh (best-effort).
   await updateDedupIndexBestEffort(cfg, fingerprint, bundleId, updatedAt);
+
+  reportProgress('complete', 100, `Bundle updated: ${bundleId}`);
 
   const summary: BundleSummary = {
     bundleId,
