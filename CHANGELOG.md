@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] - 2025-12-24
+
+### Added
+- **User-facing warnings**: Bundle creation now returns `warnings` array when network issues occur
+- **Git→ZIP fallback feedback**: Clear notification when git clone fails and ZIP download is used
+- **Repair unfixable issues**: `preflight_repair_bundle` now reports issues it cannot fix (e.g., empty repos/)
+
+### Changed
+- **Bundle creation response**: Now shows detailed warnings about network fallbacks instead of just JSON
+- **Repair response**: Clearly distinguishes "nothing to repair" from "cannot repair offline"
+- **Error messages**: Both git and ZIP failures now show actionable suggestions
+
+### Fixed
+- **BUNDLE_IN_PROGRESS schema error**: Fixed `repos` field type conflict in in-progress response (renamed to `requestedRepos`)
+- **Temp file cleanup**: Better cleanup of temp checkouts directory after bundle creation (success or failure)
+- **Misleading repair messages**: Repair no longer says "OK" when repos/ is empty and unfixable
+
 ## [0.1.4] - 2025-12-24
 
 ### Added

@@ -45,6 +45,8 @@ export type BundleSummary = {
     notes?: string[];
   }>;
   libraries?: Context7LibrarySummary[];
+  /** User-facing warnings (e.g., git clone failed, used zip fallback) */
+  warnings?: string[];
 };
 
 export type CreateIfExistsPolicy = 'error' | 'returnExisting' | 'updateExisting' | 'createNew';
@@ -934,6 +936,8 @@ async function cloneAndIngestGitHubRepo(params: {
   files: IngestedFile[];
   skipped: string[];
   notes: string[];
+  /** User-facing warnings for communication (e.g., git failed, used zip fallback) */
+  warnings: string[];
   source: 'git' | 'archive';
 }> {
   const repoId = `${params.owner}/${params.repo}`;
@@ -949,6 +953,7 @@ async function cloneAndIngestGitHubRepo(params: {
   let repoRootForIngest = tmpCheckoutGit;
   let headSha: string | undefined;
   const notes: string[] = [];
+  const warnings: string[] = [];
   let source: 'git' | 'archive' = 'git';
   let fetchedAt = nowIso();
   let refUsed: string | undefined = params.ref;
@@ -966,25 +971,60 @@ async function cloneAndIngestGitHubRepo(params: {
   } catch (err) {
     // Fallback: GitHub archive download (zipball) + extract.
     source = 'archive';
-    const msg = err instanceof Error ? err.message : String(err);
-    notes.push(`git clone failed; used GitHub archive fallback: ${msg}`);
+    const errMsg = err instanceof Error ? err.message : String(err);
+    notes.push(`git clone failed; used GitHub archive fallback: ${errMsg}`);
+    
+    // User-facing warning: communicate the network issue clearly
+    warnings.push(
+      `⚠️ [${repoId}] Git clone failed (network issue), switched to ZIP download.\n` +
+      `   Reason: ${errMsg.slice(0, 200)}${errMsg.length > 200 ? '...' : ''}`
+    );
 
     params.onProgress?.('downloading', 0, `Downloading ${repoId} archive...`);
-    const archive = await downloadAndExtractGitHubArchive({
-      cfg: params.cfg,
-      owner: params.owner,
-      repo: params.repo,
-      ref: params.ref,
-      destDir: tmpArchiveDir,
-      onProgress: (downloaded, total, msg) => {
-        const percent = total ? Math.round((downloaded / total) * 100) : 0;
-        params.onProgress?.('downloading', percent, `${repoId}: ${msg}`);
-      },
-    });
+    
+    // Track zip path for error message
+    const zipPath = path.join(tmpArchiveDir, `github-zipball-${params.owner}-${params.repo}-partial.zip`);
+    
+    try {
+      const archive = await downloadAndExtractGitHubArchive({
+        cfg: params.cfg,
+        owner: params.owner,
+        repo: params.repo,
+        ref: params.ref,
+        destDir: tmpArchiveDir,
+        onProgress: (downloaded, total, msg) => {
+          const percent = total ? Math.round((downloaded / total) * 100) : 0;
+          params.onProgress?.('downloading', percent, `${repoId}: ${msg}`);
+        },
+      });
 
-    repoRootForIngest = archive.repoRoot;
-    fetchedAt = archive.fetchedAt;
-    refUsed = archive.refUsed;
+      repoRootForIngest = archive.repoRoot;
+      fetchedAt = archive.fetchedAt;
+      refUsed = archive.refUsed;
+      
+      // Success: ZIP download completed
+      warnings.push(`✅ [${repoId}] ZIP download completed successfully as fallback.`);
+    } catch (zipErr) {
+      // ZIP download also failed - provide helpful error with temp path
+      const zipErrMsg = zipErr instanceof Error ? zipErr.message : String(zipErr);
+      
+      // Check if partial file exists
+      const partialExists = await statOrNull(tmpArchiveDir);
+      const tempPathMsg = partialExists 
+        ? `\n   Partial files may exist in: ${tmpArchiveDir}` 
+        : '';
+      
+      throw new Error(
+        `Both git clone and ZIP download failed for ${repoId}.\n\n` +
+        `Git error: ${errMsg.slice(0, 150)}\n` +
+        `ZIP error: ${zipErrMsg.slice(0, 150)}${tempPathMsg}\n\n` +
+        `Suggestions:\n` +
+        `1. Check your network connection\n` +
+        `2. Verify the repository exists: https://github.com/${repoId}\n` +
+        `3. If you have the repo locally, use 'kind: local' with 'path: /your/local/path'\n` +
+        `4. If behind a proxy, configure GITHUB_TOKEN environment variable`
+      );
+    }
   }
 
   const bundlePaths = getBundlePaths(params.storageDir, params.bundleId);
@@ -1025,7 +1065,7 @@ async function cloneAndIngestGitHubRepo(params: {
   await rmIfExists(tmpCheckoutGit);
   await rmIfExists(tmpArchiveDir);
 
-  return { headSha, files: ingested.files, skipped: ingested.skipped, notes, source };
+  return { headSha, files: ingested.files, skipped: ingested.skipped, notes, warnings, source };
 }
 
 function groupFilesByRepoId(files: IngestedFile[]): Array<{ repoId: string; files: IngestedFile[] }> {
@@ -1151,6 +1191,10 @@ async function createBundleInternal(
 
   const allIngestedFiles: IngestedFile[] = [];
   const reposSummary: BundleSummary['repos'] = [];
+  const allWarnings: string[] = [];
+
+  // Track temp checkout directory for cleanup
+  const tmpCheckoutsDir = path.join(cfg.tmpDir, 'checkouts', bundleId);
 
   try {
     // All operations happen in tmpPaths (temporary directory)
@@ -1166,7 +1210,7 @@ async function createBundleInternal(
         reportProgress('cloning', repoProgress, `[${repoIndex}/${totalRepos}] Fetching ${owner}/${repo}...`);
         tracker.updateProgress(taskId, 'cloning', repoProgress, `Fetching ${owner}/${repo}...`);
         
-        const { headSha, files, skipped, notes, source } = await cloneAndIngestGitHubRepo({
+        const { headSha, files, skipped, notes, warnings, source } = await cloneAndIngestGitHubRepo({
           cfg,
           bundleId,
           storageDir: tmpBundlesDir,
@@ -1182,6 +1226,7 @@ async function createBundleInternal(
         });
 
         allIngestedFiles.push(...files);
+        allWarnings.push(...warnings);
         reposSummary.push({
           kind: 'github',
           id: `${owner}/${repo}`,
@@ -1372,12 +1417,13 @@ async function createBundleInternal(
     reportProgress('complete', 100, `Bundle created: ${bundleId}`);
     tracker.completeTask(taskId, bundleId);
 
-    const summary = {
+    const summary: BundleSummary = {
       bundleId,
       createdAt,
       updatedAt: createdAt,
       repos: reposSummary,
       libraries: librariesSummary,
+      warnings: allWarnings.length > 0 ? allWarnings : undefined,
     };
 
     return summary;
@@ -1403,6 +1449,11 @@ async function createBundleInternal(
     // Ensure temp directory is cleaned up (double safety)
     await rmIfExists(tmpPaths.rootDir).catch((err) => {
       logger.debug('Failed to cleanup temp bundle directory in finally block (non-critical)', err instanceof Error ? err : undefined);
+    });
+    
+    // Clean up temp checkouts directory (git clones, zip extracts)
+    await rmIfExists(tmpCheckoutsDir).catch((err) => {
+      logger.debug('Failed to cleanup temp checkouts directory in finally block (non-critical)', err instanceof Error ? err : undefined);
     });
   }
 }
@@ -1468,6 +1519,8 @@ export type RepairBundleResult = {
   mode: RepairBundleMode;
   repaired: boolean;
   actionsTaken: string[];
+  /** Issues that cannot be fixed by repair (require re-download) */
+  unfixableIssues?: string[];
   before: { isValid: boolean; missingComponents: string[] };
   after: { isValid: boolean; missingComponents: string[] };
   updatedAt?: string;
@@ -1623,6 +1676,17 @@ export async function repairBundle(cfg: PreflightConfig, bundleId: string, optio
   const manifest = await readManifest(paths.manifestPath);
 
   const actionsTaken: string[] = [];
+  const unfixableIssues: string[] = [];
+
+  // Check for unfixable issues (require re-download, can't be repaired offline)
+  const reposHasContent = before.missingComponents.every(c => !c.includes('repos/'));
+  if (!reposHasContent) {
+    unfixableIssues.push(
+      'repos/ directory is empty or missing - this requires re-downloading the repository. ' +
+      'Use preflight_delete_bundle and preflight_create_bundle to start fresh, ' +
+      'or use preflight_update_bundle with force:true to re-fetch.'
+    );
+  }
 
   // Determine what needs repair.
   const stAgents = await statOrNull(paths.agentsPath);
@@ -1728,6 +1792,7 @@ export async function repairBundle(cfg: PreflightConfig, bundleId: string, optio
     mode,
     repaired: actionsTaken.length > 0,
     actionsTaken,
+    unfixableIssues: unfixableIssues.length > 0 ? unfixableIssues : undefined,
     before,
     after,
     updatedAt,

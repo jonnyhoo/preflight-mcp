@@ -132,7 +132,7 @@ export async function startServer(): Promise<void> {
   const server = new McpServer(
     {
       name: 'preflight-mcp',
-      version: '0.1.4',
+version: '0.1.5',
       description: 'Create evidence-based preflight bundles for repositories (docs + code) with SQLite FTS search.',
     },
     {
@@ -473,15 +473,16 @@ export async function startServer(): Promise<void> {
       description: 'Create a new bundle from GitHub repos or local directories (or update an existing one if ifExists=updateExisting). Use when: "index this repo", "create bundle for", "add repo to preflight", "索引这个仓库", "创建bundle", "添加GitHub项目", "学习这个项目". NOTE: If the bundle contains code files, consider asking user if they want to generate dependency graph (preflight_evidence_dependency_graph) or establish trace links (preflight_trace_upsert).',
       inputSchema: CreateBundleInputSchema,
       outputSchema: {
-        bundleId: z.string(),
-        createdAt: z.string(),
-        updatedAt: z.string(),
+        // Normal completion fields
+        bundleId: z.string().optional(),
+        createdAt: z.string().optional(),
+        updatedAt: z.string().optional(),
         resources: z.object({
           startHere: z.string(),
           agents: z.string(),
           overview: z.string(),
           manifest: z.string(),
-        }),
+        }).optional(),
         repos: z.array(
           z.object({
             kind: z.enum(['github', 'local']),
@@ -490,7 +491,7 @@ export async function startServer(): Promise<void> {
             headSha: z.string().optional(),
             notes: z.array(z.string()).optional(),
           })
-        ),
+        ).optional(),
         libraries: z
           .array(
             z.object({
@@ -503,6 +504,20 @@ export async function startServer(): Promise<void> {
             })
           )
           .optional(),
+        // User-facing warnings (e.g., git clone failed, used zip fallback)
+        warnings: z.array(z.string()).optional(),
+        // In-progress status fields
+        status: z.enum(['in-progress', 'complete']).optional(),
+        message: z.string().optional(),
+        taskId: z.string().optional(),
+        fingerprint: z.string().optional(),
+        /** Repo IDs requested (for in-progress status only, different from repos array) */
+        requestedRepos: z.array(z.string()).optional(),
+        startedAt: z.string().optional(),
+        elapsedSeconds: z.number().optional(),
+        currentPhase: z.string().optional(),
+        currentProgress: z.number().optional(),
+        currentMessage: z.string().optional(),
       },
       annotations: {
         openWorldHint: true,
@@ -535,8 +550,20 @@ export async function startServer(): Promise<void> {
           resources,
         };
 
+        // Build text response - prominently show warnings if any
+        let textResponse = '';
+        if (summary.warnings && summary.warnings.length > 0) {
+          textResponse += '📢 **Network Issues Encountered:**\n';
+          for (const warn of summary.warnings) {
+            textResponse += `${warn}\n`;
+          }
+          textResponse += '\n';
+        }
+        textResponse += `✅ Bundle created: ${summary.bundleId}\n`;
+        textResponse += `Repos: ${summary.repos.map(r => `${r.id} (${r.source})`).join(', ')}`;
+
         return {
-          content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
+          content: [{ type: 'text', text: textResponse }],
           structuredContent: out,
         };
       } catch (err: any) {
@@ -551,11 +578,11 @@ export async function startServer(): Promise<void> {
           const task = err.taskId ? tracker.getTask(err.taskId) : undefined;
           
           const out = {
-            status: 'in-progress',
+            status: 'in-progress' as const,
             message: `Bundle creation already in progress. Use preflight_get_task_status to check progress.`,
             taskId: err.taskId,
             fingerprint: err.fingerprint,
-            repos: err.repos,
+            requestedRepos: err.repos,
             startedAt: err.startedAt,
             elapsedSeconds: elapsedSec,
             currentPhase: task?.phase,
@@ -585,6 +612,8 @@ export async function startServer(): Promise<void> {
         mode: z.enum(['validate', 'repair']),
         repaired: z.boolean(),
         actionsTaken: z.array(z.string()),
+        /** Issues that cannot be fixed by repair (require re-download) */
+        unfixableIssues: z.array(z.string()).optional(),
         before: z.object({
           isValid: z.boolean(),
           missingComponents: z.array(z.string()),
@@ -608,12 +637,18 @@ export async function startServer(): Promise<void> {
           rebuildOverview: args.rebuildOverview,
         });
 
-        const summaryLine =
-          out.mode === 'validate'
-            ? `VALIDATE ${out.bundleId}: ${out.before.isValid ? 'OK' : 'MISSING'} (${out.before.missingComponents.length} issue(s))`
-            : out.repaired
-              ? `REPAIRED ${out.bundleId}: ${out.actionsTaken.length} action(s), now ${out.after.isValid ? 'OK' : 'STILL_MISSING'} (${out.after.missingComponents.length} issue(s))`
-              : `NOOP ${out.bundleId}: nothing to repair (already OK)`;
+        let summaryLine: string;
+        if (out.mode === 'validate') {
+          summaryLine = `VALIDATE ${out.bundleId}: ${out.before.isValid ? 'OK' : 'INVALID'} (${out.before.missingComponents.length} issue(s))`;
+        } else if (out.unfixableIssues && out.unfixableIssues.length > 0) {
+          // Has unfixable issues - clearly communicate this
+          summaryLine = `⚠️ UNFIXABLE ${out.bundleId}: ${out.unfixableIssues.length} issue(s) cannot be repaired offline.\n` +
+            out.unfixableIssues.map(i => `  - ${i}`).join('\n');
+        } else if (out.repaired) {
+          summaryLine = `REPAIRED ${out.bundleId}: ${out.actionsTaken.length} action(s), now ${out.after.isValid ? 'OK' : 'STILL_INVALID'} (${out.after.missingComponents.length} issue(s))`;
+        } else {
+          summaryLine = `NOOP ${out.bundleId}: nothing to repair (already OK)`;
+        }
 
         return {
           content: [{ type: 'text', text: summaryLine }],
