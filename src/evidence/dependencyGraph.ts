@@ -423,8 +423,9 @@ export async function generateDependencyGraph(cfg: PreflightConfig, rawArgs: unk
     try {
       await fs.mkdir(paths.depsDir, { recursive: true });
       await fs.writeFile(paths.depsGraphPath, JSON.stringify(result, null, 2));
-    } catch {
-      // Ignore cache write errors
+    } catch (err) {
+      // Log but don't fail
+      console.error('[preflight] Failed to cache dependency graph:', err);
     }
 
     return result;
