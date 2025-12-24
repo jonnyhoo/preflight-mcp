@@ -31,7 +31,7 @@ export async function connectContext7(cfg: PreflightConfig): Promise<ConnectedCo
     },
   });
 
-const client = new Client({ name: 'preflight-context7', version: '0.1.5' });
+const client = new Client({ name: 'preflight-context7', version: '0.1.6' });
   await client.connect(transport);
 
   return {

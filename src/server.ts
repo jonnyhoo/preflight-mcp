@@ -132,7 +132,7 @@ export async function startServer(): Promise<void> {
   const server = new McpServer(
     {
       name: 'preflight-mcp',
-version: '0.1.5',
+version: '0.1.6',
       description: 'Create evidence-based preflight bundles for repositories (docs + code) with SQLite FTS search.',
     },
     {
@@ -872,6 +872,13 @@ version: '0.1.5',
             lineNo: z.number(),
             snippet: z.string(),
             uri: z.string(),
+            context: z.object({
+              functionName: z.string().optional(),
+              className: z.string().optional(),
+              startLine: z.number(),
+              endLine: z.number(),
+              surroundingLines: z.array(z.string()),
+            }).optional(),
           })
         ),
         autoUpdated: z
