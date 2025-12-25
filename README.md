@@ -16,6 +16,9 @@ Each bundle contains:
 ## Features
 
 - **13 MCP tools** to create/update/repair/search/read bundles, generate evidence graphs, and manage trace links
+- **LLM-friendly outputs**: After bundle creation, prompts user to generate dependency graph for deeper analysis
+- **Proactive trace links**: LLM automatically discovers and records code↔test, code↔doc relationships
+- **Auto-export trace.json**: Trace links are automatically exported to JSON for direct LLM reading (no API needed)
 - **Progress tracking**: Real-time progress reporting for long-running operations (create/update bundles)
 - **Bundle integrity check**: Prevents operations on incomplete bundles with helpful error messages
 - **De-duplication with in-progress lock**: Prevent duplicate bundle creation even during MCP timeouts
@@ -203,10 +206,16 @@ Generate an evidence-based dependency graph. Two modes:
 - Emits `imports` edges (file → module) and `imports_resolved` edges (file → internal file).
 
 ### `preflight_trace_upsert`
-Upsert traceability links (commit↔ticket, symbol↔test, code↔doc, etc.) for a bundle.
+Create or update traceability links (code↔test, code↔doc, file↔requirement).
+- **Proactive use**: LLM automatically records discovered relationships during code analysis
+- Common link types: `tested_by`, `implements`, `documents`, `relates_to`, `depends_on`
+- **Auto-exports** to `trace/trace.json` after each upsert for direct LLM reading
 
 ### `preflight_trace_query`
-Query traceability links (fast when `bundleId` is provided; can scan across bundles when omitted).
+Query traceability links (code↔test, code↔doc, commit↔ticket).
+- **Proactive use**: LLM automatically queries trace links when analyzing specific files
+- Helps answer: "Does this code have tests?", "What requirements does this implement?"
+- Fast when `bundleId` is provided; can scan across bundles when omitted.
 
 ### `preflight_cleanup_orphans`
 Remove incomplete or corrupted bundles (bundles without valid manifest.json).
@@ -287,7 +296,9 @@ Inside a bundle directory:
 - `OVERVIEW.md`
 - `indexes/search.sqlite3`
 - `analysis/FACTS.json` (static analysis)
+- `deps/dependency-graph.json` (global import graph; generated on demand)
 - `trace/trace.sqlite3` (traceability links; created on demand)
+- `trace/trace.json` (**NEW**: auto-exported JSON for direct LLM reading)
 - `repos/<owner>/<repo>/raw/...`
 - `repos/<owner>/<repo>/norm/...` (GitHub/local snapshots)
 - `libraries/context7/<...>/meta.json`

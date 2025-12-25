@@ -146,7 +146,73 @@ export async function upsertTraceEdges(traceDbPath: string, edges: TraceEdgeInpu
     });
 
     const ids = tx(edges);
+    
+    // Close DB before export (export opens its own readonly connection)
+    db.close();
+    
+    // Auto-export to JSON after each upsert for LLM direct reading
+    try {
+      await exportTraceToJson(traceDbPath);
+    } catch {
+      // Non-critical: JSON export failure shouldn't block upsert
+    }
+    
     return { upserted: ids.length, ids };
+  } catch (err) {
+    db.close();
+    throw err;
+  }
+}
+
+/**
+ * Export all trace edges to a JSON file for LLM direct reading.
+ * Called automatically after upsertTraceEdges.
+ */
+export async function exportTraceToJson(traceDbPath: string): Promise<{ exported: number; jsonPath: string }> {
+  const jsonPath = traceDbPath.replace(/\.sqlite3$/, '.json');
+  
+  const db = new Database(traceDbPath, { readonly: true });
+  try {
+    const rows = db.prepare(`
+      SELECT
+        id, source_type, source_id, target_type, target_id,
+        edge_type, confidence, method, sources_json, created_at, updated_at
+      FROM trace_edges
+      ORDER BY updated_at DESC
+    `).all() as Array<{
+      id: string;
+      source_type: string;
+      source_id: string;
+      target_type: string;
+      target_id: string;
+      edge_type: string;
+      confidence: number;
+      method: string;
+      sources_json: string;
+      created_at: string;
+      updated_at: string;
+    }>;
+
+    const edges = rows.map((r) => ({
+      id: r.id,
+      source: { type: r.source_type, id: r.source_id },
+      target: { type: r.target_type, id: r.target_id },
+      type: r.edge_type,
+      confidence: r.confidence,
+      method: r.method,
+      sources: JSON.parse(r.sources_json || '[]'),
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
+
+    const exportData = {
+      exportedAt: new Date().toISOString(),
+      totalEdges: edges.length,
+      edges,
+    };
+
+    await fs.writeFile(jsonPath, JSON.stringify(exportData, null, 2), 'utf8');
+    return { exported: edges.length, jsonPath };
   } finally {
     db.close();
   }

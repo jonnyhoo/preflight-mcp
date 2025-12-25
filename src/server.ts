@@ -133,7 +133,7 @@ export async function startServer(): Promise<void> {
   const server = new McpServer(
     {
       name: 'preflight-mcp',
-version: '0.1.8',
+version: '0.2.0',
       description: 'Create evidence-based preflight bundles for repositories (docs + code) with SQLite FTS search.',
     },
     {
@@ -561,7 +561,12 @@ version: '0.1.8',
           textResponse += '\n';
         }
         textResponse += `✅ Bundle created: ${summary.bundleId}\n`;
-        textResponse += `Repos: ${summary.repos.map(r => `${r.id} (${r.source})`).join(', ')}`;
+        textResponse += `Repos: ${summary.repos.map(r => `${r.id} (${r.source})`).join(', ')}\n\n`;
+        // Prompt user for advanced analysis
+        textResponse += `📊 **Recommended next steps:**\n`;
+        textResponse += `Would you like me to generate a **global dependency graph** for deeper code analysis? ` +
+          `This will analyze import relationships across all files.\n`;
+        textResponse += `(Call \`preflight_evidence_dependency_graph\` with this bundleId to generate)`;
 
         return {
           content: [{ type: 'text', text: textResponse }],
@@ -953,8 +958,9 @@ version: '0.1.8',
   server.registerTool(
     'preflight_evidence_dependency_graph',
     {
-      title: 'Evidence: dependency graph (callers + imports)',
+      title: 'Evidence: dependency graph',
       description:
+        '**Proactive use recommended**: Generate dependency graphs to understand code structure. ' +
         'Generate an evidence-based dependency graph. IMPORTANT: Before running, ASK the user which bundle and which file/mode they want! ' +
         'Two modes: (1) TARGET MODE: analyze a specific file (provide target.file). (2) GLOBAL MODE: project-wide graph (omit target). ' +
         'Do NOT automatically choose bundle or mode - confirm with user first! ' +
@@ -990,7 +996,12 @@ version: '0.1.8',
     {
       title: 'Trace: upsert links',
       description:
-        'Upsert traceability links (commit↔ticket, symbol↔test, code↔doc, etc.) for a bundle. Stores trace edges in a per-bundle SQLite database.',
+        'Create or update traceability links (code↔test, code↔doc, file↔requirement). ' +
+        '**Proactive use recommended**: When you discover relationships during code analysis ' +
+        '(e.g., "this file has a corresponding test", "this module implements feature X"), ' +
+        'automatically create trace links to record these findings for future queries. ' +
+        'Common link types: tested_by, implements, documents, relates_to, depends_on. ' +
+        'Stores trace edges in a per-bundle SQLite database.',
       inputSchema: TraceUpsertInputSchema,
       outputSchema: {
         bundleId: z.string(),
@@ -1022,7 +1033,11 @@ version: '0.1.8',
     {
       title: 'Trace: query links',
       description:
-        'Query traceability links. Provide bundleId for fast queries; if omitted, scans across bundles (capped). This tool is read-only.',
+        'Query traceability links (code↔test, code↔doc, commit↔ticket). ' +
+        '**Proactive use recommended**: When analyzing a specific file or discussing code structure, ' +
+        'automatically query trace links to find related tests, documentation, or requirements. ' +
+        'This helps answer questions like "does this code have tests?" or "what requirements does this implement?". ' +
+        'Provide bundleId for fast queries; if omitted, scans across bundles (capped). This tool is read-only.',
       inputSchema: TraceQueryInputSchema,
       outputSchema: {
         bundleId: z.string().optional(),
