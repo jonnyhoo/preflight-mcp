@@ -133,13 +133,17 @@ export async function startServer(): Promise<void> {
   const server = new McpServer(
     {
       name: 'preflight-mcp',
-version: '0.2.0',
+version: '0.2.1',
       description: 'Create evidence-based preflight bundles for repositories (docs + code) with SQLite FTS search.',
     },
     {
       capabilities: {
         resources: {
           // We can emit list changed notifications when new bundles appear.
+          listChanged: true,
+        },
+        prompts: {
+          // We provide interactive guidance prompts.
           listChanged: true,
         },
       },
@@ -339,12 +343,12 @@ version: '0.2.0',
       title: 'Read bundle file(s)',
       description:
         'Read file(s) from bundle. Two modes: ' +
-        '(1) Omit "file" param → returns ALL key files (OVERVIEW.md, START_HERE.md, AGENTS.md, manifest.json, repo READMEs) in one call. ' +
-        '(2) Provide "file" param → returns that specific file. ' +
-        'Use when: "查看bundle", "show bundle", "read overview", "bundle概览", "项目信息".',
+        '(1) Omit "file" param → returns ALL key files (OVERVIEW.md, START_HERE.md, AGENTS.md, manifest.json, deps/dependency-graph.json, repo READMEs) in one call. ' +
+        '(2) Provide "file" param → returns that specific file (e.g., "deps/dependency-graph.json" for the dependency graph). ' +
+        'Use when: "查看bundle", "show bundle", "read overview", "bundle概览", "项目信息", "读取依赖图", "show dependency graph".',
       inputSchema: {
         bundleId: z.string().describe('Bundle ID to read.'),
-        file: z.string().optional().describe('Specific file to read. If omitted, returns all key files (OVERVIEW.md, START_HERE.md, AGENTS.md, manifest.json, repo READMEs).'),
+        file: z.string().optional().describe('Specific file to read (e.g., "deps/dependency-graph.json"). If omitted, returns all key files including dependency graph if exists.'),
       },
       outputSchema: {
         bundleId: z.string(),
@@ -378,7 +382,7 @@ version: '0.2.0',
         }
 
         // Batch mode: read all key files
-        const keyFiles = ['OVERVIEW.md', 'START_HERE.md', 'AGENTS.md', 'manifest.json'];
+        const keyFiles = ['OVERVIEW.md', 'START_HERE.md', 'AGENTS.md', 'manifest.json', 'deps/dependency-graph.json'];
         const files: Record<string, string | null> = {};
 
         for (const file of keyFiles) {
@@ -1253,6 +1257,267 @@ version: '0.2.0',
       } catch (err) {
         throw wrapPreflightError(err);
       }
+    }
+  );
+
+  // ============================================================
+  // PROMPTS - Interactive guidance for users
+  // ============================================================
+
+  // Main menu prompt - shows all available features
+  server.registerPrompt(
+    'preflight_menu',
+    {
+      title: 'Preflight 功能菜单',
+      description: '显示 Preflight 所有可用功能的交互式菜单。Use when: "preflight有什么功能", "有什么工具", "what can preflight do", "show menu".',
+    },
+    async () => {
+      return {
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: `🛠️ **Preflight 功能菜单**
+
+请选择您需要的功能：
+
+**1. 📂 深入分析项目**
+创建 bundle 并生成全局依赖图，理解代码架构
+
+**2. 🔍 搜索代码/文档**
+在已索引的项目中全文搜索代码和文档
+
+**3. 📋 管理 bundles**
+列出、更新、修复、删除已有的 bundle
+
+**4. 🔗 追溯链接**
+查询/创建代码-测试-文档之间的关联关系
+
+---
+请输入功能编号 (1-4) 或直接描述您的需求。`,
+            },
+          },
+        ],
+      };
+    }
+  );
+
+  // Deep analysis guide prompt
+  server.registerPrompt(
+    'preflight_analyze_guide',
+    {
+      title: '深入分析项目指南',
+      description: '提供深入分析项目的操作指南和示例 prompt。Use when user selected "深入分析" or wants to analyze a project.',
+      argsSchema: {
+        projectPath: z.string().optional().describe('项目路径或 GitHub 仓库地址（可选）'),
+      },
+    },
+    async (args) => {
+      const pathExample = args.projectPath || 'E:\\coding\\my-project 或 owner/repo';
+      return {
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: `📊 **深入分析项目指南**
+
+**第一步：提供项目路径**
+- 本地路径：\`E:\\coding\\my-project\`
+- GitHub：\`owner/repo\` 或完整 URL
+
+**第二步：复制以下完美 prompt（送给工作 LLM）**
+
+\`\`\`
+请执行以下分析流程：
+
+1. 使用 preflight_create_bundle 创建 ${pathExample} 的 bundle
+2. 使用 preflight_evidence_dependency_graph 生成全局依赖图
+3. 使用 preflight_read_file 读取 bundle 内容，分析：
+   - OVERVIEW.md 了解项目概览
+   - deps/dependency-graph.json 查看依赖关系
+   - START_HERE.md 了解入口点
+
+然后总结：
+1. 项目核心功能是什么
+2. 主要模块及其关系（基于依赖图）
+3. 代码架构特点
+\`\`\`
+
+**Bundle 文件结构说明：**
+| 文件 | 内容 |
+|------|------|
+| \`OVERVIEW.md\` | 项目概览和结构总结 |
+| \`START_HERE.md\` | 入口文件和关键路径 |
+| \`AGENTS.md\` | AI Agent 使用指南 |
+| \`deps/dependency-graph.json\` | 依赖关系图（节点+边） |
+| \`manifest.json\` | bundle 元数据 |
+| \`repos/{owner}/{repo}/norm/\` | 规范化源代码 |
+
+---
+💡 提示：搜索功能只能查找代码文件内容，不能搜索依赖图。要查看依赖图，请用 preflight_read_file 读取 deps/dependency-graph.json。`,
+            },
+          },
+        ],
+      };
+    }
+  );
+
+  // Search guide prompt
+  server.registerPrompt(
+    'preflight_search_guide',
+    {
+      title: '搜索代码/文档指南',
+      description: '提供搜索功能的操作指南和示例 prompt。Use when user selected "搜索" or wants to search in bundles.',
+      argsSchema: {
+        bundleId: z.string().optional().describe('要搜索的 bundle ID（可选）'),
+      },
+    },
+    async (args) => {
+      const bundleHint = args.bundleId ? `bundle \`${args.bundleId}\`` : '指定的 bundle';
+      return {
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: `🔍 **搜索代码/文档指南**
+
+**搜索模式：**
+
+**1. 单 bundle 搜索**（需要先知道 bundleId）
+\`\`\`
+在 ${bundleHint} 中搜索 "config parser"
+\`\`\`
+
+**2. 跨 bundle 搜索**（按 tags 过滤）
+\`\`\`
+在所有 MCP 相关项目中搜索 "tool registration"
+在标签为 agent 的项目中搜索 "LLM"
+\`\`\`
+
+**3. 列出所有 bundle**（不确定有哪些时）
+\`\`\`
+列出所有 bundle
+或: preflight list bundles
+\`\`\`
+
+---
+💡 搜索支持 FTS5 全文语法，如：\`config AND parser\`、\`"exact phrase"\``,
+            },
+          },
+        ],
+      };
+    }
+  );
+
+  // Manage bundles guide prompt
+  server.registerPrompt(
+    'preflight_manage_guide',
+    {
+      title: '管理 bundles 指南',
+      description: '提供 bundle 管理操作的指南。Use when user selected "管理" or wants to manage bundles.',
+    },
+    async () => {
+      return {
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: `📋 **管理 Bundles 指南**
+
+**常用操作：**
+
+**列出所有 bundle**
+\`\`\`
+列出所有 bundle
+或: 查看有哪些项目已索引
+\`\`\`
+
+**查看 bundle 详情**
+\`\`\`
+查看 bundle {bundleId} 的概览
+或: 读取 bundle {bundleId}
+\`\`\`
+
+**更新 bundle**（同步最新代码）
+\`\`\`
+更新 bundle {bundleId}
+或: 检查 {bundleId} 是否有更新
+\`\`\`
+
+**修复 bundle**（重建索引）
+\`\`\`
+修复 bundle {bundleId}
+或: 重建 {bundleId} 的搜索索引
+\`\`\`
+
+**删除 bundle**
+\`\`\`
+删除 bundle {bundleId}
+\`\`\`
+
+---
+💡 先运行「列出所有 bundle」获取 bundleId 列表`,
+            },
+          },
+        ],
+      };
+    }
+  );
+
+  // Trace guide prompt
+  server.registerPrompt(
+    'preflight_trace_guide',
+    {
+      title: '追溯链接指南',
+      description: '提供代码追溯功能的操作指南。Use when user selected "追溯" or wants to trace code relationships.',
+      argsSchema: {
+        bundleId: z.string().optional().describe('bundle ID（可选）'),
+      },
+    },
+    async (args) => {
+      const bundleHint = args.bundleId || '{bundleId}';
+      return {
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: `🔗 **追溯链接指南**
+
+追溯功能用于建立和查询代码之间的关联关系：
+- 代码 ↔ 测试
+- 代码 ↔ 文档
+- 模块 ↔ 需求
+
+**查询已有的追溯链接**
+\`\`\`
+查询 bundle ${bundleHint} 中 src/main.ts 的相关测试
+查询所有 implements 类型的追溯链接
+\`\`\`
+
+**创建追溯链接**
+\`\`\`
+在 bundle ${bundleHint} 中创建追溯：
+src/parser.ts 被 tests/parser.test.ts 测试
+\`\`\`
+
+**常用链接类型：**
+- \`tested_by\` - 被...测试
+- \`implements\` - 实现了...
+- \`documents\` - 文档描述了...
+- \`depends_on\` - 依赖于...
+- \`relates_to\` - 相关联
+
+---
+💡 追溯链接会持久化存储，便于未来快速查询代码关系`,
+            },
+          },
+        ],
+      };
     }
   );
 

@@ -15,7 +15,8 @@
 
 ## Features
 
-- **12 个 MCP 工具**：create/update/repair/search/evidence/trace/read/cleanup（外加 resources）
+- **13 个 MCP 工具**：create/update/repair/search/evidence/trace/read/cleanup（外加 resources）
+- **5 个 MCP prompts**：交互式引导（菜单、分析指南、搜索指南、管理指南、追溯指南）
 - **去重**：避免对相同的规范化输入重复索引
 - **可靠的 GitHub 获取**：可配置 git clone 超时 + GitHub archive（zipball）兜底
 - **离线修复**：无需重新抓取，重建缺失/为空的派生物（index/guides/overview）
@@ -168,9 +169,12 @@ npm run smoke
 **💡 提示**：对于代码仓库，创建 bundle 后可进一步使用 `preflight_evidence_dependency_graph` 获取依赖图，或使用 `preflight_trace_upsert` 记录代码←→需求/测试的追溯链接。
 
 ### `preflight_read_file`
-从 bundle 读取文件（OVERVIEW.md、START_HERE.md、AGENTS.md、manifest.json 或任何仓库文件）。
-- 触发词：「查看概览」「项目概览」「看README」「bundle详情」「bundle状态」「仓库信息」
-- **注意**：使用 `file="manifest.json"` 可获取完整的 bundle 元信息（替代原 `preflight_bundle_info`）
+从 bundle 读取文件。两种模式：
+- **批量模式**（省略 `file`）：返回所有关键文件（OVERVIEW.md、START_HERE.md、AGENTS.md、manifest.json、deps/dependency-graph.json、repo READMEs）
+- **单文件模式**（提供 `file`）：返回指定文件（如 `deps/dependency-graph.json` 获取依赖图）
+- 触发词：「查看概览」「项目概览」「bundle详情」「读取依赖图」
+- 使用 `file: "manifest.json"` 获取 bundle 元数据
+- 使用 `file: "deps/dependency-graph.json"` 读取依赖图（由 `preflight_evidence_dependency_graph` 生成）
 
 ### `preflight_delete_bundle`
 永久删除/移除一个 bundle。
@@ -231,6 +235,39 @@ npm run smoke
   - `minAgeHours`（默认 1）：只清理超过 N 小时的目录
 - 输出：`totalFound`, `totalCleaned`, `details`
 - 说明：服务启动时也会自动执行后台清理（非阻塞）
+
+### `preflight_get_task_status`
+检查 bundle 创建/更新任务的状态（进度追踪）。
+- 触发词：「查看进度」「任务状态」「下载进度」
+- 通过 `taskId`、`fingerprint` 或 `repos` 查询
+- 显示：阶段、进度百分比、消息、已用时间
+
+## Prompts（5 个）
+
+MCP prompts 提供交互式引导。调用这些 prompt 获取使用说明和示例。
+
+### `preflight_menu`
+主菜单，显示所有 Preflight 功能。
+- 触发词：「preflight有什么功能」「有什么工具」「what can preflight do」
+
+### `preflight_analyze_guide`
+深入分析指南，包含分步流程和可复制的 prompt。
+- 显示：Bundle 文件结构、推荐分析流程、示例 prompt
+- 参数：`projectPath`（可选）
+
+### `preflight_search_guide`
+搜索功能指南。
+- 显示：单 bundle 搜索、跨 bundle 按标签搜索、FTS5 语法提示
+- 参数：`bundleId`（可选）
+
+### `preflight_manage_guide`
+Bundle 管理操作指南。
+- 显示：列出、查看、更新、修复、删除 bundle 操作
+
+### `preflight_trace_guide`
+追溯链接指南。
+- 显示：查询和创建代码↔测试、代码↔文档关系
+- 参数：`bundleId`（可选）
 
 ## Resources
 
@@ -296,7 +333,9 @@ bundle 目录内部：
 - `OVERVIEW.md`
 - `indexes/search.sqlite3`
 - **`analysis/FACTS.json`**（静态分析）
+- **`deps/dependency-graph.json`**（全局依赖图；按需生成）
 - `trace/trace.sqlite3`（traceability links；按需创建）
+- `trace/trace.json`（自动导出的 JSON，便于 LLM 直接读取）
 - `repos/<owner>/<repo>/raw/...`
 - `repos/<owner>/<repo>/norm/...`（GitHub/local 快照）
 - `libraries/context7/<...>/meta.json`
