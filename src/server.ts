@@ -133,7 +133,7 @@ export async function startServer(): Promise<void> {
   const server = new McpServer(
     {
       name: 'preflight-mcp',
-      version: '0.2.2',
+      version: '0.2.3',
       description: 'Create evidence-based preflight bundles for repositories (docs + code) with SQLite FTS search.',
     },
     {
@@ -367,10 +367,11 @@ export async function startServer(): Promise<void> {
         '    └── norm/              # Normalized source code\n' +
         '```\n\n' +
         '**File Access Methods:**\n' +
+        '- README: `repos/{owner}/{repo}/norm/README.md` - use THIS tool\n' +
         '- JSON files (FACTS.json, dependency-graph.json, trace.json, manifest.json): Use THIS tool\n' +
         '- SQLite DBs (search.sqlite3): Use preflight_search_bundle\n' +
         '- SQLite DBs (trace.sqlite3): Use preflight_trace_query/preflight_trace_upsert\n' +
-        '- Source code in repos/: Use THIS tool with path like "repos/owner/repo/norm/src/file.ts"',
+        '- Source code: `repos/{owner}/{repo}/norm/{path}` - use THIS tool',
       inputSchema: {
         bundleId: z.string().describe('Bundle ID to read.'),
         file: z.string().optional().describe('Specific file to read (e.g., "deps/dependency-graph.json"). If omitted, returns all key files including dependency graph if exists.'),
