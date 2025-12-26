@@ -84,6 +84,16 @@ export type CoverageReport = {
   };
 };
 
+/**
+ * High-value module identification - modules that are critical to understand.
+ */
+export type HighValueModule = {
+  file: string;
+  reason: 'high_coupling' | 'hub' | 'large_file' | 'many_exports' | 'entry_point';
+  metric: number;
+  description: string;
+};
+
 export type DependencyGraphResult = {
   meta: {
     requestId: string;
@@ -127,9 +137,13 @@ export type DependencyGraphResult = {
       importEdges: number;
     };
     warnings: Array<{ code: string; message: string; evidenceIds?: string[] }>;
+    /** High-value modules that deserve attention */
+    highValueModules?: HighValueModule[];
   };
   /** Coverage report explaining what was analyzed and what was skipped */
   coverageReport?: CoverageReport;
+  /** Mermaid diagram representation of the dependency graph */
+  mermaid?: string;
 };
 
 export const DependencyGraphInputSchema = {
@@ -204,6 +218,145 @@ function clampSnippet(s: string, maxLen: number): string {
 
 function normalizeExt(p: string): string {
   return path.extname(p).toLowerCase();
+}
+
+/**
+ * Generate a Mermaid flowchart from dependency graph edges.
+ * Limited to top N nodes to keep output readable.
+ */
+function generateMermaidDiagram(
+  edges: EvidenceItem[],
+  maxNodes: number = 20
+): string {
+  // Count imports per file (both as importer and imported)
+  const importerCounts = new Map<string, number>();
+  const importedCounts = new Map<string, number>();
+  
+  for (const e of edges) {
+    if (e.type === 'imports' && e.from && e.to) {
+      importerCounts.set(e.from, (importerCounts.get(e.from) ?? 0) + 1);
+      importedCounts.set(e.to, (importedCounts.get(e.to) ?? 0) + 1);
+    }
+  }
+  
+  // Get top nodes by total connections
+  const allNodes = new Set([...importerCounts.keys(), ...importedCounts.keys()]);
+  const nodeScores = Array.from(allNodes).map(n => ({
+    node: n,
+    score: (importerCounts.get(n) ?? 0) + (importedCounts.get(n) ?? 0),
+  })).sort((a, b) => b.score - a.score).slice(0, maxNodes);
+  
+  const topNodes = new Set(nodeScores.map(n => n.node));
+  
+  // Filter edges to only include top nodes
+  const filteredEdges = edges.filter(e => 
+    e.type === 'imports' && e.from && e.to && 
+    topNodes.has(e.from) && topNodes.has(e.to)
+  );
+  
+  if (filteredEdges.length === 0) {
+    return '```mermaid\nflowchart LR\n  A[No edges to display]\n```';
+  }
+  
+  // Generate Mermaid syntax
+  const lines: string[] = ['```mermaid', 'flowchart LR'];
+  
+  // Create node IDs (sanitize file names)
+  const nodeIds = new Map<string, string>();
+  let idCounter = 0;
+  const getNodeId = (name: string): string => {
+    if (!nodeIds.has(name)) {
+      nodeIds.set(name, `N${idCounter++}`);
+    }
+    return nodeIds.get(name)!;
+  };
+  
+  // Add edges
+  const addedEdges = new Set<string>();
+  for (const e of filteredEdges) {
+    const fromId = getNodeId(e.from!);
+    const toId = getNodeId(e.to!);
+    const edgeKey = `${fromId}->${toId}`;
+    if (!addedEdges.has(edgeKey)) {
+      addedEdges.add(edgeKey);
+      lines.push(`  ${fromId} --> ${toId}`);
+    }
+  }
+  
+  // Add node labels
+  for (const [name, id] of nodeIds) {
+    // Extract just the filename for readability
+    const shortName = name.split('/').pop() ?? name;
+    const safeName = shortName.replace(/["]/g, "'").slice(0, 30);
+    lines.push(`  ${id}["${safeName}"]`);
+  }
+  
+  lines.push('```');
+  return lines.join('\n');
+}
+
+/**
+ * Identify high-value modules from dependency graph.
+ */
+function identifyHighValueModules(
+  edges: EvidenceItem[],
+  nodes: GraphNode[]
+): HighValueModule[] {
+  const modules: HighValueModule[] = [];
+  
+  // Count imports (as importer and as imported)
+  const importerCounts = new Map<string, number>();
+  const importedCounts = new Map<string, number>();
+  
+  for (const e of edges) {
+    if (e.type === 'imports' && e.from && e.to) {
+      importerCounts.set(e.from, (importerCounts.get(e.from) ?? 0) + 1);
+      importedCounts.set(e.to, (importedCounts.get(e.to) ?? 0) + 1);
+    }
+  }
+  
+  // High coupling: files imported by many others (>10)
+  for (const [file, count] of importedCounts) {
+    if (count >= 10) {
+      modules.push({
+        file,
+        reason: 'high_coupling',
+        metric: count,
+        description: `Imported by ${count} files - core module, changes affect many dependents`,
+      });
+    }
+  }
+  
+  // Hub modules: files that import many others (>15)
+  for (const [file, count] of importerCounts) {
+    if (count >= 15) {
+      modules.push({
+        file,
+        reason: 'hub',
+        metric: count,
+        description: `Imports ${count} modules - orchestrator/entry point, understand dependencies first`,
+      });
+    }
+  }
+  
+  // Entry points: high importer count but low imported count
+  for (const [file, importCount] of importerCounts) {
+    const importedCount = importedCounts.get(file) ?? 0;
+    if (importCount >= 8 && importedCount <= 2) {
+      // Avoid duplicates
+      if (!modules.some(m => m.file === file && m.reason === 'entry_point')) {
+        modules.push({
+          file,
+          reason: 'entry_point',
+          metric: importCount,
+          description: `Likely entry point: imports ${importCount} modules but only imported by ${importedCount}`,
+        });
+      }
+    }
+  }
+  
+  // Sort by metric descending, limit to top 10
+  return modules.sort((a, b) => b.metric - a.metric).slice(0, 10);
 }
 
 type RepoNormPathParts = {
@@ -1515,6 +1668,11 @@ async function generateGlobalDependencyGraph(ctx: {
     },
   };
 
+  // Generate high-value modules and Mermaid diagram
+  const nodesArray = Array.from(nodes.values());
+  const highValueModules = identifyHighValueModules(edges, nodesArray);
+  const mermaid = edges.length > 0 ? generateMermaidDiagram(edges, 15) : undefined;
+
   return {
     meta: {
       requestId,
@@ -1535,7 +1693,7 @@ async function generateGlobalDependencyGraph(ctx: {
       },
     },
     facts: {
-      nodes: Array.from(nodes.values()),
+      nodes: nodesArray,
       edges,
     },
     signals: {
@@ -1547,8 +1705,10 @@ async function generateGlobalDependencyGraph(ctx: {
         importEdges,
       },
       warnings,
+      highValueModules: highValueModules.length > 0 ? highValueModules : undefined,
     },
     coverageReport,
+    mermaid,
   };
 }
 
