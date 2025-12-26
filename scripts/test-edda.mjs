@@ -69,8 +69,8 @@ try {
 }
 console.log('');
 
-// Test 3: buildDeepAnalysis
-console.log('--- Test 3: buildDeepAnalysis ---');
+// Test 3: buildDeepAnalysis (enhanced)
+console.log('--- Test 3: buildDeepAnalysis (enhanced) ---');
 try {
   const deepResult = buildDeepAnalysis(bundleId, {
     tree: {
@@ -90,10 +90,16 @@ try {
       byType: { tested_by: 5 },
       coverageEstimate: 0.2,
     },
+    focusQuery: 'config',
   });
   console.log(`✅ Summary generated (${deepResult.summary.length} chars)`);
+  console.log(`✅ Claims: ${deepResult.claims.length}`);
+  for (const claim of deepResult.claims.slice(0, 3)) {
+    console.log(`   - [${claim.status}] ${claim.text.slice(0, 60)}...`);
+  }
+  console.log(`✅ Checklist: repo_tree=${deepResult.checklistStatus.repo_tree}, deps=${deepResult.checklistStatus.dependency_graph_global}`);
+  console.log(`✅ Open questions: ${deepResult.openQuestions.length}`);
   console.log(`✅ Next steps: ${deepResult.nextSteps.length}`);
-  console.log(`✅ Coverage report: scanned=${deepResult.coverageReport.scannedFilesCount}`);
 } catch (err) {
   console.log(`❌ Error: ${err.message}`);
 }

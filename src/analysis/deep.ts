@@ -3,7 +3,15 @@
  * Aggregates tree, search, and dependency data into a single LLM-friendly output.
  */
 
-import { type CoverageReport, createEmptyCoverageReport, isCoverageSufficient } from '../types/evidence.js';
+import {
+  type CoverageReport,
+  type Claim,
+  type EvidenceRef,
+  type ChecklistStatus,
+  type OpenQuestion,
+  createEmptyCoverageReport,
+  isCoverageSufficient,
+} from '../types/evidence.js';
 
 export type DeepAnalysisInput = {
   bundleId: string;
@@ -59,6 +67,15 @@ export type DeepAnalysisResult = {
   search?: SearchSummary;
   deps?: DepsSummary;
   traces?: TraceSummary;
+  
+  /** Auto-generated claims with evidence */
+  claims: Claim[];
+  
+  /** Checklist of completed analysis steps */
+  checklistStatus: ChecklistStatus;
+  
+  /** Questions that couldn't be answered due to missing evidence */
+  openQuestions: OpenQuestion[];
   
   coverageReport: CoverageReport;
   
@@ -158,23 +175,207 @@ export function buildDeepAnalysis(
     summaryParts.push('');
   }
   
+  // Build checklist status
+  const checklistStatus: ChecklistStatus = {
+    read_overview: false, // Would need OVERVIEW.md read - caller should set
+    repo_tree: !!tree && tree.totalFiles > 0,
+    search_focus: !!search && search.totalHits > 0,
+    dependency_graph_global: !!deps && deps.totalNodes > 0,
+    entrypoints_identified: false,
+    core_modules_identified: false,
+    one_deep_dive_done: false,
+    tests_or_trace_checked: !!traces && traces.totalLinks > 0,
+  };
+  
+  // Identify entrypoints from deps
+  if (deps && deps.topImported.length > 0) {
+    checklistStatus.entrypoints_identified = true;
+  }
+  
+  // Identify core modules from deps
+  if (deps && deps.topImporters.length > 0) {
+    checklistStatus.core_modules_identified = true;
+  }
+  
+  // Generate claims from analysis data
+  const claims: Claim[] = [];
+  let claimId = 0;
+  const nextClaimId = () => `claim_${++claimId}`;
+  
+  // Claim: Project structure
+  if (tree && tree.totalFiles > 0) {
+    const topExt = Object.entries(tree.byExtension)
+      .sort((a, b) => b[1] - a[1])[0];
+    if (topExt) {
+      claims.push({
+        id: nextClaimId(),
+        text: `Project contains ${tree.totalFiles} files, primarily ${topExt[0]} (${topExt[1]} files)`,
+        confidence: 0.95,
+        kind: 'architecture',
+        status: 'supported',
+        evidence: tree.topDirs.slice(0, 3).map(d => ({
+          file: d.path,
+          range: { startLine: 1, startCol: 1, endLine: 1, endCol: 1 },
+          note: `Directory contains ${d.fileCount} files`,
+        })),
+      });
+    }
+  }
+  
+  // Claim: Core module (most imported)
+  if (deps && deps.topImported.length > 0) {
+    const core = deps.topImported[0]!;
+    claims.push({
+      id: nextClaimId(),
+      text: `${core.file} is a core module (imported by ${core.count} other files)`,
+      confidence: 0.9,
+      kind: 'module',
+      status: 'supported',
+      evidence: [{
+        file: core.file,
+        range: { startLine: 1, startCol: 1, endLine: 1, endCol: 1 },
+        note: `Referenced by ${core.count} imports`,
+      }],
+    });
+  }
+  
+  // Claim: Entry point (most importing)
+  if (deps && deps.topImporters.length > 0) {
+    const entry = deps.topImporters[0]!;
+    claims.push({
+      id: nextClaimId(),
+      text: `${entry.file} is likely an entry point (imports ${entry.count} modules)`,
+      confidence: 0.85,
+      kind: 'entrypoint',
+      status: 'inferred',
+      evidence: [{
+        file: entry.file,
+        range: { startLine: 1, startCol: 1, endLine: 1, endCol: 1 },
+        note: `Has ${entry.count} import statements`,
+      }],
+      whyInferred: 'Based on import count heuristic - files with many imports often orchestrate functionality',
+    });
+  }
+  
+  // Claim: Test coverage
+  if (traces && traces.coverageEstimate > 0) {
+    const pct = (traces.coverageEstimate * 100).toFixed(0);
+    claims.push({
+      id: nextClaimId(),
+      text: `Approximately ${pct}% of source files have associated tests`,
+      confidence: traces.coverageEstimate > 0.5 ? 0.85 : 0.7,
+      kind: 'test_coverage',
+      status: 'inferred',
+      evidence: [],
+      whyInferred: `Based on ${traces.totalLinks} trace links between source and test files`,
+    });
+  }
+  
+  // Claim: Search results
+  if (search && search.totalHits > 0 && search.topFiles.length > 0) {
+    const topFile = search.topFiles[0]!;
+    claims.push({
+      id: nextClaimId(),
+      text: `"${search.query}" is most relevant to ${topFile.path} (${topFile.hitCount} matches)`,
+      confidence: 0.9,
+      kind: 'feature',
+      status: 'supported',
+      evidence: [{
+        file: topFile.path,
+        range: { startLine: 1, startCol: 1, endLine: 1, endCol: 1 },
+        snippet: topFile.snippet,
+        note: `${topFile.hitCount} search hits`,
+      }],
+    });
+  }
+  
+  // Generate open questions
+  const openQuestions: OpenQuestion[] = [];
+  
+  if (!tree || tree.totalFiles === 0) {
+    openQuestions.push({
+      question: 'What is the project structure?',
+      whyUnknown: 'File tree data not available',
+      nextEvidenceToFetch: ['preflight_repo_tree'],
+    });
+  }
+  
+  if (!deps || deps.totalNodes === 0) {
+    openQuestions.push({
+      question: 'What are the module dependencies?',
+      whyUnknown: 'Dependency graph not generated',
+      nextEvidenceToFetch: ['preflight_evidence_dependency_graph'],
+    });
+  }
+  
+  if (!traces || traces.totalLinks === 0) {
+    openQuestions.push({
+      question: 'What is the test coverage?',
+      whyUnknown: 'No trace links between source and test files',
+      nextEvidenceToFetch: ['preflight_suggest_traces', 'preflight_trace_query'],
+    });
+  }
+  
+  if (focusQuery && (!search || search.totalHits === 0)) {
+    openQuestions.push({
+      question: `Where is "${focusQuery}" implemented?`,
+      whyUnknown: 'Search returned no results',
+      nextEvidenceToFetch: ['preflight_search_bundle with different query'],
+    });
+  }
+  
   // Build next steps
   const nextSteps: string[] = [];
   
-  if (!tree || tree.totalFiles === 0) {
+  if (!checklistStatus.repo_tree) {
     nextSteps.push('Run preflight_repo_tree to explore structure');
   }
-  if (!search) {
+  if (!checklistStatus.search_focus && focusQuery) {
     nextSteps.push('Use preflight_search_bundle to find specific code');
   }
-  if (!deps || deps.totalNodes === 0) {
+  if (!checklistStatus.dependency_graph_global) {
     nextSteps.push('Run preflight_evidence_dependency_graph for module relationships');
   }
-  if (!traces || traces.totalLinks === 0) {
+  if (!checklistStatus.tests_or_trace_checked) {
     nextSteps.push('Run preflight_suggest_traces to discover test relationships');
   }
-  if (isCoverageSufficient(coverageReport)) {
-    nextSteps.push('Coverage is sufficient. Ready for detailed analysis.');
+  if (claims.length > 0 && openQuestions.length === 0) {
+    nextSteps.push('Use preflight_validate_report to verify claims before finalizing');
+  }
+  if (isCoverageSufficient(coverageReport) && openQuestions.length === 0) {
+    nextSteps.push('Analysis complete. Ready for detailed review.');
+  }
+  
+  // Add checklist and claims to summary
+  summaryParts.push(`## Analysis Checklist`);
+  const checklistItems = [
+    ['repo_tree', 'Project structure explored'],
+    ['dependency_graph_global', 'Dependencies analyzed'],
+    ['entrypoints_identified', 'Entry points identified'],
+    ['core_modules_identified', 'Core modules identified'],
+    ['tests_or_trace_checked', 'Test coverage checked'],
+  ] as const;
+  for (const [key, label] of checklistItems) {
+    const done = checklistStatus[key];
+    summaryParts.push(`- [${done ? 'x' : ' '}] ${label}`);
+  }
+  summaryParts.push('');
+  
+  if (claims.length > 0) {
+    summaryParts.push(`## Key Findings (${claims.length} claims)`);
+    for (const claim of claims.slice(0, 5)) {
+      const status = claim.status === 'supported' ? '✓' : '~';
+      summaryParts.push(`- ${status} ${claim.text}`);
+    }
+    summaryParts.push('');
+  }
+  
+  if (openQuestions.length > 0) {
+    summaryParts.push(`## Open Questions (${openQuestions.length})`);
+    for (const q of openQuestions) {
+      summaryParts.push(`- ❓ ${q.question}`);
+    }
+    summaryParts.push('');
   }
   
   return {
@@ -184,6 +385,9 @@ export function buildDeepAnalysis(
     search,
     deps,
     traces,
+    claims,
+    checklistStatus,
+    openQuestions,
     coverageReport,
     summary: summaryParts.join('\n'),
     nextSteps,
