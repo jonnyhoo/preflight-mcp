@@ -324,9 +324,10 @@ export function buildDeepAnalysis(
     });
   }
   
-  // Build next steps
+  // Build context-aware next steps
   const nextSteps: string[] = [];
   
+  // Basic checklist-based suggestions
   if (!checklistStatus.repo_tree) {
     nextSteps.push('Run preflight_repo_tree to explore structure');
   }
@@ -339,11 +340,60 @@ export function buildDeepAnalysis(
   if (!checklistStatus.tests_or_trace_checked) {
     nextSteps.push('Run preflight_suggest_traces to discover test relationships');
   }
-  if (claims.length > 0 && openQuestions.length === 0) {
-    nextSteps.push('Use preflight_validate_report to verify claims before finalizing');
+  
+  // Context-aware suggestions based on analysis results
+  
+  // Trace links suggestion
+  if (traces && traces.totalLinks === 0) {
+    nextSteps.push('⚠️ 0 trace links detected → Run preflight_suggest_traces to auto-generate test-code mappings');
   }
-  if (isCoverageSufficient(coverageReport) && openQuestions.length === 0) {
-    nextSteps.push('Analysis complete. Ready for detailed review.');
+  
+  // Large file detection
+  if (tree) {
+    const largeFilesHint = tree.topDirs.find(d => d.fileCount > 100);
+    if (largeFilesHint) {
+      nextSteps.push(`📁 Large directory detected (${largeFilesHint.path}: ${largeFilesHint.fileCount} files) → Consider using focusDir parameter to narrow scope`);
+    }
+  }
+  
+  // High coupling detection
+  if (deps && deps.topImported.length > 0) {
+    const highCoupling = deps.topImported.filter(m => m.count > 15);
+    if (highCoupling.length > 0) {
+      const files = highCoupling.slice(0, 2).map(m => m.file).join(', ');
+      nextSteps.push(`🔗 High coupling detected (${files} imported >15 times) → Review for potential refactoring`);
+    }
+  }
+  
+  // Circular dependencies
+  if (deps && deps.cycles && deps.cycles.length > 0) {
+    nextSteps.push(`⚠️ ${deps.cycles.length} circular dependencies detected → Review deps.cycles for details`);
+  }
+  
+  // Many exports suggestion
+  if (deps && deps.topImporters.length > 0) {
+    const manyImports = deps.topImporters.filter(m => m.count > 30);
+    if (manyImports.length > 0) {
+      nextSteps.push(`📦 ${manyImports[0]!.file} imports ${manyImports[0]!.count} modules → Consider splitting this file`);
+    }
+  }
+  
+  // Skipped files in coverage report
+  if (coverageReport.skippedFiles.length > 0) {
+    const largeSkipped = coverageReport.skippedFiles.filter(s => s.reason === 'too_large');
+    if (largeSkipped.length > 0) {
+      nextSteps.push(`⚠️ ${largeSkipped.length} large file(s) skipped → Use showSkippedFiles in preflight_repo_tree to see details`);
+    }
+  }
+  
+  // Validation suggestion
+  if (claims.length > 0 && openQuestions.length === 0) {
+    nextSteps.push('✅ Use preflight_validate_report to verify claims before finalizing');
+  }
+  
+  // Completion status
+  if (isCoverageSufficient(coverageReport) && openQuestions.length === 0 && claims.length > 0) {
+    nextSteps.push('🎉 Analysis complete - all key areas covered. Ready for detailed review.');
   }
   
   // Add checklist and claims to summary

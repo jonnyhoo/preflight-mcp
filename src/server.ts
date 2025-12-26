@@ -172,7 +172,7 @@ export async function startServer(): Promise<void> {
   const server = new McpServer(
     {
       name: 'preflight-mcp',
-version: '0.4.2',
+version: '0.4.3',
       description: 'Create evidence-based preflight bundles for repositories (docs + code) with SQLite FTS search.',
     },
     {
