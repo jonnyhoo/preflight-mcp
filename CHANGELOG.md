@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5] - 2025-12-26
+
+### Added
+- **New MCP tool**: `preflight_repo_tree` - Get repository structure overview with ASCII tree, file statistics, and entry point candidates
+- **New MCP tool**: `preflight_trace_export` - Manually export trace links to JSON (auto-export already happens on trace_upsert)
+- **Evidence citation support**: `preflight_read_file` now supports `withLineNumbers: true` and `ranges: ["20-80"]` for precise evidence gathering
+- **Coverage report**: `preflight_evidence_dependency_graph` (global mode) returns `coverageReport` explaining what was analyzed and skipped
+- **Trace query guidance**: `preflight_trace_query` returns `reason` and `nextSteps` when no edges found
+- **Large file handling**: Configurable `maxFileSizeBytes`, `largeFileStrategy`, `truncateLines` options for dependency graph
+
+### Changed
+- **Tool count**: 15 tools total (added `preflight_repo_tree`, `preflight_trace_export`)
+- **Tool descriptions**: Enhanced LLM guidance for all tools with recommended workflows
+- **Trace writing rules**: `preflight_trace_upsert` description now includes clear rules for when to write trace links
+
+### Fixed
+- Trace query now provides actionable guidance when no matching edges found
+
 ## [0.1.5] - 2025-12-24
 
 ### Added

@@ -51,6 +51,42 @@ export type GraphNode = {
   attrs?: Record<string, unknown>;
 };
 
+/**
+ * Coverage report explaining what was analyzed and what was skipped.
+ * Helps LLMs understand the completeness of the dependency graph.
+ */
+export type CoverageReport = {
+  /** Number of code files discovered in the bundle */
+  scannedFilesCount: number;
+  /** Number of files successfully parsed for imports */
+  parsedFilesCount: number;
+  /** Statistics per programming language */
+  perLanguage: Record<string, {
+    scanned: number;
+    parsed: number;
+    edges: number;
+  }>;
+  /** File counts per top-level directory */
+  perDir: Record<string, number>;
+  /** Files that were skipped with reasons */
+  skippedFiles: Array<{
+    path: string;
+    size?: number;
+    reason: string;
+  }>;
+  /** Whether the graph was truncated due to limits */
+  truncated: boolean;
+  /** Reason for truncation if applicable */
+  truncatedReason?: string;
+  /** Applied limits */
+  limits: {
+    maxFiles: number;
+    maxNodes: number;
+    maxEdges: number;
+    timeBudgetMs: number;
+  };
+};
+
 export type DependencyGraphResult = {
   meta: {
     requestId: string;
@@ -84,6 +120,8 @@ export type DependencyGraphResult = {
     };
     warnings: Array<{ code: string; message: string; evidenceIds?: string[] }>;
   };
+  /** Coverage report explaining what was analyzed and what was skipped */
+  coverageReport?: CoverageReport;
 };
 
 export const DependencyGraphInputSchema = {
@@ -114,8 +152,17 @@ export const DependencyGraphInputSchema = {
       maxNodes: z.number().int().min(10).max(2000).default(300),
       maxEdges: z.number().int().min(10).max(5000).default(800),
       timeBudgetMs: z.number().int().min(1000).max(30_000).default(25_000),
+      /** Maximum file size in bytes. Files larger than this are skipped. Default 1MB. */
+      maxFileSizeBytes: z.number().int().min(10_000).max(50_000_000).default(1_000_000)
+        .describe('Max file size in bytes. Default 1MB. Increase if important large files are skipped.'),
+      /** Strategy for handling large files */
+      largeFileStrategy: z.enum(['skip', 'truncate']).default('skip')
+        .describe('How to handle files exceeding maxFileSizeBytes. skip=ignore entirely, truncate=read first N lines.'),
+      /** If largeFileStrategy=truncate, how many lines to read */
+      truncateLines: z.number().int().min(100).max(5000).default(500)
+        .describe('When largeFileStrategy=truncate, read this many lines. Default 500.'),
     })
-    .default({ maxFiles: 200, maxNodes: 300, maxEdges: 800, timeBudgetMs: 25_000 }),
+    .default({ maxFiles: 200, maxNodes: 300, maxEdges: 800, timeBudgetMs: 25_000, maxFileSizeBytes: 1_000_000, largeFileStrategy: 'skip', truncateLines: 500 }),
 };
 
 export type DependencyGraphInput = z.infer<z.ZodObject<typeof DependencyGraphInputSchema>>;
@@ -1127,7 +1174,7 @@ export async function generateDependencyGraph(cfg: PreflightConfig, rawArgs: unk
  */
 async function generateGlobalDependencyGraph(ctx: {
   cfg: PreflightConfig;
-  args: { bundleId: string; options: { maxFiles: number; maxNodes: number; maxEdges: number; timeBudgetMs: number } };
+  args: { bundleId: string; options: { maxFiles: number; maxNodes: number; maxEdges: number; timeBudgetMs: number; maxFileSizeBytes?: number; largeFileStrategy?: 'skip' | 'truncate'; truncateLines?: number } };
   paths: { rootDir: string; reposDir: string; searchDbPath: string; manifestPath: string };
   manifest: any;
   limits: { maxFiles: number; maxNodes: number; maxEdges: number };
@@ -1165,6 +1212,39 @@ async function generateGlobalDependencyGraph(ctx: {
   let filesProcessed = 0;
   let usedAstCount = 0;
 
+  // Coverage tracking
+  const perLanguage: Record<string, { scanned: number; parsed: number; edges: number }> = {};
+  const perDir: Record<string, number> = {};
+  const skippedFiles: Array<{ path: string; size?: number; reason: string }> = [];
+  let scannedFilesCount = 0;
+
+  // Helper to get language from extension
+  const extToLang: Record<string, string> = {
+    '.ts': 'TypeScript', '.tsx': 'TypeScript',
+    '.js': 'JavaScript', '.jsx': 'JavaScript', '.mjs': 'JavaScript', '.cjs': 'JavaScript',
+    '.py': 'Python',
+    '.go': 'Go',
+    '.rs': 'Rust',
+    '.java': 'Java',
+    '.rb': 'Ruby',
+    '.php': 'PHP',
+  };
+
+  const getLang = (filePath: string): string => {
+    const ext = path.extname(filePath).toLowerCase();
+    return extToLang[ext] ?? 'Other';
+  };
+
+  const getTopDir = (filePath: string): string => {
+    // Extract the top-level directory under repos/owner/repo/norm/
+    const parts = filePath.split('/');
+    // repos/owner/repo/norm/[topDir]/...
+    if (parts.length > 4 && parts[0] === 'repos' && parts[3] === 'norm') {
+      return parts[4] ?? '(root)';
+    }
+    return parts[0] ?? '(root)';
+  };
+
   // Collect all code files
   const codeExtensions = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.rs', '.java', '.rb', '.php']);
   const codeFiles: string[] = [];
@@ -1191,14 +1271,30 @@ async function generateGlobalDependencyGraph(ctx: {
 
   // Walk repos directory
   for await (const relPath of walkDir(paths.reposDir, 'repos')) {
+    scannedFilesCount++;
+    
+    // Track per-directory stats
+    const topDir = getTopDir(relPath);
+    perDir[topDir] = (perDir[topDir] ?? 0) + 1;
+
+    // Track per-language stats
+    const lang = getLang(relPath);
+    if (!perLanguage[lang]) {
+      perLanguage[lang] = { scanned: 0, parsed: 0, edges: 0 };
+    }
+    perLanguage[lang]!.scanned++;
+
     if (codeFiles.length >= limits.maxFiles) {
       truncated = true;
       truncatedReason = 'maxFiles reached during discovery';
-      break;
+      skippedFiles.push({ path: relPath, reason: 'maxFiles limit reached' });
+      continue;
     }
     // Only include files under norm/ directories
     if (relPath.includes('/norm/')) {
       codeFiles.push(relPath);
+    } else {
+      skippedFiles.push({ path: relPath, reason: 'not in norm/ directory' });
     }
   }
 
@@ -1221,15 +1317,52 @@ async function generateGlobalDependencyGraph(ctx: {
     addNode({ id: fileId, kind: 'file', name: filePath, file: filePath });
 
     // Read and extract imports
+    const lang = getLang(filePath);
     try {
       const absPath = safeJoin(paths.rootDir, filePath);
-      const raw = await fs.readFile(absPath, 'utf8');
+      const stat = await fs.stat(absPath);
+      
+      // Handle large files based on strategy
+      const maxSize = args.options.maxFileSizeBytes ?? 1_000_000;
+      const strategy = args.options.largeFileStrategy ?? 'skip';
+      const truncateLines = args.options.truncateLines ?? 500;
+      
+      if (stat.size > maxSize) {
+        if (strategy === 'skip') {
+          skippedFiles.push({ 
+            path: filePath, 
+            size: stat.size, 
+            reason: `file too large (>${Math.round(maxSize / 1024)}KB). Use largeFileStrategy='truncate' or increase maxFileSizeBytes to include.` 
+          });
+          continue;
+        }
+        // strategy === 'truncate': read first N lines only
+      }
+      
+      let raw: string;
+      if (stat.size > maxSize && strategy === 'truncate') {
+        // Read file and take first N lines
+        const fullContent = await fs.readFile(absPath, 'utf8');
+        const allLines = fullContent.replace(/\r\n/g, '\n').split('\n');
+        raw = allLines.slice(0, truncateLines).join('\n');
+        warnings.push({
+          code: 'file_truncated',
+          message: `${filePath}: truncated to first ${truncateLines} lines (file size ${Math.round(stat.size / 1024)}KB exceeds ${Math.round(maxSize / 1024)}KB limit)`,
+        });
+      } else {
+        raw = await fs.readFile(absPath, 'utf8');
+      }
       const normalized = raw.replace(/\r\n/g, '\n');
       const lines = normalized.split('\n');
 
       const extracted = await extractImportsForFile(cfg, filePath, normalized, lines, warnings);
       if (extracted.usedAst) usedAstCount++;
       filesProcessed++;
+      
+      // Track parsed count per language
+      if (perLanguage[lang]) {
+        perLanguage[lang]!.parsed++;
+      }
 
       const fileRepo = parseRepoNormPath(filePath);
       if (!fileRepo) continue;
@@ -1270,10 +1403,17 @@ async function generateGlobalDependencyGraph(ctx: {
             sources: [source],
             notes: [...imp.notes, `resolved import "${imp.module}" to ${resolvedFile}`],
           });
+          
+          // Track edges per language
+          if (perLanguage[lang]) {
+            perLanguage[lang]!.edges++;
+          }
         }
       }
-    } catch {
-      // Skip unreadable files
+    } catch (err) {
+      // Track skipped files with reason
+      const reason = err instanceof Error ? err.message : 'unknown error';
+      skippedFiles.push({ path: filePath, reason: `read error: ${reason.slice(0, 100)}` });
     }
   }
 
@@ -1286,6 +1426,23 @@ async function generateGlobalDependencyGraph(ctx: {
   });
 
   const importEdges = edges.filter((e) => e.type === 'imports_resolved').length;
+
+  // Build coverage report
+  const coverageReport: CoverageReport = {
+    scannedFilesCount,
+    parsedFilesCount: filesProcessed,
+    perLanguage,
+    perDir,
+    skippedFiles: skippedFiles.slice(0, 50), // Limit to first 50 for output size
+    truncated,
+    truncatedReason,
+    limits: {
+      maxFiles: limits.maxFiles,
+      maxNodes: limits.maxNodes,
+      maxEdges: limits.maxEdges,
+      timeBudgetMs,
+    },
+  };
 
   return {
     meta: {
@@ -1316,6 +1473,7 @@ async function generateGlobalDependencyGraph(ctx: {
       },
       warnings,
     },
+    coverageReport,
   };
 }
 

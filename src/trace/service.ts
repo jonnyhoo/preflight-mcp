@@ -81,7 +81,9 @@ export async function traceUpsert(cfg: PreflightConfig, rawArgs: unknown): Promi
   return { bundleId: args.bundleId, ...res };
 }
 
-export async function traceQuery(cfg: PreflightConfig, rawArgs: unknown): Promise<{
+export type TraceQueryResultReason = 'no_edges' | 'no_matching_edges' | 'not_initialized' | 'no_matching_bundle';
+
+export type TraceQueryResult = {
   bundleId?: string;
   scannedBundles?: number;
   truncated?: boolean;
@@ -97,7 +99,13 @@ export async function traceQuery(cfg: PreflightConfig, rawArgs: unknown): Promis
     updatedAt: string;
     bundleId?: string;
   }>;
-}> {
+  /** Reason for empty results (only present when edges is empty) */
+  reason?: TraceQueryResultReason;
+  /** Actionable next steps when edges is empty */
+  nextSteps?: string[];
+};
+
+export async function traceQuery(cfg: PreflightConfig, rawArgs: unknown): Promise<TraceQueryResult> {
   const args = z.object(TraceQueryInputSchema).parse(rawArgs) as {
     bundleId?: string;
     source_type: string;
@@ -118,6 +126,31 @@ export async function traceQuery(cfg: PreflightConfig, rawArgs: unknown): Promis
   if (args.bundleId) {
     const dbPath = await getTraceDbPathForBundleId(cfg, args.bundleId);
     const rows = queryTraceEdges(dbPath, { source, target, edgeType: args.edge_type, limit: args.limit });
+    
+    // Add reason and nextSteps for empty results
+    if (rows.length === 0) {
+      // Check if trace DB has any edges at all
+      const allEdges = queryTraceEdges(dbPath, { limit: 1 });
+      const hasAnyEdges = allEdges.length > 0;
+      
+      return {
+        bundleId: args.bundleId,
+        edges: [],
+        reason: hasAnyEdges ? 'no_matching_edges' : 'not_initialized',
+        nextSteps: hasAnyEdges
+          ? [
+              'Try a different source_type/source_id combination',
+              'Use preflight_search_bundle to find related files first',
+              'Check if the file path uses bundle-relative format: repos/{owner}/{repo}/norm/{path}',
+            ]
+          : [
+              'Use preflight_trace_upsert to create trace links',
+              'Trace links record relationships: code↔test (tested_by), code↔doc (documents), module↔requirement (implements)',
+              'Example: { edges: [{ type: "tested_by", source: { type: "file", id: "repos/.../src/main.ts" }, target: { type: "file", id: "repos/.../tests/main.test.ts" }, method: "exact", confidence: 0.9 }] }',
+            ],
+      };
+    }
+    
     return { bundleId: args.bundleId, edges: rows };
   }
 
@@ -164,9 +197,25 @@ export async function traceQuery(cfg: PreflightConfig, rawArgs: unknown): Promis
   // Sort by updatedAt desc across bundles
   collected.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 
-  return {
+  const result: TraceQueryResult = {
     scannedBundles: bundleIds.length,
     truncated: truncated ? true : undefined,
     edges: collected.slice(0, args.limit),
   };
+
+  // Add reason and nextSteps for empty results
+  if (collected.length === 0) {
+    result.reason = bundleIds.length === 0 ? 'no_matching_bundle' : 'no_edges';
+    result.nextSteps = bundleIds.length === 0
+      ? [
+          'No bundles found. Create a bundle first using preflight_create_bundle.',
+        ]
+      : [
+          'No trace links found across any bundle.',
+          'Use preflight_trace_upsert with a specific bundleId to create trace links.',
+          'Trace links record relationships: code↔test (tested_by), code↔doc (documents), module↔requirement (implements)',
+        ];
+  }
+
+  return result;
 }

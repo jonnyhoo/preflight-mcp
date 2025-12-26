@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import path from 'node:path';
 
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -32,6 +33,7 @@ import { cleanupOnStartup, cleanupOrphanBundles } from './bundle/cleanup.js';
 import { startHttpServer } from './http/server.js';
 import { DependencyGraphInputSchema, generateDependencyGraph } from './evidence/dependencyGraph.js';
 import { TraceQueryInputSchema, TraceUpsertInputSchema, traceQuery, traceUpsert } from './trace/service.js';
+import { generateRepoTree, formatTreeResult } from './bundle/tree.js';
 
 const CreateRepoInputSchema = z.union([
   z.object({
@@ -133,7 +135,7 @@ export async function startServer(): Promise<void> {
   const server = new McpServer(
     {
       name: 'preflight-mcp',
-      version: '0.2.4',
+version: '0.2.5',
       description: 'Create evidence-based preflight bundles for repositories (docs + code) with SQLite FTS search.',
     },
     {
@@ -346,6 +348,11 @@ export async function startServer(): Promise<void> {
         '(1) Omit "file" param → returns ALL key files in one call. ' +
         '(2) Provide "file" param → returns that specific file. ' +
         'Use when: "查看bundle", "show bundle", "read overview", "bundle概览", "项目信息", "读取依赖图".\n\n' +
+        '⭐ **Evidence Citation Support:**\n' +
+        '- Use `withLineNumbers: true` to get output in `N|line` format for precise citations\n' +
+        '- Use `ranges: ["20-80", "100-120"]` to read only specific line ranges\n' +
+        '- Combine both for efficient evidence gathering: `{ file: "src/main.ts", withLineNumbers: true, ranges: ["50-100"] }`\n' +
+        '- Citation format: `repos/owner/repo/norm/src/main.ts:50-100`\n\n' +
         '⭐ **Recommended Reading Order (AI-optimized summaries are better than raw README):**\n' +
         '1. `OVERVIEW.md` - Project structure & architecture summary (START HERE)\n' +
         '2. `START_HERE.md` - Key entry points & critical paths\n' +
@@ -362,7 +369,7 @@ export async function startServer(): Promise<void> {
         '├── manifest.json          # Bundle metadata\n' +
         '├── analysis/FACTS.json    # Static analysis facts\n' +
         '├── deps/dependency-graph.json  # Import graph (generated on demand)\n' +
-        '├── trace/trace.json       # Trace links export\n' +
+        '├── trace/trace.json       # Trace links export (auto-generated after trace_upsert)\n' +
         '├── indexes/search.sqlite3 # FTS5 index (use preflight_search_bundle)\n' +
         '└── repos/{owner}/{repo}/norm/  # Source code & original README\n' +
         '```\n\n' +
@@ -374,12 +381,21 @@ export async function startServer(): Promise<void> {
       inputSchema: {
         bundleId: z.string().describe('Bundle ID to read.'),
         file: z.string().optional().describe('Specific file to read (e.g., "deps/dependency-graph.json"). If omitted, returns all key files including dependency graph if exists.'),
+        withLineNumbers: z.boolean().optional().default(false).describe('If true, prefix each line with line number in "N|" format for evidence citation.'),
+        ranges: z.array(z.string()).optional().describe('Line ranges to read, e.g. ["20-80", "100-120"]. Each range is "start-end" (1-indexed, inclusive). If omitted, reads entire file.'),
       },
       outputSchema: {
         bundleId: z.string(),
         file: z.string().optional(),
         content: z.string().optional(),
         files: z.record(z.string(), z.string().nullable()).optional(),
+        lineInfo: z.object({
+          totalLines: z.number(),
+          ranges: z.array(z.object({
+            start: z.number(),
+            end: z.number(),
+          })),
+        }).optional(),
       },
       annotations: {
         readOnlyHint: true,
@@ -395,13 +411,91 @@ export async function startServer(): Promise<void> {
         const paths = getBundlePathsForId(storageDir, args.bundleId);
         const bundleRoot = paths.rootDir;
 
+        // Helper: parse range string "start-end" into { start, end }
+        const parseRange = (rangeStr: string): { start: number; end: number } | null => {
+          const match = rangeStr.match(/^(\d+)-(\d+)$/);
+          if (!match) return null;
+          const start = parseInt(match[1]!, 10);
+          const end = parseInt(match[2]!, 10);
+          if (start < 1 || end < start) return null;
+          return { start, end };
+        };
+
+        // Helper: format content with optional line numbers and ranges
+        const formatContent = (
+          rawContent: string,
+          withLineNumbers: boolean,
+          ranges?: Array<{ start: number; end: number }>
+        ): { content: string; lineInfo: { totalLines: number; ranges: Array<{ start: number; end: number }> } } => {
+          const lines = rawContent.replace(/\r\n/g, '\n').split('\n');
+          const totalLines = lines.length;
+
+          let selectedLines: Array<{ lineNo: number; text: string }> = [];
+
+          if (ranges && ranges.length > 0) {
+            // Extract specified ranges
+            for (const range of ranges) {
+              const start = Math.max(1, range.start);
+              const end = Math.min(totalLines, range.end);
+              for (let i = start; i <= end; i++) {
+                selectedLines.push({ lineNo: i, text: lines[i - 1] ?? '' });
+              }
+            }
+          } else {
+            // All lines
+            selectedLines = lines.map((text, idx) => ({ lineNo: idx + 1, text }));
+          }
+
+          // Format output
+          const formatted = withLineNumbers
+            ? selectedLines.map((l) => `${l.lineNo}|${l.text}`).join('\n')
+            : selectedLines.map((l) => l.text).join('\n');
+
+          const actualRanges = ranges && ranges.length > 0
+            ? ranges.map((r) => ({ start: Math.max(1, r.start), end: Math.min(totalLines, r.end) }))
+            : [{ start: 1, end: totalLines }];
+
+          return { content: formatted, lineInfo: { totalLines, ranges: actualRanges } };
+        };
+
         // Single file mode
         if (args.file) {
           const absPath = safeJoin(bundleRoot, args.file);
-          const content = await fs.readFile(absPath, 'utf8');
-          const out = { bundleId: args.bundleId, file: args.file, content };
+          const rawContent = await fs.readFile(absPath, 'utf8');
+
+          // Parse ranges if provided
+          let parsedRanges: Array<{ start: number; end: number }> | undefined;
+          if (args.ranges && args.ranges.length > 0) {
+            parsedRanges = [];
+            for (const rangeStr of args.ranges) {
+              const parsed = parseRange(rangeStr);
+              if (!parsed) {
+                throw new Error(`Invalid range format: "${rangeStr}". Expected "start-end" (e.g., "20-80").`);
+              }
+              parsedRanges.push(parsed);
+            }
+            // Sort and merge overlapping ranges
+            parsedRanges.sort((a, b) => a.start - b.start);
+          }
+
+          const { content, lineInfo } = formatContent(rawContent, args.withLineNumbers ?? false, parsedRanges);
+
+          const out = {
+            bundleId: args.bundleId,
+            file: args.file,
+            content,
+            lineInfo,
+          };
+
+          // Build text with citation hint
+          let textOutput = content;
+          if (parsedRanges && parsedRanges.length > 0) {
+            const rangeStr = parsedRanges.map((r) => `${r.start}-${r.end}`).join(', ');
+            textOutput = `[${args.file}:${rangeStr}] (${lineInfo.totalLines} total lines)\n\n${content}`;
+          }
+
           return {
-            content: [{ type: 'text', text: content }],
+            content: [{ type: 'text', text: textOutput }],
             structuredContent: out,
           };
         }
@@ -455,6 +549,77 @@ export async function startServer(): Promise<void> {
         return {
           content: [{ type: 'text', text: textParts.join('\n\n') || '(no files found)' }],
           structuredContent: out,
+        };
+      } catch (err) {
+        throw wrapPreflightError(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    'preflight_repo_tree',
+    {
+      title: 'Repository tree & statistics',
+      description:
+        'Get repository structure overview with directory tree, file statistics, and entry point candidates. ' +
+        'Use this BEFORE deep analysis to understand project layout without wasting tokens on search. ' +
+        'Use when: "show project structure", "what files are in this repo", "项目结构", "文件分布", "show tree".\n\n' +
+        '**Output includes:**\n' +
+        '- ASCII directory tree (depth-limited)\n' +
+        '- File count by extension (.ts, .py, etc.)\n' +
+        '- File count by top-level directory\n' +
+        '- Entry point candidates (README, main, index, cli, server, etc.)\n\n' +
+        '**Recommended workflow:**\n' +
+        '1. Call preflight_repo_tree to understand structure\n' +
+        '2. Read OVERVIEW.md for AI-generated summary\n' +
+        '3. Use preflight_search_bundle to find specific code\n' +
+        '4. Use preflight_read_file with ranges for evidence gathering',
+      inputSchema: {
+        bundleId: z.string().describe('Bundle ID to analyze.'),
+        depth: z.number().int().min(1).max(10).default(4).describe('Maximum directory depth to traverse. Default 4.'),
+        include: z.array(z.string()).optional().describe('Glob patterns to include (e.g., ["*.ts", "*.py"]). If omitted, includes all files.'),
+        exclude: z.array(z.string()).optional().describe('Patterns to exclude (e.g., ["node_modules", "*.pyc"]). Defaults include common excludes.'),
+      },
+      outputSchema: {
+        bundleId: z.string(),
+        tree: z.string().describe('ASCII directory tree representation.'),
+        stats: z.object({
+          totalFiles: z.number(),
+          totalDirs: z.number(),
+          byExtension: z.record(z.string(), z.number()),
+          byTopDir: z.record(z.string(), z.number()),
+        }),
+        entryPointCandidates: z.array(
+          z.object({
+            path: z.string(),
+            type: z.enum(['readme', 'main', 'index', 'cli', 'server', 'app', 'test', 'config']),
+            priority: z.number(),
+          })
+        ),
+      },
+      annotations: {
+        readOnlyHint: true,
+      },
+    },
+    async (args) => {
+      try {
+        const storageDir = await findBundleStorageDir(cfg.storageDirs, args.bundleId);
+        if (!storageDir) {
+          throw new BundleNotFoundError(args.bundleId);
+        }
+
+        const paths = getBundlePathsForId(storageDir, args.bundleId);
+        const result = await generateRepoTree(paths.rootDir, args.bundleId, {
+          depth: args.depth,
+          include: args.include,
+          exclude: args.exclude,
+        });
+
+        const textOutput = formatTreeResult(result);
+
+        return {
+          content: [{ type: 'text', text: textOutput }],
+          structuredContent: result,
         };
       } catch (err) {
         throw wrapPreflightError(err);
@@ -993,12 +1158,50 @@ export async function startServer(): Promise<void> {
         'Generate an evidence-based dependency graph. IMPORTANT: Before running, ASK the user which bundle and which file/mode they want! ' +
         'Two modes: (1) TARGET MODE: analyze a specific file (provide target.file). (2) GLOBAL MODE: project-wide graph (omit target). ' +
         'Do NOT automatically choose bundle or mode - confirm with user first! ' +
-        'File path must be bundle-relative: repos/{owner}/{repo}/norm/{path}.',
+        'File path must be bundle-relative: repos/{owner}/{repo}/norm/{path}.\n\n' +
+        '📊 **Coverage Report (Global Mode):**\n' +
+        'The response includes a `coverageReport` explaining what was analyzed:\n' +
+        '- `scannedFilesCount` / `parsedFilesCount`: Files discovered vs successfully parsed\n' +
+        '- `perLanguage`: Statistics per programming language (TypeScript, Python, etc.)\n' +
+        '- `perDir`: File counts per top-level directory\n' +
+        '- `skippedFiles`: Files that were skipped with reasons (too large, read error, etc.)\n' +
+        '- `truncated` / `truncatedReason`: Whether limits were hit\n\n' +
+        'Use this to understand graph completeness and identify gaps.\n\n' +
+        '📂 **Large File Handling (LLM Guidance):**\n' +
+        '- Default: files >1MB are skipped to avoid timeouts\n' +
+        '- If coverageReport.skippedFiles shows important files were skipped:\n' +
+        '  1. Try `largeFileStrategy: "truncate"` to read first 500 lines\n' +
+        '  2. Or increase `maxFileSizeBytes` (e.g., 5000000 for 5MB)\n' +
+        '- Options: `{ maxFileSizeBytes: 5000000, largeFileStrategy: "truncate", truncateLines: 1000 }`\n' +
+        '- User can override these settings if needed',
       inputSchema: DependencyGraphInputSchema,
       outputSchema: {
         meta: z.any(),
         facts: z.any(),
         signals: z.any(),
+        coverageReport: z.object({
+          scannedFilesCount: z.number(),
+          parsedFilesCount: z.number(),
+          perLanguage: z.record(z.string(), z.object({
+            scanned: z.number(),
+            parsed: z.number(),
+            edges: z.number(),
+          })),
+          perDir: z.record(z.string(), z.number()),
+          skippedFiles: z.array(z.object({
+            path: z.string(),
+            size: z.number().optional(),
+            reason: z.string(),
+          })),
+          truncated: z.boolean(),
+          truncatedReason: z.string().optional(),
+          limits: z.object({
+            maxFiles: z.number(),
+            maxNodes: z.number(),
+            maxEdges: z.number(),
+            timeBudgetMs: z.number(),
+          }),
+        }).optional().describe('Coverage report explaining what was analyzed and what was skipped (global mode only).'),
       },
       annotations: {
         readOnlyHint: true,
@@ -1028,9 +1231,21 @@ export async function startServer(): Promise<void> {
         'Create or update traceability links (code↔test, code↔doc, file↔requirement). ' +
         '**Proactive use recommended**: When you discover relationships during code analysis ' +
         '(e.g., "this file has a corresponding test", "this module implements feature X"), ' +
-        'automatically create trace links to record these findings for future queries. ' +
-        'Common link types: tested_by, implements, documents, relates_to, depends_on. ' +
-        'Stores trace edges in a per-bundle SQLite database.',
+        'automatically create trace links to record these findings for future queries.\n\n' +
+        '📌 **When to Write Trace Links (LLM Rules):**\n' +
+        'Write trace links ONLY for these 3 high-value relationship types:\n' +
+        '1. **Entry ↔ Core module** (entrypoint_of): Main entry points and their critical paths\n' +
+        '2. **Implementation ↔ Test** (tested_by): Code files and their corresponding tests\n' +
+        '3. **Code ↔ Documentation** (documents/implements): Code implementing specs or documented in files\n\n' +
+        '⚠️ **Required Evidence:**\n' +
+        '- sources: Array of evidence with file path + line range or note\n' +
+        '- method: "exact" (parser-verified) or "heuristic" (name-based)\n' +
+        '- confidence: 0.0-1.0 (use 0.9 for exact matches, 0.6-0.8 for heuristics)\n\n' +
+        '❌ **Do NOT write:**\n' +
+        '- Pure import relationships (use dependency_graph instead)\n' +
+        '- Low-value or obvious relationships\n\n' +
+        '**Standard edge_types:** tested_by, documents, implements, relates_to, entrypoint_of, depends_on\n\n' +
+        '📤 **Auto-export:** trace.json is automatically exported to trace/trace.json after each upsert for LLM direct reading.',
       inputSchema: TraceUpsertInputSchema,
       outputSchema: {
         bundleId: z.string(),
@@ -1086,6 +1301,10 @@ export async function startServer(): Promise<void> {
             bundleId: z.string().optional(),
           })
         ),
+        reason: z.enum(['no_edges', 'no_matching_edges', 'not_initialized', 'no_matching_bundle']).optional()
+          .describe('Reason for empty results. no_edges=no trace links exist across bundles, no_matching_edges=links exist but none match query, not_initialized=trace DB empty for this bundle, no_matching_bundle=no bundles found.'),
+        nextSteps: z.array(z.string()).optional()
+          .describe('Actionable guidance when edges is empty.'),
       },
       annotations: {
         readOnlyHint: true,
@@ -1099,8 +1318,72 @@ export async function startServer(): Promise<void> {
         }
 
         const out = await traceQuery(cfg, args);
+        
+        // Build human-readable text output
+        let textOutput: string;
+        if (out.edges.length === 0 && out.reason) {
+          textOutput = `No trace links found.\nReason: ${out.reason}\n\nNext steps:\n${(out.nextSteps ?? []).map(s => `- ${s}`).join('\n')}`;
+        } else {
+          textOutput = JSON.stringify(out, null, 2);
+        }
+        
         return {
-          content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
+          content: [{ type: 'text', text: textOutput }],
+          structuredContent: out,
+        };
+      } catch (err) {
+        throw wrapPreflightError(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    'preflight_trace_export',
+    {
+      title: 'Trace: export to JSON',
+      description:
+        'Export trace links to trace/trace.json for direct LLM reading. ' +
+        'Note: trace.json is auto-exported after each trace_upsert, so this tool is only needed to manually refresh or verify the export. ' +
+        'Use when: "export trace", "refresh trace.json", "导出trace", "刷新trace.json".',
+      inputSchema: {
+        bundleId: z.string().describe('Bundle ID to export trace links from.'),
+      },
+      outputSchema: {
+        bundleId: z.string(),
+        exported: z.number().int().describe('Number of edges exported.'),
+        jsonPath: z.string().describe('Bundle-relative path to the exported JSON file.'),
+      },
+      annotations: {
+        readOnlyHint: false,
+      },
+    },
+    async (args) => {
+      try {
+        await assertBundleComplete(cfg, args.bundleId);
+
+        const storageDir = await findBundleStorageDir(cfg.storageDirs, args.bundleId);
+        if (!storageDir) {
+          throw new BundleNotFoundError(args.bundleId);
+        }
+
+        const paths = getBundlePathsForId(storageDir, args.bundleId);
+        const traceDbPath = path.join(paths.rootDir, 'trace', 'trace.sqlite3');
+        
+        // Import and call exportTraceToJson
+        const { exportTraceToJson } = await import('./trace/store.js');
+        const result = await exportTraceToJson(traceDbPath);
+        
+        // Convert absolute path to bundle-relative path
+        const jsonRelPath = 'trace/trace.json';
+        
+        const out = {
+          bundleId: args.bundleId,
+          exported: result.exported,
+          jsonPath: jsonRelPath,
+        };
+
+        return {
+          content: [{ type: 'text', text: `Exported ${result.exported} trace edge(s) to ${jsonRelPath}` }],
           structuredContent: out,
         };
       } catch (err) {

@@ -15,7 +15,7 @@
 
 ## Features
 
-- **13 个 MCP 工具**：create/update/repair/search/evidence/trace/read/cleanup（外加 resources）
+- **15 个 MCP 工具**：create/update/repair/search/evidence/trace/read/cleanup（外加 resources）
 - **5 个 MCP prompts**：交互式引导（菜单、分析指南、搜索指南、管理指南、追溯指南）
 - **去重**：避免对相同的规范化输入重复索引
 - **可靠的 GitHub 获取**：可配置 git clone 超时 + GitHub archive（zipball）兜底
@@ -140,7 +140,7 @@ npm run smoke
 - 列表与清理逻辑只接受 UUID v4 作为 bundleId
 - 会自动过滤 `#recycle`、`tmp`、`.deleting` 等非 bundle 目录
 
-## Tools (12 total)
+## Tools (15 total)
 
 ### `preflight_list_bundles`
 列出所有 bundle。
@@ -170,11 +170,16 @@ npm run smoke
 
 ### `preflight_read_file`
 从 bundle 读取文件。两种模式：
-- **批量模式**（省略 `file`）：返回所有关键文件（OVERVIEW.md、START_HERE.md、AGENTS.md、manifest.json、deps/dependency-graph.json、repo READMEs）
-- **单文件模式**（提供 `file`）：返回指定文件（如 `deps/dependency-graph.json` 获取依赖图）
+- **批量模式**（省略 `file`）：返回所有关键文件
+- **单文件模式**（提供 `file`）：返回指定文件
+- **证据引用**：使用 `withLineNumbers: true` 获取 `N|行` 格式；使用 `ranges: ["20-80"]` 读取指定行
 - 触发词：「查看概览」「项目概览」「bundle详情」「读取依赖图」
-- 使用 `file: "manifest.json"` 获取 bundle 元数据
-- 使用 `file: "deps/dependency-graph.json"` 读取依赖图（由 `preflight_evidence_dependency_graph` 生成）
+
+### `preflight_repo_tree`
+获取仓库结构概览，避免浪费 token 搜索。
+- 返回：ASCII 目录树、按扩展名/目录统计文件数、入口点候选
+- 在深入分析前使用，了解项目布局
+- 触发词：「项目结构」「文件分布」「show tree」
 
 ### `preflight_delete_bundle`
 永久删除/移除一个 bundle。
@@ -225,7 +230,14 @@ npm run smoke
 写入/更新 bundle 级 traceability links（commit↔ticket、symbol↔test、code↔doc 等）。
 
 ### `preflight_trace_query`
-查询 traceability links（提供 `bundleId` 时更快；省略时可跨 bundle 扫描，带上限）。
+查询 traceability links。
+- 无匹配边时返回 `reason` 和 `nextSteps`（帮助 LLM 决定下一步）
+- 提供 `bundleId` 时更快；省略时可跨 bundle 扫描
+
+### `preflight_trace_export`
+导出 trace links 到 `trace/trace.json`。
+- 注意：每次 `trace_upsert` 后会自动导出，此工具仅用于手动刷新
+- 触发词：「导出trace」「刷新trace.json」
 
 ### `preflight_cleanup_orphans`
 删除不完整或损坏的 bundle（缺少有效 manifest.json）。
