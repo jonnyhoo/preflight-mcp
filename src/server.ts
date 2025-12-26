@@ -102,6 +102,14 @@ const ListBundlesInputSchema = {
 
 const DeleteBundleInputSchema = {
   bundleId: z.string().describe('Bundle ID to delete.'),
+  dryRun: z.boolean().optional().default(true).describe(
+    'If true (default), only preview what would be deleted without actually deleting. ' +
+    'Set to false AND provide confirm to actually delete.'
+  ),
+  confirm: z.string().optional().describe(
+    'Required when dryRun=false. Must match bundleId exactly to confirm deletion. ' +
+    'This prevents accidental deletions.'
+  ),
 };
 
 const RepairBundleInputSchema = {
@@ -380,15 +388,24 @@ version: '0.2.5',
         '- Search code: use preflight_search_bundle instead',
       inputSchema: {
         bundleId: z.string().describe('Bundle ID to read.'),
-        file: z.string().optional().describe('Specific file to read (e.g., "deps/dependency-graph.json"). If omitted, returns all key files including dependency graph if exists.'),
+        file: z.string().optional().describe('Specific file to read (e.g., "deps/dependency-graph.json"). If omitted, uses mode-based batch reading.'),
+        mode: z.enum(['light', 'full']).optional().default('light').describe(
+          'Batch reading mode (used when file param is omitted). ' +
+          'light: OVERVIEW + START_HERE + AGENTS + manifest only (recommended, saves tokens). ' +
+          'full: includes README and deps graph too.'
+        ),
+        includeReadme: z.boolean().optional().default(false).describe('Include repo README files in batch mode (can be large).'),
+        includeDepsGraph: z.boolean().optional().default(false).describe('Include deps/dependency-graph.json in batch mode.'),
         withLineNumbers: z.boolean().optional().default(false).describe('If true, prefix each line with line number in "N|" format for evidence citation.'),
         ranges: z.array(z.string()).optional().describe('Line ranges to read, e.g. ["20-80", "100-120"]. Each range is "start-end" (1-indexed, inclusive). If omitted, reads entire file.'),
       },
       outputSchema: {
         bundleId: z.string(),
+        mode: z.enum(['light', 'full']).optional().describe('Mode used for batch reading.'),
         file: z.string().optional(),
         content: z.string().optional(),
         files: z.record(z.string(), z.string().nullable()).optional(),
+        sections: z.array(z.string()).optional().describe('List of sections/files included in the response.'),
         lineInfo: z.object({
           totalLines: z.number(),
           ranges: z.array(z.object({
@@ -500,54 +517,83 @@ version: '0.2.5',
           };
         }
 
-        // Batch mode: read all key files
-        const keyFiles = ['OVERVIEW.md', 'START_HERE.md', 'AGENTS.md', 'manifest.json', 'deps/dependency-graph.json'];
+        // Batch mode: read key files based on mode
+        const mode = args.mode ?? 'light';
+        const includeReadme = args.includeReadme ?? (mode === 'full');
+        const includeDepsGraph = args.includeDepsGraph ?? (mode === 'full');
+        
+        // Core files (always included in both modes)
+        const coreFiles = ['OVERVIEW.md', 'START_HERE.md', 'AGENTS.md', 'manifest.json'];
+        const keyFiles = [...coreFiles];
+        
+        // Add deps graph if requested or in full mode
+        if (includeDepsGraph) {
+          keyFiles.push('deps/dependency-graph.json');
+        }
+        
         const files: Record<string, string | null> = {};
+        const sections: string[] = [];
 
         for (const file of keyFiles) {
           try {
             const absPath = safeJoin(bundleRoot, file);
             files[file] = await fs.readFile(absPath, 'utf8');
+            sections.push(file);
           } catch {
             files[file] = null;
           }
         }
 
-        // Try to find and read repo README files
-        try {
-          const manifest = await readManifest(paths.manifestPath);
-          for (const repo of manifest.repos ?? []) {
-            if (!repo.id) continue;
-            const [owner, repoName] = repo.id.split('/');
-            if (!owner || !repoName) continue;
+        // Try to find and read repo README files (only if requested or in full mode)
+        if (includeReadme) {
+          try {
+            const manifest = await readManifest(paths.manifestPath);
+            for (const repo of manifest.repos ?? []) {
+              if (!repo.id) continue;
+              const [owner, repoName] = repo.id.split('/');
+              if (!owner || !repoName) continue;
 
-            const readmeNames = ['README.md', 'readme.md', 'Readme.md', 'README.MD'];
-            for (const readmeName of readmeNames) {
-              const readmePath = `repos/${owner}/${repoName}/norm/${readmeName}`;
-              try {
-                const absPath = safeJoin(bundleRoot, readmePath);
-                files[readmePath] = await fs.readFile(absPath, 'utf8');
-                break;
-              } catch {
-                // Try next
+              const readmeNames = ['README.md', 'readme.md', 'Readme.md', 'README.MD'];
+              for (const readmeName of readmeNames) {
+                const readmePath = `repos/${owner}/${repoName}/norm/${readmeName}`;
+                try {
+                  const absPath = safeJoin(bundleRoot, readmePath);
+                  files[readmePath] = await fs.readFile(absPath, 'utf8');
+                  sections.push(readmePath);
+                  break;
+                } catch {
+                  // Try next
+                }
               }
             }
+          } catch {
+            // Ignore manifest read errors
           }
-        } catch {
-          // Ignore manifest read errors
         }
 
         // Build combined text output
         const textParts: string[] = [];
+        textParts.push(`[Mode: ${mode}] Sections: ${sections.join(', ')}`);
+        textParts.push('');
+        
         for (const [filePath, content] of Object.entries(files)) {
           if (content) {
             textParts.push(`=== ${filePath} ===\n${content}`);
           }
         }
+        
+        // Add hint for getting more content
+        if (mode === 'light') {
+          textParts.push('');
+          textParts.push('---');
+          textParts.push('💡 To include README: set includeReadme=true');
+          textParts.push('💡 To include dependency graph: set includeDepsGraph=true');
+          textParts.push('💡 For all content: set mode="full"');
+        }
 
-        const out = { bundleId: args.bundleId, files };
+        const out = { bundleId: args.bundleId, mode, files, sections };
         return {
-          content: [{ type: 'text', text: textParts.join('\n\n') || '(no files found)' }],
+          content: [{ type: 'text', text: textParts.join('\n') || '(no files found)' }],
           structuredContent: out,
         };
       } catch (err) {
@@ -631,11 +677,24 @@ version: '0.2.5',
     'preflight_delete_bundle',
     {
       title: 'Delete bundle',
-      description: 'Delete/remove a bundle permanently. Use when: "delete bundle", "remove bundle", "清除bundle", "删除索引", "移除仓库".',
+      description:
+        'Delete/remove a bundle permanently. ' +
+        '⚠️ SAFETY: By default runs in dryRun mode (preview only). ' +
+        'To actually delete: set dryRun=false AND confirm=bundleId. ' +
+        'Use when: "delete bundle", "remove bundle", "清除bundle", "删除索引", "移除仓库".',
       inputSchema: DeleteBundleInputSchema,
       outputSchema: {
-        deleted: z.boolean(),
+        dryRun: z.boolean().describe('Whether this was a dry run (preview only).'),
+        deleted: z.boolean().describe('Whether the bundle was actually deleted.'),
         bundleId: z.string(),
+        displayName: z.string().optional().describe('Bundle display name (from manifest).'),
+        repos: z.array(z.string()).optional().describe('Repos in this bundle.'),
+        message: z.string().optional().describe('Human-readable status message.'),
+        nextAction: z.object({
+          toolName: z.string(),
+          paramsTemplate: z.record(z.string(), z.unknown()),
+          why: z.string(),
+        }).optional().describe('Suggested next action to confirm deletion.'),
       },
       annotations: {
         destructiveHint: true,
@@ -643,6 +702,79 @@ version: '0.2.5',
     },
     async (args) => {
       try {
+        const dryRun = args.dryRun ?? true;
+        
+        // First, verify bundle exists and get info for preview
+        const storageDir = await findBundleStorageDir(cfg.storageDirs, args.bundleId);
+        if (!storageDir) {
+          throw new BundleNotFoundError(args.bundleId);
+        }
+        
+        // Get bundle info for preview/confirmation
+        const paths = getBundlePathsForId(storageDir, args.bundleId);
+        let displayName: string | undefined;
+        let repos: string[] = [];
+        try {
+          const manifest = await readManifest(paths.manifestPath);
+          displayName = manifest.displayName;
+          repos = (manifest.repos ?? []).map((r) => r.id).filter(Boolean);
+        } catch {
+          // Manifest might be missing/corrupt
+        }
+        
+        // Dry run mode: preview only
+        if (dryRun) {
+          const out = {
+            dryRun: true,
+            deleted: false,
+            bundleId: args.bundleId,
+            displayName,
+            repos,
+            message: `DRY RUN: Would delete bundle "${displayName || args.bundleId}" containing ${repos.length} repo(s).`,
+            nextAction: {
+              toolName: 'preflight_delete_bundle',
+              paramsTemplate: {
+                bundleId: args.bundleId,
+                dryRun: false,
+                confirm: args.bundleId,
+              },
+              why: 'Set dryRun=false and confirm=bundleId to actually delete.',
+            },
+          };
+          
+          return {
+            content: [{ type: 'text', text: `⚠️ ${out.message}\n\nTo confirm deletion:\n- Set dryRun: false\n- Set confirm: "${args.bundleId}"` }],
+            structuredContent: out,
+          };
+        }
+        
+        // Non-dry-run: require confirm
+        if (!args.confirm || args.confirm !== args.bundleId) {
+          const out = {
+            dryRun: false,
+            deleted: false,
+            bundleId: args.bundleId,
+            displayName,
+            repos,
+            message: `BLOCKED: confirm must match bundleId exactly. Got "${args.confirm || '(missing)'}", expected "${args.bundleId}".`,
+            nextAction: {
+              toolName: 'preflight_delete_bundle',
+              paramsTemplate: {
+                bundleId: args.bundleId,
+                dryRun: false,
+                confirm: args.bundleId,
+              },
+              why: 'Provide confirm=bundleId to proceed with deletion.',
+            },
+          };
+          
+          return {
+            content: [{ type: 'text', text: `❌ ${out.message}` }],
+            structuredContent: out,
+          };
+        }
+        
+        // Actually delete
         const deleted = await clearBundleMulti(cfg.storageDirs, args.bundleId);
         if (!deleted) {
           throw new BundleNotFoundError(args.bundleId);
@@ -650,9 +782,16 @@ version: '0.2.5',
 
         server.sendResourceListChanged();
 
-        const out = { deleted: true, bundleId: args.bundleId };
+        const out = {
+          dryRun: false,
+          deleted: true,
+          bundleId: args.bundleId,
+          displayName,
+          repos,
+          message: `Deleted bundle "${displayName || args.bundleId}" (${repos.length} repo(s)).`,
+        };
         return {
-          content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
+          content: [{ type: 'text', text: `✅ ${out.message}` }],
           structuredContent: out,
         };
       } catch (err) {
@@ -1223,6 +1362,167 @@ version: '0.2.5',
     }
   );
 
+  // Simplified dependency graph tool for single-point tasks
+  server.registerTool(
+    'preflight_get_dependency_graph',
+    {
+      title: 'Get dependency graph (simplified)',
+      description:
+        'Get dependency graph with minimal parameters. ' +
+        'Use when user asks: "show dependencies", "看依赖图", "import graph", "what does X depend on". ' +
+        'This is a simplified wrapper around preflight_evidence_dependency_graph.\n\n' +
+        '**Modes:**\n' +
+        '- `scope: "global"` (default): Project-wide dependency graph\n' +
+        '- `scope: "target"` with `targetFile`: Dependencies for a specific file\n\n' +
+        '**Format:**\n' +
+        '- `format: "summary"` (default): Top nodes, aggregated by directory, key edges only\n' +
+        '- `format: "full"`: Complete graph data',
+      inputSchema: {
+        bundleId: z.string().describe('Bundle ID. Use preflight_list_bundles to find available bundles.'),
+        scope: z.enum(['global', 'target']).optional().default('global').describe('global=project-wide, target=single file.'),
+        targetFile: z.string().optional().describe('Target file path (required when scope="target"). Use bundle-relative path: repos/{owner}/{repo}/norm/{path}.'),
+        format: z.enum(['summary', 'full']).optional().default('summary').describe('summary=aggregated view (recommended), full=raw graph data.'),
+        fresh: z.boolean().optional().default(false).describe('If true, regenerate graph even if cached version exists.'),
+      },
+      outputSchema: {
+        bundleId: z.string(),
+        scope: z.enum(['global', 'target']),
+        format: z.enum(['summary', 'full']),
+        // Summary format output
+        summary: z.object({
+          totalNodes: z.number(),
+          totalEdges: z.number(),
+          topImporters: z.array(z.object({
+            file: z.string(),
+            importCount: z.number(),
+          })),
+          topImported: z.array(z.object({
+            file: z.string(),
+            importedByCount: z.number(),
+          })),
+          byDirectory: z.record(z.string(), z.number()),
+        }).optional(),
+        // Full format passes through to evidence_dependency_graph
+        facts: z.any().optional(),
+        coverageReport: z.any().optional(),
+      },
+      annotations: {
+        readOnlyHint: true,
+      },
+    },
+    async (args) => {
+      try {
+        await assertBundleComplete(cfg, args.bundleId);
+        
+        // Build params for the underlying dependency graph generator
+        const depGraphArgs: any = {
+          bundleId: args.bundleId,
+          options: {
+            timeBudgetMs: 30000,
+            maxFiles: 500,
+            maxNodes: 1000,
+            maxEdges: 5000,
+          },
+        };
+        
+        if (args.scope === 'target' && args.targetFile) {
+          depGraphArgs.target = { file: args.targetFile };
+        }
+        
+        if (args.fresh) {
+          depGraphArgs.options.force = true;
+        }
+        
+        const rawResult = await generateDependencyGraph(cfg, depGraphArgs);
+        
+        // For summary format, aggregate the results
+        if (args.format === 'summary') {
+          const edges = rawResult.facts?.edges ?? [];
+          const nodes = rawResult.facts?.nodes ?? [];
+          
+          // Count imports per file
+          const importCounts: Record<string, number> = {};
+          const importedByCounts: Record<string, number> = {};
+          const dirCounts: Record<string, number> = {};
+          
+          for (const edge of edges) {
+            if (edge.type === 'imports' || edge.type === 'imports_resolved') {
+              const from = typeof edge.from === 'string' ? edge.from.replace(/^file:/, '') : '';
+              const to = typeof edge.to === 'string' ? edge.to.replace(/^(file:|module:)/, '') : '';
+              
+              if (from) {
+                importCounts[from] = (importCounts[from] ?? 0) + 1;
+                const dir = from.split('/').slice(0, -1).join('/') || '(root)';
+                dirCounts[dir] = (dirCounts[dir] ?? 0) + 1;
+              }
+              if (to && !to.startsWith('.')) {
+                importedByCounts[to] = (importedByCounts[to] ?? 0) + 1;
+              }
+            }
+          }
+          
+          const topImporters = Object.entries(importCounts)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 10)
+            .map(([file, count]) => ({ file, importCount: count }));
+          
+          const topImported = Object.entries(importedByCounts)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 10)
+            .map(([file, count]) => ({ file, importedByCount: count }));
+          
+          const out = {
+            bundleId: args.bundleId,
+            scope: args.scope ?? 'global',
+            format: 'summary' as const,
+            summary: {
+              totalNodes: nodes.length,
+              totalEdges: edges.length,
+              topImporters,
+              topImported,
+              byDirectory: dirCounts,
+            },
+          };
+          
+          // Build human-readable output
+          let text = `## Dependency Graph Summary (${args.scope ?? 'global'})\n\n`;
+          text += `- Total nodes: ${nodes.length}\n`;
+          text += `- Total edges: ${edges.length}\n\n`;
+          text += `### Top Importers (files with most imports)\n`;
+          for (const item of topImporters.slice(0, 5)) {
+            text += `- ${item.file}: ${item.importCount} imports\n`;
+          }
+          text += `\n### Most Imported (files imported by others)\n`;
+          for (const item of topImported.slice(0, 5)) {
+            text += `- ${item.file}: imported by ${item.importedByCount} files\n`;
+          }
+          text += `\n💡 For full graph data, use format="full"`;
+          
+          return {
+            content: [{ type: 'text', text }],
+            structuredContent: out,
+          };
+        }
+        
+        // Full format: pass through raw result
+        const out = {
+          bundleId: args.bundleId,
+          scope: args.scope ?? 'global',
+          format: 'full' as const,
+          facts: rawResult.facts,
+          coverageReport: rawResult.coverageReport,
+        };
+        
+        return {
+          content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
+          structuredContent: out,
+        };
+      } catch (err) {
+        throw wrapPreflightError(err);
+      }
+    }
+  );
+
   server.registerTool(
     'preflight_trace_upsert',
     {
@@ -1232,15 +1532,17 @@ version: '0.2.5',
         '**Proactive use recommended**: When you discover relationships during code analysis ' +
         '(e.g., "this file has a corresponding test", "this module implements feature X"), ' +
         'automatically create trace links to record these findings for future queries.\n\n' +
+        '⚠️ **SAFETY: Use dryRun=true to preview changes before writing.**\n\n' +
         '📌 **When to Write Trace Links (LLM Rules):**\n' +
         'Write trace links ONLY for these 3 high-value relationship types:\n' +
         '1. **Entry ↔ Core module** (entrypoint_of): Main entry points and their critical paths\n' +
         '2. **Implementation ↔ Test** (tested_by): Code files and their corresponding tests\n' +
         '3. **Code ↔ Documentation** (documents/implements): Code implementing specs or documented in files\n\n' +
-        '⚠️ **Required Evidence:**\n' +
-        '- sources: Array of evidence with file path + line range or note\n' +
+        '⚠️ **Required Evidence (for tested_by/documents/implements):**\n' +
+        '- sources: Array of evidence with file path + line range or note (REQUIRED)\n' +
         '- method: "exact" (parser-verified) or "heuristic" (name-based)\n' +
-        '- confidence: 0.0-1.0 (use 0.9 for exact matches, 0.6-0.8 for heuristics)\n\n' +
+        '- confidence: 0.0-1.0 (use 0.9 for exact matches, 0.6-0.8 for heuristics)\n' +
+        '- Edges without sources will be BLOCKED with actionable guidance\n\n' +
         '❌ **Do NOT write:**\n' +
         '- Pure import relationships (use dependency_graph instead)\n' +
         '- Low-value or obvious relationships\n\n' +
@@ -1249,8 +1551,32 @@ version: '0.2.5',
       inputSchema: TraceUpsertInputSchema,
       outputSchema: {
         bundleId: z.string(),
-        upserted: z.number().int(),
-        ids: z.array(z.string()),
+        dryRun: z.boolean().describe('Whether this was a dry run (preview only).'),
+        upserted: z.number().int().describe('Number of edges actually written (0 if dryRun=true).'),
+        ids: z.array(z.string()).describe('IDs of upserted edges.'),
+        warnings: z.array(z.object({
+          edgeIndex: z.number(),
+          code: z.string(),
+          message: z.string(),
+        })).optional().describe('Non-blocking validation warnings.'),
+        blocked: z.array(z.object({
+          edgeIndex: z.number(),
+          code: z.string(),
+          message: z.string(),
+          nextAction: z.object({
+            toolName: z.string(),
+            why: z.string(),
+          }),
+        })).optional().describe('Edges blocked due to validation errors (e.g., missing sources).'),
+        preview: z.array(z.object({
+          id: z.string(),
+          source: z.object({ type: z.string(), id: z.string() }),
+          target: z.object({ type: z.string(), id: z.string() }),
+          type: z.string(),
+          confidence: z.number(),
+          method: z.enum(['exact', 'heuristic']),
+          sourcesCount: z.number(),
+        })).optional().describe('Preview of edges (only in dryRun mode).'),
       },
       annotations: {
         openWorldHint: true,
