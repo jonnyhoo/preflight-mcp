@@ -218,6 +218,7 @@ npm run smoke
 ### `preflight_repo_tree`
 获取仓库结构概览，避免浪费 token 搜索。
 - 返回：ASCII 目录树、按扩展名/目录统计文件数、入口点候选
+- 默认深度：6（v0.3.1+，原为 4）— 可看到 norm/ 下 2-3 层子目录
 - 在深入分析前使用，了解项目布局
 - 触发词：「项目结构」「文件分布」「show tree」
 
@@ -246,7 +247,11 @@ npm run smoke
 - 更新：先调用 `preflight_update_bundle`，再搜索
 - 修复：先调用 `preflight_repair_bundle`，再搜索
 
-**已弃用参数**（v0.2.7+）：`ensureFresh`、`autoRepairIndex`、`maxAgeHours` 已弃用，使用时会返回警告（不再报错）。请使用单独的 update/repair 工具。
+**新过滤选项**（v0.3.1+）：
+- `excludePatterns`：排除匹配模式的路径（如 `["**/tests/**", "**/__pycache__/**"]`）
+- `maxSnippetLength`：限制每个结果的代码片段长度（50-500 字符），减少 token 消耗
+
+**已弃用参数**：`ensureFresh`、`autoRepairIndex`、`maxAgeHours` 已弃用，使用时会返回警告。
 
 ### `preflight_search_by_tags`
 跨多个 bundle 按标签过滤搜索（基于行的 SQLite FTS5）。

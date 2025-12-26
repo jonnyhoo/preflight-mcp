@@ -83,7 +83,7 @@ export async function generateRepoTree(
     exclude?: string[];
   } = {}
 ): Promise<RepoTreeResult> {
-  const depth = options.depth ?? 4;
+  const depth = options.depth ?? 6;
   const includePatterns = options.include ?? [];
   const excludePatterns = options.exclude ?? ['node_modules', '.git', '__pycache__', '.venv', 'venv', 'dist', 'build', '*.pyc'];
 

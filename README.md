@@ -197,6 +197,7 @@ Read file(s) from bundle. Two modes:
 ### `preflight_repo_tree`
 Get repository structure overview without wasting tokens on search.
 - Returns: ASCII directory tree, file count by extension/directory, entry point candidates
+- Default depth: 6 (v0.3.1+, was 4) - shows 2-3 levels under `norm/` directory
 - Use BEFORE deep analysis to understand project layout
 - Triggers: "show project structure", "what files are in this repo", "项目结构", "文件分布"
 
@@ -225,7 +226,11 @@ Important: **this tool is strictly read-only**.
 - To update: call `preflight_update_bundle`, then search again.
 - To repair: call `preflight_repair_bundle`, then search again.
 
-**Deprecated parameters** (v0.2.7+): `ensureFresh`, `autoRepairIndex`, `maxAgeHours` are deprecated and will return warnings instead of errors. Use separate update/repair tools.
+**New filtering options** (v0.3.1):
+- `excludePatterns`: Filter out paths matching patterns (e.g., `["**/tests/**", "**/__pycache__/**"]`)
+- `maxSnippetLength`: Limit snippet length per result (50-500 chars) to reduce token consumption
+
+**Deprecated parameters**: `ensureFresh`, `autoRepairIndex`, `maxAgeHours` are deprecated and will return warnings instead of errors.
 
 ### `preflight_search_by_tags`
 Search across multiple bundles filtered by tags (line-based SQLite FTS5).

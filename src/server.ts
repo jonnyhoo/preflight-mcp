@@ -74,6 +74,18 @@ const SearchBundleInputSchema = {
   query: z.string().describe('Search query. Prefix with fts: to use raw FTS syntax.'),
   scope: z.enum(['docs', 'code', 'all']).default('all').describe('Search scope.'),
   limit: z.number().int().min(1).max(200).default(30).describe('Max number of hits.'),
+  // New filtering options (v0.3.1)
+  excludePatterns: z
+    .array(z.string())
+    .optional()
+    .describe('Exclude paths matching these patterns (e.g., ["**/tests/**", "**/__pycache__/**"]). Reduces noise from test/config files.'),
+  maxSnippetLength: z
+    .number()
+    .int()
+    .min(50)
+    .max(500)
+    .optional()
+    .describe('Max length of snippet in each result (default: no limit). Use to reduce token consumption.'),
   // Deprecated (kept for backward compatibility): this tool is strictly read-only.
   ensureFresh: z
     .boolean()
@@ -1274,12 +1286,49 @@ version: '0.2.5',
 
         const paths = getBundlePathsForId(storageDir, args.bundleId);
 
-        const rawHits = searchIndex(paths.searchDbPath, args.query, args.scope as SearchScope, args.limit, paths.rootDir);
+        // Fetch more results if we need to filter, to ensure we still get enough after filtering
+        const fetchLimit = args.excludePatterns?.length ? Math.min(args.limit * 2, 200) : args.limit;
+        let rawHits = searchIndex(paths.searchDbPath, args.query, args.scope as SearchScope, fetchLimit, paths.rootDir);
 
-        const hits = rawHits.map((h) => ({
-          ...h,
-          uri: toBundleFileUri({ bundleId: args.bundleId, relativePath: h.path }),
-        }));
+        // Apply excludePatterns filter
+        if (args.excludePatterns && args.excludePatterns.length > 0) {
+          const patterns = args.excludePatterns.map(p => {
+            // Convert glob pattern to regex
+            const regexStr = p
+              .replace(/\./g, '\\.')
+              .replace(/\*\*/g, '<<<DOUBLESTAR>>>')
+              .replace(/\*/g, '[^/]*')
+              .replace(/<<<DOUBLESTAR>>>/g, '.*');
+            return new RegExp(regexStr, 'i');
+          });
+          rawHits = rawHits.filter(h => !patterns.some(re => re.test(h.path)));
+        }
+
+        // Limit to requested count after filtering
+        rawHits = rawHits.slice(0, args.limit);
+
+        const hits = rawHits.map((h) => {
+          const hit: Record<string, unknown> = {
+            ...h,
+            uri: toBundleFileUri({ bundleId: args.bundleId, relativePath: h.path }),
+          };
+          
+          // Apply maxSnippetLength truncation
+          if (args.maxSnippetLength && h.snippet && h.snippet.length > args.maxSnippetLength) {
+            hit.snippet = h.snippet.slice(0, args.maxSnippetLength) + '…';
+          }
+          
+          // Truncate surroundingLines if maxSnippetLength is set
+          if (args.maxSnippetLength && h.context?.surroundingLines) {
+            const maxLines = Math.max(3, Math.floor(args.maxSnippetLength / 50));
+            hit.context = {
+              ...h.context,
+              surroundingLines: h.context.surroundingLines.slice(0, maxLines),
+            };
+          }
+          
+          return hit;
+        });
 
         const out: Record<string, unknown> = {
           bundleId: args.bundleId,
