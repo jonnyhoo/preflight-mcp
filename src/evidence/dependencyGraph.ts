@@ -106,6 +106,13 @@ export type DependencyGraphResult = {
         maxEdges: number;
       };
     };
+    /** Cache information for transparency */
+    cacheInfo?: {
+      fromCache: boolean;
+      generatedAt?: string;
+      cacheAgeMs?: number;
+      hint?: string;
+    };
   };
   facts: {
     nodes: GraphNode[];
@@ -115,7 +122,11 @@ export type DependencyGraphResult = {
     stats: {
       filesRead: number;
       searchHits: number;
+      /** @deprecated Use referenceEdges instead */
       callEdges: number;
+      /** FTS-based reference edges (name matching, may include false positives) */
+      referenceEdges: number;
+      /** AST-based import edges (high confidence) */
       importEdges: number;
     };
     warnings: Array<{ code: string; message: string; evidenceIds?: string[] }>;
@@ -146,6 +157,12 @@ export const DependencyGraphInputSchema = {
     'If true, regenerate the dependency graph even if cached. ' +
     'Global mode results are cached in the bundle; use force=true to refresh.'
   ),
+  /** Edge types to include in the result. Default: only imports (AST-based, high confidence). */
+  edgeTypes: z.enum(['imports', 'all']).default('imports').describe(
+    'Edge types to include. "imports": only AST-based import edges (high confidence, recommended). ' +
+    '"all": include FTS-based reference edges (name matching, may have false positives). ' +
+    'Default: "imports" for accuracy. Use "all" only when you need to find callers/references.'
+  ),
   options: z
     .object({
       maxFiles: z.number().int().min(1).max(500).default(200),
@@ -161,8 +178,11 @@ export const DependencyGraphInputSchema = {
       /** If largeFileStrategy=truncate, how many lines to read */
       truncateLines: z.number().int().min(100).max(5000).default(500)
         .describe('When largeFileStrategy=truncate, read this many lines. Default 500.'),
+      /** File extensions to exclude from reference search (FTS). Helps reduce false positives. */
+      excludeExtensions: z.array(z.string()).default(['.json', '.md', '.txt', '.yml', '.yaml', '.toml', '.lock'])
+        .describe('File extensions to exclude from reference/caller search. Default excludes non-code files.'),
     })
-    .default({ maxFiles: 200, maxNodes: 300, maxEdges: 800, timeBudgetMs: 25_000, maxFileSizeBytes: 1_000_000, largeFileStrategy: 'skip', truncateLines: 500 }),
+    .default({ maxFiles: 200, maxNodes: 300, maxEdges: 800, timeBudgetMs: 25_000, maxFileSizeBytes: 1_000_000, largeFileStrategy: 'skip', truncateLines: 500, excludeExtensions: ['.json', '.md', '.txt', '.yml', '.yaml', '.toml', '.lock'] }),
 };
 
 export type DependencyGraphInput = z.infer<z.ZodObject<typeof DependencyGraphInputSchema>>;
@@ -383,11 +403,22 @@ export async function generateDependencyGraph(cfg: PreflightConfig, rawArgs: unk
     try {
       const cached = await fs.readFile(paths.depsGraphPath, 'utf8');
       const parsed = JSON.parse(cached) as DependencyGraphResult;
+      const cachedAt = parsed.meta.generatedAt ? new Date(parsed.meta.generatedAt).getTime() : 0;
+      const cacheAgeMs = cachedAt ? Date.now() - cachedAt : 0;
+      
+      // Add cacheInfo to meta
+      parsed.meta.cacheInfo = {
+        fromCache: true,
+        generatedAt: parsed.meta.generatedAt,
+        cacheAgeMs,
+        hint: 'Use force=true to regenerate the graph.',
+      };
+      
       // Add note that this is from cache
       parsed.signals.warnings = parsed.signals.warnings || [];
       parsed.signals.warnings.unshift({
         code: 'from_cache',
-        message: `Loaded from cache (generated at ${parsed.meta.generatedAt}). Use force=true to regenerate.`,
+        message: `Loaded from cache (generated at ${parsed.meta.generatedAt}, age: ${Math.round(cacheAgeMs / 1000)}s). Use force=true to regenerate.`,
       });
       return parsed;
     } catch {
@@ -1014,13 +1045,16 @@ export async function generateDependencyGraph(cfg: PreflightConfig, rawArgs: unk
     });
   }
 
-  // 2) Upstream: find callers via FTS hits
+  // 2) Upstream: find references via FTS hits (only if edgeTypes='all')
   let searchHits = 0;
   let filesRead = 0;
-  let callEdges = 0;
+  let referenceEdges = 0;
   let importEdges = edges.filter((e) => e.type === 'imports').length;
+  
+  const includeReferences = args.edgeTypes === 'all';
+  const excludeExtensions = new Set(args.options.excludeExtensions ?? ['.json', '.md', '.txt', '.yml', '.yaml', '.toml', '.lock']);
 
-  if (targetSymbol && targetSymbol.length >= 2) {
+  if (includeReferences && targetSymbol && targetSymbol.length >= 2) {
     const maxHits = Math.min(500, limits.maxFiles * 5);
     const hits = searchIndex(paths.searchDbPath, targetSymbol, 'code', maxHits, paths.rootDir);
     searchHits = hits.length;
@@ -1028,14 +1062,18 @@ export async function generateDependencyGraph(cfg: PreflightConfig, rawArgs: unk
     const fileLineCache = new Map<string, string[]>();
 
     for (const hit of hits) {
-      if (checkBudget('timeBudget exceeded during caller scan')) break;
+      if (checkBudget('timeBudget exceeded during reference scan')) break;
       if (edges.length >= limits.maxEdges) break;
 
       const hitPath = hit.path;
       if (!hitPath || hit.kind !== 'code') continue;
+      
+      // P3: Filter out non-code files by extension
+      const hitExt = path.extname(hitPath).toLowerCase();
+      if (excludeExtensions.has(hitExt)) continue;
 
       // Skip obvious self-reference in the same file if no symbol boundary detection.
-      // We still allow calls within the same file (but avoid exploding edges).
+      // We still allow references within the same file (but avoid exploding edges).
 
       // Read file lines (cache)
       let lines = fileLineCache.get(hitPath);
@@ -1087,20 +1125,20 @@ export async function generateDependencyGraph(cfg: PreflightConfig, rawArgs: unk
       };
       src.snippetSha256 = sha256Hex(src.snippet ?? '');
 
-      const evidenceId = makeEvidenceId(['calls', callerId, targetSymbolId, hitPath, String(hit.lineNo), String(call.startCol)]);
+      const evidenceId = makeEvidenceId(['references', callerId, targetSymbolId, hitPath, String(hit.lineNo), String(call.startCol)]);
       addEdge({
         evidenceId,
         kind: 'edge',
-        type: 'calls',
+        type: 'references',
         from: callerId,
         to: targetSymbolId,
         method: 'heuristic',
-        confidence: 0.6,
+        confidence: 0.5,
         sources: [src],
-        notes: ['call edge is name-based (no type/overload resolution)'],
+        notes: ['reference edge is FTS name-based (may include false positives from comments/strings/docs)'],
       });
 
-      callEdges++;
+      referenceEdges++;
 
       if (nodes.size >= limits.maxNodes) {
         truncated = true;
@@ -1115,11 +1153,17 @@ export async function generateDependencyGraph(cfg: PreflightConfig, rawArgs: unk
         message: `Search hits were capped at ${maxHits}; graph may be incomplete.`,
       });
     }
+  } else if (!includeReferences && targetSymbol && targetSymbol.length >= 2) {
+    warnings.push({
+      code: 'references_skipped',
+      message:
+        'Reference/caller search was skipped (edgeTypes="imports"). Use edgeTypes="all" to include FTS-based reference edges (may have false positives).',
+    });
   } else {
     warnings.push({
       code: 'symbol_missing_or_too_short',
       message:
-        'No symbol provided (or symbol too short). Upstream call graph was skipped; only imports were extracted from the target file.',
+        'No symbol provided (or symbol too short). Reference graph was skipped; only imports were extracted from the target file.',
     });
   }
 
@@ -1127,12 +1171,12 @@ export async function generateDependencyGraph(cfg: PreflightConfig, rawArgs: unk
   warnings.push({
     code: 'limitations',
     message: usedAstForImports
-      ? 'This dependency graph uses deterministic parsing for imports (Tree-sitter WASM syntax AST) plus heuristics for callers (FTS + name-based). Results may be incomplete and are not type-resolved. Each edge includes method/confidence/sources for auditability.'
-      : 'This dependency graph is generated with deterministic heuristics (FTS + regex). Calls/imports may be incomplete and are not type-resolved. Each edge includes method/confidence/sources for auditability.',
+      ? 'This dependency graph uses deterministic parsing for imports (Tree-sitter WASM syntax AST). Reference edges (if enabled) use FTS + name-based heuristics and may have false positives. Each edge includes method/confidence/sources for auditability.'
+      : 'This dependency graph uses regex-based import extraction. Reference edges (if enabled) use FTS + name-based heuristics. Each edge includes method/confidence/sources for auditability.',
   });
 
   // Stats
-  importEdges = edges.filter((e) => e.type === 'imports').length;
+  importEdges = edges.filter((e) => e.type === 'imports' || e.type === 'imports_resolved').length;
 
   const out: DependencyGraphResult = {
     meta: {
@@ -1149,6 +1193,9 @@ export async function generateDependencyGraph(cfg: PreflightConfig, rawArgs: unk
         truncatedReason,
         limits,
       },
+      cacheInfo: {
+        fromCache: false,
+      },
     },
     facts: {
       nodes: Array.from(nodes.values()),
@@ -1158,7 +1205,8 @@ export async function generateDependencyGraph(cfg: PreflightConfig, rawArgs: unk
       stats: {
         filesRead,
         searchHits,
-        callEdges,
+        callEdges: referenceEdges, // deprecated, use referenceEdges
+        referenceEdges,
         importEdges,
       },
       warnings,
@@ -1459,6 +1507,9 @@ async function generateGlobalDependencyGraph(ctx: {
         truncatedReason,
         limits,
       },
+      cacheInfo: {
+        fromCache: false,
+      },
     },
     facts: {
       nodes: Array.from(nodes.values()),
@@ -1468,7 +1519,8 @@ async function generateGlobalDependencyGraph(ctx: {
       stats: {
         filesRead: filesProcessed,
         searchHits: 0,
-        callEdges: 0,
+        callEdges: 0, // deprecated
+        referenceEdges: 0,
         importEdges,
       },
       warnings,

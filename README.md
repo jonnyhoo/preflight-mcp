@@ -225,6 +225,8 @@ Important: **this tool is strictly read-only**.
 - To update: call `preflight_update_bundle`, then search again.
 - To repair: call `preflight_repair_bundle`, then search again.
 
+**Deprecated parameters** (v0.2.7+): `ensureFresh`, `autoRepairIndex`, `maxAgeHours` are deprecated and will return warnings instead of errors. Use separate update/repair tools.
+
 ### `preflight_search_by_tags`
 Search across multiple bundles filtered by tags (line-based SQLite FTS5).
 - Triggers: "search in MCP bundles", "在MCP项目中搜索", "搜索所有agent"
@@ -240,11 +242,23 @@ Optional parameters:
 
 ### `preflight_evidence_dependency_graph`
 Generate an evidence-based dependency graph. Two modes:
-- **Target mode** (provide `target.file`): Analyze a specific file's imports and callers
+- **Target mode** (provide `target.file`): Analyze a specific file's imports and references
 - **Global mode** (omit `target`): Generate project-wide import graph of all code files
 - Deterministic output with source ranges for edges.
 - Uses Tree-sitter parsing when `PREFLIGHT_AST_ENGINE=wasm`; falls back to regex extraction otherwise.
-- Emits `imports` edges (file → module) and `imports_resolved` edges (file → internal file).
+
+**Edge types** (v0.2.7+):
+- `edgeTypes: "imports"` (default): Only AST-based import edges (high confidence, recommended)
+- `edgeTypes: "all"`: Include FTS-based reference edges (name matching, may have false positives)
+
+**Cache transparency** (v0.2.7+):
+- Response includes `meta.cacheInfo` with `fromCache`, `generatedAt`, `cacheAgeMs`
+- Use `force: true` to regenerate cached global graphs
+
+**Large file handling**:
+- `options.maxFileSizeBytes` (default: 1MB): Skip files larger than this
+- `options.largeFileStrategy`: `"skip"` (default) or `"truncate"`
+- `options.excludeExtensions`: Filter out non-code files from reference search (default: `.json`, `.md`, `.txt`, `.yml`, etc.)
 
 ### `preflight_trace_upsert`
 Create or update traceability links (code↔test, code↔doc, file↔requirement).

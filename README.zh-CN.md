@@ -243,9 +243,10 @@ npm run smoke
 - 触发词：「搜索bundle」「在仓库中查找」「搜代码」
 
 重要：**此工具是严格只读的**。
-- `ensureFresh` / `maxAgeHours` 已**弃用**，提供时会报错
 - 更新：先调用 `preflight_update_bundle`，再搜索
 - 修复：先调用 `preflight_repair_bundle`，再搜索
+
+**已弃用参数**（v0.2.7+）：`ensureFresh`、`autoRepairIndex`、`maxAgeHours` 已弃用，使用时会返回警告（不再报错）。请使用单独的 update/repair 工具。
 
 ### `preflight_search_by_tags`
 跨多个 bundle 按标签过滤搜索（基于行的 SQLite FTS5）。
@@ -261,10 +262,22 @@ npm run smoke
 - `limit`：跨所有 bundle 的最大命中数
 
 ### `preflight_evidence_dependency_graph`
-生成目标文件/符号的「基于证据」的依赖图（imports + callers）。
+生成目标文件/符号的「基于证据」的依赖图（imports + references）。
 - 输出确定性（best-effort），并为每条边提供可追溯 source range
 - `PREFLIGHT_AST_ENGINE=wasm` 时使用 Tree-sitter；否则回退到正则抽取
-- 既输出 `imports`（file → module），也会在可解析时输出 `imports_resolved`（file → file）
+
+**边类型**（v0.2.7+）：
+- `edgeTypes: "imports"`（默认）：仅返回基于 AST 的 import 边（高置信度，推荐）
+- `edgeTypes: "all"`：包含基于 FTS 的 reference 边（名称匹配，可能有误报）
+
+**缓存透明化**（v0.2.7+）：
+- 响应包含 `meta.cacheInfo`：`fromCache`、`generatedAt`、`cacheAgeMs`
+- 使用 `force: true` 可重新生成缓存的全局图
+
+**大文件处理**：
+- `options.maxFileSizeBytes`（默认：1MB）：跳过超过此大小的文件
+- `options.largeFileStrategy`：`"skip"`（默认）或 `"truncate"`
+- `options.excludeExtensions`：从 reference 搜索中排除非代码文件（默认：`.json`、`.md`、`.txt`、`.yml` 等）
 
 ### `preflight_trace_upsert`
 写入/更新 bundle 级 traceability links（commit↔ticket、symbol↔test、code↔doc 等）。

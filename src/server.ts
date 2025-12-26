@@ -1248,18 +1248,28 @@ version: '0.2.5',
           throw new BundleNotFoundError(args.bundleId);
         }
 
-        if (args.ensureFresh) {
-          throw new Error(
-            'ensureFresh is deprecated and not supported in this tool. This tool is strictly read-only. ' +
-              'Call preflight_update_bundle explicitly, then call preflight_search_bundle again.'
-          );
+        // P1: Collect warnings for deprecated parameters instead of throwing
+        const warnings: Array<{ code: string; message: string }> = [];
+        
+        if (args.ensureFresh !== undefined) {
+          warnings.push({
+            code: 'DEPRECATED_PARAM',
+            message: 'ensureFresh is deprecated and ignored. This tool is strictly read-only. Use preflight_update_bundle separately, then search again.',
+          });
         }
 
-        if (args.autoRepairIndex) {
-          throw new Error(
-            'autoRepairIndex is deprecated and not supported in this tool. This tool is strictly read-only. ' +
-              'Call preflight_repair_bundle explicitly, then call preflight_search_bundle again.'
-          );
+        if (args.autoRepairIndex !== undefined) {
+          warnings.push({
+            code: 'DEPRECATED_PARAM',
+            message: 'autoRepairIndex is deprecated and ignored. This tool is strictly read-only. Use preflight_repair_bundle separately, then search again.',
+          });
+        }
+        
+        if (args.maxAgeHours !== undefined) {
+          warnings.push({
+            code: 'DEPRECATED_PARAM',
+            message: 'maxAgeHours is deprecated and ignored (was only used with ensureFresh).',
+          });
         }
 
         const paths = getBundlePathsForId(storageDir, args.bundleId);
@@ -1271,12 +1281,17 @@ version: '0.2.5',
           uri: toBundleFileUri({ bundleId: args.bundleId, relativePath: h.path }),
         }));
 
-        const out = {
+        const out: Record<string, unknown> = {
           bundleId: args.bundleId,
           query: args.query,
           scope: args.scope,
           hits,
         };
+        
+        // Include warnings in output if any deprecated params were used
+        if (warnings.length > 0) {
+          out.warnings = warnings;
+        }
 
         return {
           content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
