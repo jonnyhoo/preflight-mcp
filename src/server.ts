@@ -172,7 +172,7 @@ export async function startServer(): Promise<void> {
   const server = new McpServer(
     {
       name: 'preflight-mcp',
-version: '0.4.1',
+version: '0.4.2',
       description: 'Create evidence-based preflight bundles for repositories (docs + code) with SQLite FTS search.',
     },
     {
@@ -658,6 +658,7 @@ version: '0.4.1',
         focusDir: z.string().optional().describe('Focus directory path - expand deeper within this path (e.g., "owner/repo/norm/src"). Gets +3 extra depth levels.'),
         focusDepthBonus: z.number().int().min(1).max(6).optional().describe('Extra depth levels for focusDir. Default 3.'),
         showFileCountPerDir: z.boolean().optional().describe('If true, include file count per directory in stats.byDir.'),
+        showSkippedFiles: z.boolean().optional().describe('If true, include list of files that were skipped during indexing (too large, binary, etc.). Helps understand what content is NOT searchable.'),
       },
       outputSchema: {
         bundleId: z.string(),
@@ -676,6 +677,13 @@ version: '0.4.1',
             priority: z.number(),
           })
         ),
+        skippedFiles: z.array(
+          z.object({
+            path: z.string(),
+            reason: z.string(),
+            size: z.number().optional(),
+          })
+        ).optional().describe('Files skipped during indexing (only when showSkippedFiles=true). These files are NOT searchable.'),
       },
       annotations: {
         readOnlyHint: true,
@@ -698,11 +706,46 @@ version: '0.4.1',
           showFileCountPerDir: args.showFileCountPerDir,
         });
 
-        const textOutput = formatTreeResult(result);
+        // Add skipped files if requested
+        let skippedFiles: Array<{ path: string; reason: string; size?: number }> | undefined;
+        if (args.showSkippedFiles) {
+          try {
+            const manifest = await readManifest(paths.manifestPath);
+            if (manifest.skippedFiles && manifest.skippedFiles.length > 0) {
+              const reasonLabels: Record<string, string> = {
+                too_large: 'too large',
+                binary: 'binary file',
+                non_utf8: 'non-UTF8 encoding',
+                max_total_reached: 'bundle size limit reached',
+              };
+              skippedFiles = manifest.skippedFiles.map(s => ({
+                path: s.path,
+                reason: reasonLabels[s.reason] ?? s.reason,
+                size: s.size,
+              }));
+            }
+          } catch {
+            // Ignore manifest read errors
+          }
+        }
 
+        const textOutput = formatTreeResult(result);
+        let fullTextOutput = textOutput;
+        if (skippedFiles && skippedFiles.length > 0) {
+          fullTextOutput += `\n\n## Skipped Files (${skippedFiles.length} files not searchable)\n`;
+          for (const sf of skippedFiles.slice(0, 20)) {
+            const sizeStr = sf.size ? ` (${(sf.size / 1024).toFixed(0)}KB)` : '';
+            fullTextOutput += `- ${sf.path}: ${sf.reason}${sizeStr}\n`;
+          }
+          if (skippedFiles.length > 20) {
+            fullTextOutput += `... and ${skippedFiles.length - 20} more\n`;
+          }
+        }
+
+        const structuredResult = { ...result, skippedFiles };
         return {
-          content: [{ type: 'text', text: textOutput }],
-          structuredContent: result,
+          content: [{ type: 'text', text: fullTextOutput }],
+          structuredContent: structuredResult,
         };
       } catch (err) {
         throw wrapPreflightError(err);
@@ -1277,6 +1320,16 @@ version: '0.4.1',
         meta: z.object({
           tokenBudgetHint: z.string().optional().describe('Hint about token savings from groupByFile.'),
         }).optional().describe('Search metadata for EDDA optimization.'),
+        // Skipped files hint for transparency
+        skippedFilesHint: z.object({
+          message: z.string().describe('Human-readable hint explaining why some content might be missing.'),
+          skippedCount: z.number().describe('Total number of files skipped during indexing.'),
+          examples: z.array(z.object({
+            path: z.string(),
+            reason: z.string(),
+            size: z.number().optional(),
+          })).describe('Example skipped files (limited to 5).'),
+        }).optional().describe('Present when search returns 0 results and files were skipped during indexing. Helps explain why expected content might be missing.'),
         autoUpdated: z
           .boolean()
           .optional()
@@ -1331,6 +1384,38 @@ version: '0.4.1',
 
         const paths = getBundlePathsForId(storageDir, args.bundleId);
 
+        // Helper to build skippedFilesHint when search returns 0 results
+        const buildSkippedFilesHint = async (): Promise<{
+          message: string;
+          skippedCount: number;
+          examples: Array<{ path: string; reason: string; size?: number }>;
+        } | undefined> => {
+          try {
+            const manifest = await readManifest(paths.manifestPath);
+            if (!manifest.skippedFiles || manifest.skippedFiles.length === 0) {
+              return undefined;
+            }
+            const skipped = manifest.skippedFiles;
+            const reasonLabels: Record<string, string> = {
+              too_large: 'too large',
+              binary: 'binary file',
+              non_utf8: 'non-UTF8 encoding',
+              max_total_reached: 'bundle size limit reached',
+            };
+            return {
+              message: `Search returned 0 results. Note: ${skipped.length} file(s) were skipped during indexing and are not searchable. Check if your target content might be in a skipped file.`,
+              skippedCount: skipped.length,
+              examples: skipped.slice(0, 5).map(s => ({
+                path: s.path,
+                reason: reasonLabels[s.reason] ?? s.reason,
+                size: s.size,
+              })),
+            };
+          } catch {
+            return undefined;
+          }
+        };
+
         // Use advanced search if EDDA features are requested
         const useAdvanced = args.groupByFile || args.fileTypeFilters?.length || args.includeScore;
         
@@ -1383,6 +1468,15 @@ version: '0.4.1',
           
           if (warnings.length > 0) {
             out.warnings = warnings;
+          }
+
+          // Add skippedFilesHint when 0 results
+          const hasNoResults = result.hits.length === 0 && (!grouped || grouped.length === 0);
+          if (hasNoResults) {
+            const hint = await buildSkippedFilesHint();
+            if (hint) {
+              out.skippedFilesHint = hint;
+            }
           }
 
           return {
@@ -1443,6 +1537,14 @@ version: '0.4.1',
         
         if (warnings.length > 0) {
           out.warnings = warnings;
+        }
+
+        // Add skippedFilesHint when 0 results
+        if (hits.length === 0) {
+          const hint = await buildSkippedFilesHint();
+          if (hint) {
+            out.skippedFilesHint = hint;
+          }
         }
 
         return {

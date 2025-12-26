@@ -13,7 +13,7 @@ import {
 } from './github.js';
 import { downloadAndExtractGitHubArchive } from './githubArchive.js';
 import { classifyIngestedFileKind, ingestRepoToBundle, type IngestedFile } from './ingest.js';
-import { type RepoInput, type BundleManifestV1, writeManifest, readManifest } from './manifest.js';
+import { type RepoInput, type BundleManifestV1, type SkippedFileEntry, writeManifest, readManifest } from './manifest.js';
 import { getBundlePaths, repoMetaPath, repoNormDir, repoRawDir, repoRootDir } from './paths.js';
 import { writeAgentsMd, writeStartHereMd } from './guides.js';
 import { generateOverviewMarkdown, writeOverviewFile } from './overview.js';
@@ -90,6 +90,55 @@ type DedupIndexV1 = {
 
 function sha256Hex(text: string): string {
   return crypto.createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
+/**
+ * Parse a skipped file string (from ingest) into structured SkippedFileEntry.
+ * Formats:
+ * - "path/to/file (too large: 12345 bytes)"
+ * - "path/to/file (binary)"
+ * - "path/to/file (non-utf8)"
+ * - "(bundle maxTotalBytes reached) stopped before: path/to/file"
+ */
+function parseSkippedString(s: string, repoId: string): SkippedFileEntry | null {
+  // Pattern: "path (too large: 12345 bytes)"
+  const tooLargeMatch = s.match(/^(.+?) \(too large: (\d+) bytes\)$/);
+  if (tooLargeMatch) {
+    return {
+      path: `${repoId}/${tooLargeMatch[1]}`,
+      reason: 'too_large',
+      size: parseInt(tooLargeMatch[2]!, 10),
+    };
+  }
+
+  // Pattern: "path (binary)"
+  const binaryMatch = s.match(/^(.+?) \(binary\)$/);
+  if (binaryMatch) {
+    return {
+      path: `${repoId}/${binaryMatch[1]}`,
+      reason: 'binary',
+    };
+  }
+
+  // Pattern: "path (non-utf8)"
+  const nonUtf8Match = s.match(/^(.+?) \(non-utf8\)$/);
+  if (nonUtf8Match) {
+    return {
+      path: `${repoId}/${nonUtf8Match[1]}`,
+      reason: 'non_utf8',
+    };
+  }
+
+  // Pattern: "(bundle maxTotalBytes reached) stopped before: path"
+  const maxTotalMatch = s.match(/^\(bundle maxTotalBytes reached\) stopped before: (.+)$/);
+  if (maxTotalMatch) {
+    return {
+      path: `${repoId}/${maxTotalMatch[1]}`,
+      reason: 'max_total_reached',
+    };
+  }
+
+  return null;
 }
 
 function normalizeList(values: string[] | undefined): string[] {
@@ -1191,6 +1240,7 @@ async function createBundleInternal(
   const finalPaths = getBundlePaths(effectiveStorageDir, bundleId);
 
   const allIngestedFiles: IngestedFile[] = [];
+  const allSkippedFiles: SkippedFileEntry[] = [];
   const reposSummary: BundleSummary['repos'] = [];
   const allWarnings: string[] = [];
 
@@ -1228,9 +1278,15 @@ async function createBundleInternal(
 
         allIngestedFiles.push(...files);
         allWarnings.push(...warnings);
+        // Parse and collect skipped files
+        const repoId = `${owner}/${repo}`;
+        for (const s of skipped) {
+          const entry = parseSkippedString(s, repoId);
+          if (entry) allSkippedFiles.push(entry);
+        }
         reposSummary.push({
           kind: 'github',
-          id: `${owner}/${repo}`,
+          id: repoId,
           source,
           headSha,
           notes: [...notes, ...skipped].slice(0, 50),
@@ -1252,7 +1308,13 @@ async function createBundleInternal(
         });
 
         allIngestedFiles.push(...files);
-        reposSummary.push({ kind: 'local', id: `${owner}/${repo}`, source: 'local', notes: skipped.slice(0, 50) });
+        // Parse and collect skipped files
+        const repoId = `${owner}/${repo}`;
+        for (const s of skipped) {
+          const entry = parseSkippedString(s, repoId);
+          if (entry) allSkippedFiles.push(entry);
+        }
+        reposSummary.push({ kind: 'local', id: repoId, source: 'local', notes: skipped.slice(0, 50) });
       }
     }
 
@@ -1327,6 +1389,8 @@ async function createBundleInternal(
         includeDocs: true,
         includeCode: true,
       },
+      // Store skipped files for transparency (limit to 200 entries to avoid bloat)
+      skippedFiles: allSkippedFiles.length > 0 ? allSkippedFiles.slice(0, 200) : undefined,
     };
 
   await writeManifest(tmpPaths.manifestPath, manifest);

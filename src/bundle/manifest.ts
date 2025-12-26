@@ -47,6 +47,19 @@ export type BundleLibrary = {
   files?: string[];
 };
 
+/**
+ * Skipped file entry - records files that were not indexed during bundle creation.
+ * Used for transparency when search returns 0 results.
+ */
+export type SkippedFileEntry = {
+  /** File path (relative to repo root) */
+  path: string;
+  /** Reason for skipping */
+  reason: 'too_large' | 'binary' | 'non_utf8' | 'max_total_reached';
+  /** File size in bytes (if known) */
+  size?: number;
+};
+
 export type BundleManifestV1 = {
   schemaVersion: 1;
   bundleId: string;
@@ -70,6 +83,11 @@ export type BundleManifestV1 = {
   repos: BundleRepo[];
   libraries?: BundleLibrary[];
   index: BundleIndexConfig;
+  /**
+   * Files that were skipped during indexing.
+   * Stored for transparency - helps explain why search might miss certain content.
+   */
+  skippedFiles?: SkippedFileEntry[];
 };
 
 export async function readManifest(manifestPath: string): Promise<BundleManifestV1> {
