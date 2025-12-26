@@ -41,7 +41,10 @@ describe('preflight error kinds', () => {
 
   it('formats errors with stable prefix', () => {
     const msg = formatPreflightError('unknown', 'boom');
-    expect(msg.startsWith('[preflight_error kind=unknown] ')).toBe(true);
+    // RFC v2: Format uses newlines instead of space
+    expect(msg.startsWith('[preflight_error kind=unknown]')).toBe(true);
+    expect(msg).toContain('boom');
+    expect(msg).toContain('💡');
   });
 
   it('wrapPreflightError preserves message and adds kind prefix', () => {

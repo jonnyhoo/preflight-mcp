@@ -1,3 +1,4 @@
+// RFC v2: Extended error kinds for better LLM error handling
 export type PreflightErrorKind =
   | 'bundle_not_found'
   | 'file_not_found'
@@ -5,6 +6,15 @@ export type PreflightErrorKind =
   | 'permission_denied'
   | 'index_missing_or_corrupt'
   | 'deprecated_parameter'
+  // RFC v2 additions
+  | 'cursor_invalid'
+  | 'cursor_expired'
+  | 'cursor_tool_mismatch'
+  | 'rate_limited'
+  | 'timeout'
+  | 'pagination_required'
+  | 'validation_error'
+  | 'partial_success'
   | 'unknown';
 
 type ErrnoLike = { code?: string };
@@ -93,6 +103,49 @@ const LLM_RECOVERY_HINTS: Record<PreflightErrorKind, string> = {
 This parameter is deprecated. The tool is now strictly read-only.
 - For updates: use preflight_update_bundle first, then retry
 - For repairs: use preflight_repair_bundle first, then retry`,
+
+  // RFC v2 additions
+  cursor_invalid: `💡 Recovery steps:
+1. The cursor format is invalid or corrupted
+2. Start fresh without a cursor to get the first page
+3. Use the nextCursor from the previous response exactly as provided`,
+
+  cursor_expired: `💡 Recovery steps:
+1. Cursors expire after 24 hours
+2. Start fresh without a cursor to get the first page
+3. Complete pagination within a reasonable time window`,
+
+  cursor_tool_mismatch: `💡 Recovery steps:
+1. The cursor was created by a different tool
+2. Use the cursor only with the same tool that created it
+3. Start fresh without a cursor for this tool`,
+
+  rate_limited: `💡 Recovery steps:
+1. You are making requests too quickly
+2. Wait a few seconds before retrying
+3. Consider batching multiple operations into single calls`,
+
+  timeout: `💡 Recovery steps:
+1. The operation took too long to complete
+2. Try with a smaller scope or limit
+3. Use cursor pagination to process in smaller batches`,
+
+  pagination_required: `💡 Note:
+The result set is large. Use cursor pagination:
+1. Check the 'truncation' field in the response
+2. Pass the 'nextCursor' value in subsequent calls
+3. Continue until truncated=false`,
+
+  validation_error: `💡 Recovery steps:
+1. Check that all required parameters are provided
+2. Verify parameter types match the schema
+3. Review the error message for specific field issues`,
+
+  partial_success: `💡 Note:
+Some operations succeeded but others failed:
+1. Check the 'warnings' array for details on failed items
+2. Address individual issues and retry failed items
+3. Successfully processed items are already applied`,
 
   unknown: `💡 If this error persists:
 1. Check the error message for specific details

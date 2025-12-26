@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2025-12-26
+
+### Added
+- **RFC v2: LLM-first Architecture Rewrite**
+  - **New tools**: `preflight_read_files` (batch file reading) and `preflight_search_and_read` (search + excerpt)
+  - **Cursor pagination**: `preflight_list_bundles`, `preflight_search_bundle`, `preflight_search_by_tags`, `preflight_trace_query` now support cursor-based pagination
+  - **Evidence-first design**: `preflight_repo_tree`, `preflight_evidence_dependency_graph`, `preflight_deep_analyze_bundle` now return `evidence[]` arrays
+  - **Unified response envelope**: New infrastructure in `src/mcp/envelope.ts` and `src/mcp/responseBuilder.ts`
+  - **Path redaction**: `src/mcp/pathRedaction.ts` for sanitizing sensitive paths in responses
+  - **Extended error codes**: Added `cursor_invalid`, `cursor_expired`, `cursor_tool_mismatch`, `rate_limited`, `timeout`, `pagination_required`, `validation_error`, `partial_success`
+
+### Changed
+- **Safety defaults**: `preflight_trace_upsert` now defaults to `dryRun=true` to prevent accidental writes
+- **Tool count**: 22 tools total (added 2 new aggregation tools)
+- **Schema version**: Introduced `SCHEMA_VERSION = '2.0'` for RFC v2 responses
+
+### Technical Details
+- New files: `src/mcp/envelope.ts`, `src/mcp/responseBuilder.ts`, `src/mcp/cursor.ts`, `src/mcp/pathRedaction.ts`
+- New tools: `src/tools/readFiles.ts`, `src/tools/searchAndRead.ts`
+- Extended: `src/mcp/responseMeta.ts`, `src/mcp/errorKinds.ts`
+- Upgraded MCP SDK to 0.5.0 (peer dependency)
+
 ## [0.2.5] - 2025-12-26
 
 ### Added

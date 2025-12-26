@@ -1,12 +1,16 @@
 /**
  * Unified response metadata for all Preflight MCP tools.
  * Provides routing signals for LLM cost-minimization and self-healing.
+ * 
+ * RFC v2: Extended with schemaVersion, tool, bundleId for unified envelope support.
  */
 
 import crypto from 'node:crypto';
+import { SCHEMA_VERSION } from './envelope.js';
 
 /**
  * Suggested next action for LLM to take.
+ * @deprecated Use NextAction from envelope.ts for new code
  */
 export interface NextAction {
   /** Tool to call */
@@ -19,6 +23,7 @@ export interface NextAction {
 
 /**
  * Warning that can be machine-read by LLM.
+ * @deprecated Use ResponseWarning from envelope.ts for new code
  */
 export interface ResponseWarning {
   code: string;
@@ -32,6 +37,8 @@ export interface ResponseWarning {
  * - Cost minimization (fromCache, durationMs)
  * - Error recovery (warnings, nextActions)
  * - Context management (truncated, truncatedReason)
+ * 
+ * RFC v2: Added schemaVersion, tool, bundleId, nextCursor
  */
 export interface ResponseMeta {
   /** Unique request ID for tracing */
@@ -48,6 +55,15 @@ export interface ResponseMeta {
   truncatedReason?: string;
   /** Suggested follow-up actions */
   nextActions?: NextAction[];
+  // RFC v2 additions
+  /** Schema version for response format */
+  schemaVersion?: string;
+  /** Tool name that generated this response */
+  tool?: string;
+  /** Bundle ID if applicable */
+  bundleId?: string;
+  /** Cursor for pagination (RFC v2) */
+  nextCursor?: string;
 }
 
 /**
@@ -58,9 +74,22 @@ export function generateRequestId(): string {
 }
 
 /**
- * Create a ResponseMeta builder for tracking execution.
+ * Options for creating a meta builder (RFC v2).
  */
-export function createMetaBuilder(): {
+export interface MetaBuilderOptions {
+  /** Tool name for the response */
+  tool?: string;
+  /** Bundle ID if applicable */
+  bundleId?: string;
+  /** Include schema version in output */
+  includeSchemaVersion?: boolean;
+}
+
+/**
+ * Create a ResponseMeta builder for tracking execution.
+ * RFC v2: Extended with tool, bundleId, schemaVersion, nextCursor support.
+ */
+export function createMetaBuilder(options?: MetaBuilderOptions): {
   requestId: string;
   startTime: number;
   warnings: ResponseWarning[];
@@ -68,10 +97,16 @@ export function createMetaBuilder(): {
   truncated: boolean;
   truncatedReason?: string;
   fromCache: boolean;
+  tool?: string;
+  bundleId?: string;
+  nextCursor?: string;
   addWarning: (code: string, message: string, recoverable?: boolean) => void;
   addNextAction: (action: NextAction) => void;
-  setTruncated: (reason: string) => void;
+  setTruncated: (reason: string, nextCursor?: string) => void;
   setFromCache: (cached: boolean) => void;
+  setTool: (tool: string) => void;
+  setBundleId: (bundleId: string) => void;
+  setNextCursor: (cursor: string) => void;
   build: () => ResponseMeta;
 } {
   const requestId = generateRequestId();
@@ -81,6 +116,10 @@ export function createMetaBuilder(): {
   let truncated = false;
   let truncatedReason: string | undefined;
   let fromCache = false;
+  let tool = options?.tool;
+  let bundleId = options?.bundleId;
+  let nextCursor: string | undefined;
+  const includeSchemaVersion = options?.includeSchemaVersion ?? false;
 
   return {
     requestId,
@@ -90,6 +129,9 @@ export function createMetaBuilder(): {
     truncated,
     truncatedReason,
     fromCache,
+    tool,
+    bundleId,
+    nextCursor,
 
     addWarning(code: string, message: string, recoverable = true) {
       warnings.push({ code, message, recoverable });
@@ -99,13 +141,26 @@ export function createMetaBuilder(): {
       nextActions.push(action);
     },
 
-    setTruncated(reason: string) {
+    setTruncated(reason: string, cursor?: string) {
       truncated = true;
       truncatedReason = reason;
+      if (cursor) nextCursor = cursor;
     },
 
     setFromCache(cached: boolean) {
       fromCache = cached;
+    },
+
+    setTool(t: string) {
+      tool = t;
+    },
+
+    setBundleId(id: string) {
+      bundleId = id;
+    },
+
+    setNextCursor(cursor: string) {
+      nextCursor = cursor;
     },
 
     build(): ResponseMeta {
@@ -113,6 +168,17 @@ export function createMetaBuilder(): {
         requestId,
         durationMs: Date.now() - startTime,
       };
+
+      // RFC v2 fields
+      if (includeSchemaVersion) {
+        meta.schemaVersion = SCHEMA_VERSION;
+      }
+      if (tool) {
+        meta.tool = tool;
+      }
+      if (bundleId) {
+        meta.bundleId = bundleId;
+      }
 
       if (fromCache) {
         meta.fromCache = true;
@@ -125,6 +191,9 @@ export function createMetaBuilder(): {
       if (truncated) {
         meta.truncated = true;
         meta.truncatedReason = truncatedReason;
+        if (nextCursor) {
+          meta.nextCursor = nextCursor;
+        }
       }
 
       if (nextActions.length > 0) {

@@ -10,9 +10,10 @@ import { createMetaBuilder, createDidYouMeanNextActions, WarningCodes, type Resp
 
 export const TraceUpsertInputSchema = {
   bundleId: z.string().describe('Bundle ID to attach trace links to.'),
-  dryRun: z.boolean().optional().default(false).describe(
-    'If true, preview the changes without writing to database. ' +
-    'Returns what would be upserted.'
+  // RFC v2: Safety default - dryRun=true prevents accidental writes
+  dryRun: z.boolean().optional().default(true).describe(
+    'If true (default), preview the changes without writing to database. ' +
+    'Set to false to actually persist the trace links.'
   ),
   edges: z
     .array(
@@ -70,6 +71,8 @@ export const TraceQueryInputSchema = {
   limit: z.number().int().min(1).max(500).default(50),
   timeBudgetMs: z.number().int().min(500).max(30_000).default(5_000),
   maxBundles: z.number().int().min(1).max(200).default(50),
+  // RFC v2: cursor pagination
+  cursor: z.string().optional().describe('Pagination cursor from previous call. Use to fetch next page of results.'),
 };
 
 function traceDbPathForBundleRoot(bundleRoot: string): string {

@@ -51,7 +51,8 @@ Preflight: 🔗 Trace links:
 - 📖 **Auto-generated guides** — `START_HERE.md`, `AGENTS.md`, `OVERVIEW.md`
 - ☁️ **Cloud sync** — Multi-path mirror backup for redundancy
 - 🧠 **EDDA (Evidence-Driven Deep Analysis)** — Auto-generate auditable claims with evidence
-- ⚡ **18 MCP tools + 5 prompts** — Complete toolkit for code exploration
+- ⚡ **22 MCP tools + 5 prompts** — Complete toolkit for code exploration
+- 📄 **Cursor pagination** — Handle large result sets efficiently (RFC v2)
 
 <details>
 <summary><b>All Features (click to expand)</b></summary>
@@ -75,7 +76,7 @@ Preflight: 🔗 Trace links:
 - [Demo](#demo)
 - [Core Features](#core-features)
 - [Quick Start](#quick-start)
-- [Tools](#tools-15-total)
+- [Tools](#tools-22-total)
 - [Prompts](#prompts-5-total)
 - [Environment Variables](#environment-variables)
 - [Contributing](#contributing)
@@ -160,10 +161,11 @@ Run end-to-end smoke test:
 npm run smoke
 ```
 
-## Tools (18 total)
+## Tools (22 total)
 
 ### `preflight_list_bundles`
 List bundle IDs in storage.
+- **Cursor pagination** (v0.5.0): Use `cursor` parameter for large bundle lists
 - Triggers: "show bundles", "查看bundle", "有哪些bundle"
 
 ### `preflight_create_bundle`
@@ -236,10 +238,15 @@ Important: **this tool is strictly read-only**.
 - `fileTypeFilters`: Filter by extension (e.g., `[".py", ".ts"]`)
 - `includeScore`: Include BM25 relevance score in results
 
+**Cursor pagination** (v0.5.0):
+- `cursor`: Pagination cursor from previous call for fetching next page
+- Response includes `truncation.nextCursor` when more results available
+
 **Deprecated parameters**: `ensureFresh`, `autoRepairIndex`, `maxAgeHours` are deprecated and will return warnings instead of errors.
 
 ### `preflight_search_by_tags`
 Search across multiple bundles filtered by tags (line-based SQLite FTS5).
+- **Cursor pagination** (v0.5.0): Use `cursor` parameter for large result sets
 - Triggers: "search in MCP bundles", "在MCP项目中搜索", "搜索所有agent"
 
 Notes:
@@ -250,6 +257,7 @@ Optional parameters:
 - `tags`: Filter bundles by tags (e.g., `["mcp", "agents"]`)
 - `scope`: Search scope (`docs`, `code`, or `all`)
 - `limit`: Max total hits across all bundles
+- `cursor`: Pagination cursor for fetching next page
 
 ### `preflight_evidence_dependency_graph`
 Generate an evidence-based dependency graph. Two modes:
@@ -280,6 +288,7 @@ Create or update traceability links (code↔test, code↔doc, file↔requirement
 ### `preflight_trace_query`
 Query traceability links (code↔test, code↔doc, commit↔ticket).
 - **Proactive use**: LLM automatically queries trace links when analyzing specific files
+- **Cursor pagination** (v0.5.0): Use `cursor` parameter for large result sets
 - Returns `reason` and `nextSteps` when no edges found (helps LLM decide next action)
 - Fast when `bundleId` is provided; can scan across bundles when omitted.
 
@@ -326,6 +335,37 @@ Parameters:
 - `verifySnippets`: Check SHA256 hashes (default: true)
 - `verifyFileExists`: Check evidence files exist (default: true)
 - `strictMode`: Treat warnings as errors (default: false)
+
+### `preflight_read_files` *(NEW v0.5.0)*
+Batch read multiple files from a bundle in a single call.
+- Reduces round-trips for evidence gathering
+- **RFC v2 unified envelope**: Returns `ok`, `meta`, `data`, `evidence[]`
+- Triggers: "read these files", "get content of", "批量读取"
+
+Parameters:
+- `bundleId`: Bundle ID
+- `files[]`: Array of `{path, ranges?, withLineNumbers?}`
+- `format`: `"json"` (default) or `"text"`
+
+### `preflight_search_and_read` *(NEW v0.5.0)*
+Search + excerpt in one call - finds relevant code and returns context.
+- Combines search with automatic context extraction
+- **RFC v2 unified envelope**: Returns `ok`, `meta`, `data`, `evidence[]`
+- Triggers: "search and show code", "find and read", "搜索并读取"
+
+Parameters:
+- `bundleId`: Bundle ID
+- `query`: Search query
+- `contextLines`: Lines of context around matches (default: 5)
+- `maxFiles`: Max files to read (default: 5)
+- `format`: `"json"` (default) or `"text"`
+
+### `preflight_get_dependency_graph` *(Simplified wrapper)*
+Simplified dependency graph query.
+- `scope: "global"` (default): Project-wide graph
+- `scope: "target"` with `targetFile`: Single file dependencies
+- `format: "summary"` (default): Aggregated view
+- `format: "full"`: Raw graph data
 
 ### `preflight_cleanup_orphans`
 Remove incomplete or corrupted bundles (bundles without valid manifest.json).
@@ -393,6 +433,11 @@ Common kinds:
 - `invalid_path` (unsafe path traversal attempt)
 - `permission_denied`
 - `index_missing_or_corrupt`
+- `cursor_invalid` *(v0.5.0)*
+- `cursor_expired` *(v0.5.0)*
+- `rate_limited` *(v0.5.0)*
+- `timeout` *(v0.5.0)*
+- `pagination_required` *(v0.5.0)*
 - `unknown`
 
 This is designed so UIs/agents can reliably decide whether to:

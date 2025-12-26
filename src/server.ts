@@ -38,6 +38,9 @@ import { generateRepoTree, formatTreeResult } from './bundle/tree.js';
 import { buildDeepAnalysis, type TreeSummary, type SearchSummary, type DepsSummary, type TraceSummary } from './analysis/deep.js';
 import { validateReport } from './analysis/validate.js';
 import { type Claim, type EvidenceRef, type SourceRange } from './types/evidence.js';
+// RFC v2: New aggregation tools
+import { ReadFilesInputSchema, createReadFilesHandler, readFilesToolDescription } from './tools/readFiles.js';
+import { SearchAndReadInputSchema, createSearchAndReadHandler, searchAndReadToolDescription } from './tools/searchAndRead.js';
 
 const CreateRepoInputSchema = z.union([
   z.object({
@@ -103,6 +106,11 @@ const SearchBundleInputSchema = {
     .boolean()
     .optional()
     .describe('If true, include BM25 relevance score in results. Lower score = more relevant.'),
+  // RFC v2: cursor pagination
+  cursor: z
+    .string()
+    .optional()
+    .describe('Pagination cursor from previous call. Use to fetch next page of results.'),
   // Deprecated (kept for backward compatibility): this tool is strictly read-only.
   ensureFresh: z
     .boolean()
@@ -123,6 +131,11 @@ const SearchByTagsInputSchema = {
   tags: z.array(z.string()).optional().describe('Filter by tags (e.g., ["mcp", "agents"]). Searches only matching bundles.'),
   scope: z.enum(['docs', 'code', 'all']).default('all').describe('Search scope.'),
   limit: z.number().int().min(1).max(200).default(50).describe('Max total hits across all bundles.'),
+  // RFC v2: cursor pagination
+  cursor: z
+    .string()
+    .optional()
+    .describe('Pagination cursor from previous call. Use to fetch next page of results.'),
 };
 
 const ListBundlesInputSchema = {
@@ -172,7 +185,7 @@ export async function startServer(): Promise<void> {
   const server = new McpServer(
     {
       name: 'preflight-mcp',
-version: '0.4.4',
+version: '0.5.0',
       description: 'Create evidence-based preflight bundles for repositories (docs + code) with SQLite FTS search.',
     },
     {
@@ -288,6 +301,11 @@ version: '0.4.4',
           .max(50)
           .default(10)
           .describe('Max repos/tags to include per bundle to keep output compact.'),
+        // RFC v2: cursor pagination
+        cursor: z
+          .string()
+          .optional()
+          .describe('Pagination cursor from previous call. Use to fetch next page.'),
       },
       outputSchema: {
         bundles: z.array(
@@ -298,6 +316,13 @@ version: '0.4.4',
             tags: z.array(z.string()),
           })
         ),
+        // RFC v2: truncation info
+        truncation: z.object({
+          truncated: z.boolean(),
+          nextCursor: z.string().optional(),
+          totalCount: z.number().optional(),
+          returnedCount: z.number().optional(),
+        }).optional(),
       },
       annotations: {
         readOnlyHint: true,
@@ -305,7 +330,18 @@ version: '0.4.4',
     },
     async (args) => {
       const effectiveDir = await getEffectiveStorageDir(cfg);
-      const ids = (await listBundles(effectiveDir)).slice(0, args.limit);
+      const allIds = await listBundles(effectiveDir);
+      
+      // RFC v2: Parse cursor for pagination
+      const { parseCursorOrDefault, createNextCursor, shouldPaginate } = await import('./mcp/cursor.js');
+      const TOOL_NAME = 'preflight_list_bundles';
+      const { offset, error: cursorError } = parseCursorOrDefault(args.cursor, TOOL_NAME);
+      
+      // Sort for stable pagination
+      allIds.sort();
+      
+      // Apply pagination
+      const ids = allIds.slice(offset, offset + args.limit);
 
       const capList = (items: string[], max: number): string[] => {
         if (items.length <= max) return items;
@@ -360,7 +396,18 @@ version: '0.4.4',
 
       const filtered = filteredInternal.map(({ tagsFull: _tagsFull, ...b }) => b);
 
-      const out = { bundles: filtered };
+      // RFC v2: Calculate truncation info
+      const hasMore = shouldPaginate(ids.length, args.limit, allIds.length, offset);
+      const truncation = hasMore
+        ? {
+            truncated: true,
+            nextCursor: createNextCursor(TOOL_NAME, offset, ids.length),
+            totalCount: allIds.length,
+            returnedCount: filtered.length,
+          }
+        : { truncated: false, returnedCount: filtered.length, totalCount: allIds.length };
+
+      const out: Record<string, unknown> = { bundles: filtered, truncation };
 
       // Stable human-readable format for UI logs.
       const lines = filtered.map((b) => {
@@ -368,9 +415,15 @@ version: '0.4.4',
         const tags = b.tags.length ? b.tags.join(', ') : '(none)';
         return `${b.bundleId} | ${b.displayName} | repos: ${repos} | tags: ${tags}`;
       });
+      
+      // Add pagination hint to text output
+      let textOutput = lines.join('\n') || '(no bundles)';
+      if (hasMore) {
+        textOutput += `\n\n📄 More bundles available. Use cursor to fetch next page.`;
+      }
 
       return {
-        content: [{ type: 'text', text: lines.join('\n') || '(no bundles)' }],
+        content: [{ type: 'text', text: textOutput }],
         structuredContent: out,
       };
     }
@@ -684,6 +737,18 @@ version: '0.4.4',
             size: z.number().optional(),
           })
         ).optional().describe('Files skipped during indexing (only when showSkippedFiles=true). These files are NOT searchable.'),
+        // RFC v2: Evidence pointers
+        evidence: z.array(
+          z.object({
+            path: z.string(),
+            range: z.object({
+              startLine: z.number(),
+              endLine: z.number(),
+            }).optional(),
+            uri: z.string().optional(),
+            snippet: z.string().optional(),
+          })
+        ).optional().describe('Evidence pointers to key entry point files.'),
       },
       annotations: {
         readOnlyHint: true,
@@ -729,6 +794,14 @@ version: '0.4.4',
           }
         }
 
+        // RFC v2: Build evidence array from entry point candidates
+        const evidence = result.entryPointCandidates
+          .slice(0, 5) // Top 5 entry points as evidence
+          .map((ep) => ({
+            path: ep.path,
+            uri: toBundleFileUri({ bundleId: args.bundleId, relativePath: ep.path }),
+          }));
+
         const textOutput = formatTreeResult(result);
         let fullTextOutput = textOutput;
         if (skippedFiles && skippedFiles.length > 0) {
@@ -742,7 +815,7 @@ version: '0.4.4',
           }
         }
 
-        const structuredResult = { ...result, skippedFiles };
+        const structuredResult = { ...result, skippedFiles, evidence };
         return {
           content: [{ type: 'text', text: fullTextOutput }],
           structuredContent: structuredResult,
@@ -1233,21 +1306,36 @@ version: '0.4.4',
           .optional()
           .describe('Non-fatal per-bundle errors. Use kind to decide whether to repair/update.'),
         warningsTruncated: z.boolean().optional().describe('True if warnings were capped.'),
+        // RFC v2: truncation info
+        truncation: z.object({
+          truncated: z.boolean(),
+          nextCursor: z.string().optional(),
+          reason: z.string().optional(),
+          returnedCount: z.number().optional(),
+        }).optional(),
       },
       annotations: {
         readOnlyHint: true,
       },
     },
     async (args) => {
+      // RFC v2: Parse cursor for pagination
+      const { parseCursorOrDefault, createNextCursor } = await import('./mcp/cursor.js');
+      const TOOL_NAME = 'preflight_search_by_tags';
+      const { offset, error: cursorError } = parseCursorOrDefault(args.cursor, TOOL_NAME);
+      const pageSize = args.limit;
+
       const effectiveDir = await getEffectiveStorageDir(cfg);
       const allBundleIds = await listBundles(effectiveDir);
 
+      // Fetch extra items to detect if there are more results
+      const fetchLimit = offset + pageSize + 1;
       const result = await runSearchByTags({
         bundleIds: allBundleIds,
         query: args.query,
         tags: args.tags,
         scope: args.scope as SearchScope,
-        limit: args.limit,
+        limit: fetchLimit,
         readManifestForBundleId: async (bundleId) => {
           const paths = getBundlePathsForId(effectiveDir, bundleId);
           const manifest = await readManifest(paths.manifestPath);
@@ -1260,15 +1348,29 @@ version: '0.4.4',
         toUri: (bundleId, p) => toBundleFileUri({ bundleId, relativePath: p }),
       });
 
-      const out = {
+      // Apply cursor pagination
+      const hasMore = result.hits.length > offset + pageSize;
+      const paginatedHits = result.hits.slice(offset, offset + pageSize);
+
+      const out: Record<string, unknown> = {
         query: args.query,
         tags: args.tags,
         scope: args.scope,
         totalBundlesSearched: result.totalBundlesSearched,
-        hits: result.hits,
+        hits: paginatedHits,
         warnings: result.warnings,
         warningsTruncated: result.warningsTruncated,
       };
+
+      // RFC v2: Add truncation info
+      if (hasMore || offset > 0 || cursorError) {
+        out.truncation = {
+          truncated: hasMore,
+          returnedCount: paginatedHits.length,
+          ...(hasMore && { nextCursor: createNextCursor(TOOL_NAME, offset, pageSize) }),
+          ...(cursorError && { reason: cursorError }),
+        };
+      }
 
       return {
         content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
@@ -1276,6 +1378,162 @@ version: '0.4.4',
       };
     }
   );
+
+  // ==========================================================================
+  // RFC v2: New aggregation tools for LLM optimization
+  // ==========================================================================
+
+  // preflight_read_files - Batch file reading
+  const readFilesHandler = createReadFilesHandler({
+    findBundleStorageDir: (storageDirs, bundleId) => findBundleStorageDir(storageDirs, bundleId),
+    getBundlePathsForId: (storageDir, bundleId) => getBundlePathsForId(storageDir, bundleId),
+    storageDirs: cfg.storageDirs,
+  });
+
+  server.registerTool(
+    'preflight_read_files',
+    {
+      title: readFilesToolDescription.title,
+      description: readFilesToolDescription.description,
+      inputSchema: ReadFilesInputSchema,
+      outputSchema: {
+        ok: z.boolean(),
+        meta: z.object({
+          tool: z.string(),
+          schemaVersion: z.string(),
+          requestId: z.string(),
+          timeMs: z.number(),
+          bundleId: z.string().optional(),
+        }),
+        data: z.object({
+          bundleId: z.string(),
+          files: z.array(z.object({
+            path: z.string(),
+            content: z.string(),
+            lineInfo: z.object({
+              totalLines: z.number(),
+              ranges: z.array(z.object({ start: z.number(), end: z.number() })),
+            }),
+            error: z.string().optional(),
+          })),
+        }).optional(),
+        error: z.object({
+          code: z.string(),
+          message: z.string(),
+          hint: z.string().optional(),
+        }).optional(),
+        warnings: z.array(z.object({
+          code: z.string(),
+          message: z.string(),
+          recoverable: z.boolean(),
+        })).optional(),
+        evidence: z.array(z.object({
+          path: z.string(),
+          range: z.object({
+            startLine: z.number(),
+            endLine: z.number(),
+          }),
+          uri: z.string().optional(),
+          snippet: z.string().optional(),
+        })).optional(),
+      },
+      annotations: {
+        readOnlyHint: true,
+      },
+    },
+    async (args) => {
+      const result = await readFilesHandler(args);
+      return {
+        content: [{ type: 'text', text: result.text }],
+        structuredContent: result.structuredContent,
+      };
+    }
+  );
+
+  // preflight_search_and_read - Search with excerpts
+  const searchAndReadHandler = createSearchAndReadHandler({
+    findBundleStorageDir: (storageDirs, bundleId) => findBundleStorageDir(storageDirs, bundleId),
+    getBundlePathsForId: (storageDir, bundleId) => getBundlePathsForId(storageDir, bundleId),
+    assertBundleComplete: (bundleId) => assertBundleComplete(cfg, bundleId),
+    storageDirs: cfg.storageDirs,
+  });
+
+  server.registerTool(
+    'preflight_search_and_read',
+    {
+      title: searchAndReadToolDescription.title,
+      description: searchAndReadToolDescription.description,
+      inputSchema: SearchAndReadInputSchema,
+      outputSchema: {
+        ok: z.boolean(),
+        meta: z.object({
+          tool: z.string(),
+          schemaVersion: z.string(),
+          requestId: z.string(),
+          timeMs: z.number(),
+          bundleId: z.string().optional(),
+        }),
+        data: z.object({
+          bundleId: z.string(),
+          query: z.string(),
+          scope: z.enum(['docs', 'code', 'all']),
+          hits: z.array(z.object({
+            path: z.string(),
+            repo: z.string(),
+            kind: z.enum(['doc', 'code']),
+            matchRange: z.object({ startLine: z.number(), endLine: z.number() }),
+            excerptRange: z.object({ startLine: z.number(), endLine: z.number() }),
+            excerpt: z.string(),
+            score: z.number().optional(),
+          })),
+        }).optional(),
+        error: z.object({
+          code: z.string(),
+          message: z.string(),
+          hint: z.string().optional(),
+        }).optional(),
+        warnings: z.array(z.object({
+          code: z.string(),
+          message: z.string(),
+          recoverable: z.boolean(),
+        })).optional(),
+        nextActions: z.array(z.object({
+          tool: z.string(),
+          args: z.record(z.string(), z.unknown()),
+          reason: z.string(),
+        })).optional(),
+        truncation: z.object({
+          truncated: z.boolean(),
+          nextCursor: z.string().optional(),
+          reason: z.string().optional(),
+          returnedCount: z.number().optional(),
+        }).optional(),
+        evidence: z.array(z.object({
+          path: z.string(),
+          range: z.object({
+            startLine: z.number(),
+            endLine: z.number(),
+          }),
+          uri: z.string().optional(),
+          snippet: z.string().optional(),
+        })).optional(),
+      },
+      annotations: {
+        readOnlyHint: true,
+      },
+    },
+    async (args) => {
+      const result = await searchAndReadHandler(args);
+      return {
+        content: [{ type: 'text', text: result.text }],
+        structuredContent: result.structuredContent,
+      };
+    }
+  );
+
+  // ==========================================================================
+  // End RFC v2 tools
+  // ==========================================================================
 
   server.registerTool(
     'preflight_search_bundle',
@@ -1342,6 +1600,13 @@ version: '0.4.4',
           .array(z.string())
           .optional()
           .describe('DEPRECATED. This tool is strictly read-only and will not auto-repair.'),
+        // RFC v2: truncation info
+        truncation: z.object({
+          truncated: z.boolean(),
+          nextCursor: z.string().optional(),
+          reason: z.string().optional(),
+          returnedCount: z.number().optional(),
+        }).optional(),
       },
       annotations: {
         readOnlyHint: true,
@@ -1351,6 +1616,12 @@ version: '0.4.4',
       try {
         // Check bundle completeness before any operation
         await assertBundleComplete(cfg, args.bundleId);
+        
+        // RFC v2: Parse cursor for pagination
+        const { parseCursorOrDefault, createNextCursor, shouldPaginate } = await import('./mcp/cursor.js');
+        const TOOL_NAME = 'preflight_search_bundle';
+        const { offset, error: cursorError } = parseCursorOrDefault(args.cursor, TOOL_NAME);
+        const pageSize = args.limit; // Use limit as page size
 
         // Resolve bundle location across storageDirs (more robust than a single effectiveDir).
         const storageDir = await findBundleStorageDir(cfg.storageDirs, args.bundleId);
@@ -1421,9 +1692,11 @@ version: '0.4.4',
         
         if (useAdvanced) {
           // EDDA-enhanced search path
+          // Fetch extra items to detect if there are more results
+          const fetchLimit = offset + pageSize + 1;
           const result = searchIndexAdvanced(paths.searchDbPath, args.query, {
             scope: args.scope as SearchScope,
-            limit: args.limit,
+            limit: fetchLimit,
             bundleRoot: paths.rootDir,
             includeScore: args.includeScore,
             fileTypeFilters: args.fileTypeFilters,
@@ -1444,6 +1717,18 @@ version: '0.4.4',
             grouped = grouped.filter(g => !patterns.some(re => re.test(g.path)));
           }
 
+          // Apply cursor pagination to grouped results
+          const totalGrouped = grouped?.length ?? 0;
+          const hasMoreGrouped = totalGrouped > offset + pageSize;
+          if (grouped) {
+            grouped = grouped.slice(offset, offset + pageSize);
+          }
+          
+          // Also paginate hits
+          const totalHits = result.hits.length;
+          const hasMoreHits = totalHits > offset + pageSize;
+          const paginatedHits = result.hits.slice(offset, offset + pageSize);
+
           // Apply maxSnippetLength to grouped topSnippet
           if (grouped && args.maxSnippetLength) {
             grouped = grouped.map(g => ({
@@ -1458,7 +1743,7 @@ version: '0.4.4',
             bundleId: args.bundleId,
             query: args.query,
             scope: args.scope,
-            hits: result.hits.map(h => ({
+            hits: paginatedHits.map(h => ({
               ...h,
               uri: toBundleFileUri({ bundleId: args.bundleId, relativePath: h.path }),
             })),
@@ -1471,12 +1756,24 @@ version: '0.4.4',
           }
 
           // Add skippedFilesHint when 0 results
-          const hasNoResults = result.hits.length === 0 && (!grouped || grouped.length === 0);
+          const hasNoResults = paginatedHits.length === 0 && (!grouped || grouped.length === 0);
           if (hasNoResults) {
             const hint = await buildSkippedFilesHint();
             if (hint) {
               out.skippedFilesHint = hint;
             }
+          }
+
+          // RFC v2: Add truncation info with cursor pagination
+          const hasMore = hasMoreGrouped || hasMoreHits;
+          if (hasMore || offset > 0 || cursorError) {
+            const returnedCount = (grouped?.length ?? 0) + paginatedHits.length;
+            out.truncation = {
+              truncated: hasMore,
+              returnedCount,
+              ...(hasMore && { nextCursor: createNextCursor(TOOL_NAME, offset, pageSize) }),
+              ...(cursorError && { reason: cursorError }),
+            };
           }
 
           return {
@@ -1485,8 +1782,10 @@ version: '0.4.4',
           };
         }
 
-        // Legacy search path (unchanged behavior)
-        const fetchLimit = args.excludePatterns?.length ? Math.min(args.limit * 2, 200) : args.limit;
+        // Legacy search path with cursor pagination
+        // Fetch extra items to detect if there are more results after pagination
+        const baseFetchLimit = args.excludePatterns?.length ? Math.min(pageSize * 2, 200) : pageSize;
+        const fetchLimit = offset + baseFetchLimit + 1;
         let rawHits = searchIndex(paths.searchDbPath, args.query, args.scope as SearchScope, fetchLimit, paths.rootDir);
 
         // Apply excludePatterns filter
@@ -1502,8 +1801,10 @@ version: '0.4.4',
           rawHits = rawHits.filter(h => !patterns.some(re => re.test(h.path)));
         }
 
-        // Limit to requested count after filtering
-        rawHits = rawHits.slice(0, args.limit);
+        // Check if there are more results after current page
+        const hasMore = rawHits.length > offset + pageSize;
+        // Apply cursor pagination
+        rawHits = rawHits.slice(offset, offset + pageSize);
 
         const hits = rawHits.map((h) => {
           const hit: Record<string, unknown> = {
@@ -1545,6 +1846,16 @@ version: '0.4.4',
           if (hint) {
             out.skippedFilesHint = hint;
           }
+        }
+
+        // RFC v2: Add truncation info with cursor pagination
+        if (hasMore || offset > 0 || cursorError) {
+          out.truncation = {
+            truncated: hasMore,
+            returnedCount: hits.length,
+            ...(hasMore && { nextCursor: createNextCursor(TOOL_NAME, offset, pageSize) }),
+            ...(cursorError && { reason: cursorError }),
+          };
         }
 
         return {
@@ -1610,6 +1921,18 @@ version: '0.4.4',
             timeBudgetMs: z.number(),
           }),
         }).optional().describe('Coverage report explaining what was analyzed and what was skipped (global mode only).'),
+        // RFC v2: Evidence pointers
+        evidence: z.array(
+          z.object({
+            path: z.string(),
+            range: z.object({
+              startLine: z.number(),
+              endLine: z.number(),
+            }).optional(),
+            uri: z.string().optional(),
+            snippet: z.string().optional(),
+          })
+        ).optional().describe('Evidence pointers to key files in the dependency graph.'),
       },
       annotations: {
         readOnlyHint: true,
@@ -1620,7 +1943,23 @@ version: '0.4.4',
         // Check bundle completeness before generating dependency graph
         await assertBundleComplete(cfg, args.bundleId);
 
-        const out = await generateDependencyGraph(cfg, args);
+        const rawOut = await generateDependencyGraph(cfg, args);
+        
+        // RFC v2: Build evidence from top nodes in the graph
+        const evidence: Array<{ path: string; uri?: string }> = [];
+        const nodes = (rawOut.facts?.nodes ?? []) as Array<{ id: string }>;
+        // Pick top 5 file nodes as evidence
+        for (const node of nodes.slice(0, 5)) {
+          if (node.id?.startsWith('file:')) {
+            const filePath = node.id.replace(/^file:/, '');
+            evidence.push({
+              path: filePath,
+              uri: toBundleFileUri({ bundleId: args.bundleId, relativePath: filePath }),
+            });
+          }
+        }
+        
+        const out = { ...rawOut, evidence };
         return {
           content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
           structuredContent: out,
@@ -1900,6 +2239,13 @@ version: '0.4.4',
           .describe('Reason for empty results. no_edges=no trace links exist across bundles, no_matching_edges=links exist but none match query, not_initialized=trace DB empty for this bundle, no_matching_bundle=no bundles found.'),
         nextSteps: z.array(z.string()).optional()
           .describe('Actionable guidance when edges is empty.'),
+        // RFC v2: truncation info with cursor pagination
+        truncation: z.object({
+          truncated: z.boolean(),
+          nextCursor: z.string().optional(),
+          reason: z.string().optional(),
+          returnedCount: z.number().optional(),
+        }).optional(),
       },
       annotations: {
         readOnlyHint: true,
@@ -1907,17 +2253,45 @@ version: '0.4.4',
     },
     async (args) => {
       try {
+        // RFC v2: Parse cursor for pagination
+        const { parseCursorOrDefault, createNextCursor } = await import('./mcp/cursor.js');
+        const TOOL_NAME = 'preflight_trace_query';
+        const { offset, error: cursorError } = parseCursorOrDefault(args.cursor, TOOL_NAME);
+        const pageSize = args.limit;
+
         // Check bundle completeness if bundleId is provided
         if (args.bundleId) {
           await assertBundleComplete(cfg, args.bundleId);
         }
 
-        const out = await traceQuery(cfg, args);
+        // Fetch extra items to detect if there are more results
+        const fetchLimit = offset + pageSize + 1;
+        const rawOut = await traceQuery(cfg, { ...args, limit: fetchLimit });
+        
+        // Apply cursor pagination to edges
+        const hasMore = rawOut.edges.length > offset + pageSize;
+        const paginatedEdges = rawOut.edges.slice(offset, offset + pageSize);
+        
+        // Build output with paginated edges
+        const out: Record<string, unknown> = {
+          ...rawOut,
+          edges: paginatedEdges,
+        };
+        
+        // RFC v2: Add truncation info with cursor pagination
+        if (hasMore || offset > 0 || cursorError) {
+          out.truncation = {
+            truncated: hasMore,
+            returnedCount: paginatedEdges.length,
+            ...(hasMore && { nextCursor: createNextCursor(TOOL_NAME, offset, pageSize) }),
+            ...(cursorError && { reason: cursorError }),
+          };
+        }
         
         // Build human-readable text output
         let textOutput: string;
-        if (out.edges.length === 0 && out.reason) {
-          textOutput = `No trace links found.\nReason: ${out.reason}\n\nNext steps:\n${(out.nextSteps ?? []).map(s => `- ${s}`).join('\n')}`;
+        if (paginatedEdges.length === 0 && rawOut.reason) {
+          textOutput = `No trace links found.\nReason: ${rawOut.reason}\n\nNext steps:\n${(rawOut.nextSteps ?? []).map(s => `- ${s}`).join('\n')}`;
         } else {
           textOutput = JSON.stringify(out, null, 2);
         }
@@ -2071,6 +2445,18 @@ version: '0.4.4',
         coverageReport: z.any(),
         summary: z.string().describe('LLM-formatted analysis summary with checklist and claims.'),
         nextSteps: z.array(z.string()),
+        // RFC v2: Top-level evidence aggregation
+        evidence: z.array(
+          z.object({
+            path: z.string(),
+            range: z.object({
+              startLine: z.number(),
+              endLine: z.number(),
+            }).optional(),
+            uri: z.string().optional(),
+            snippet: z.string().optional(),
+          })
+        ).optional().describe('Aggregated evidence pointers from all claims.'),
       },
       annotations: {
         readOnlyHint: true,
@@ -2231,9 +2617,27 @@ version: '0.4.4',
           errors,
         });
 
+        // RFC v2: Aggregate evidence from all claims into top-level array
+        const evidence: Array<{ path: string; range?: { startLine: number; endLine: number }; uri?: string; snippet?: string }> = [];
+        const seenPaths = new Set<string>();
+        for (const claim of result.claims ?? []) {
+          for (const ev of claim.evidence ?? []) {
+            const evRef = ev as EvidenceRef;
+            if (evRef.file && !seenPaths.has(evRef.file)) {
+              seenPaths.add(evRef.file);
+              evidence.push({
+                path: evRef.file,
+                range: evRef.range ? { startLine: evRef.range.startLine, endLine: evRef.range.endLine } : undefined,
+                uri: toBundleFileUri({ bundleId: args.bundleId, relativePath: evRef.file }),
+                snippet: evRef.snippet,
+              });
+            }
+          }
+        }
+
         return {
           content: [{ type: 'text', text: result.summary }],
-          structuredContent: result,
+          structuredContent: { ...result, evidence },
         };
       } catch (err) {
         throw wrapPreflightError(err);
