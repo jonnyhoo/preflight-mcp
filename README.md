@@ -50,7 +50,8 @@ Preflight: 🔗 Trace links:
 - 🔗 **Trace links** — Track code↔test↔doc relationships
 - 📖 **Auto-generated guides** — `START_HERE.md`, `AGENTS.md`, `OVERVIEW.md`
 - ☁️ **Cloud sync** — Multi-path mirror backup for redundancy
-- ⚡ **15 MCP tools + 5 prompts** — Complete toolkit for code exploration
+- 🧠 **EDDA (Evidence-Driven Deep Analysis)** — Auto-generate auditable claims with evidence
+- ⚡ **18 MCP tools + 5 prompts** — Complete toolkit for code exploration
 
 <details>
 <summary><b>All Features (click to expand)</b></summary>
@@ -159,7 +160,7 @@ Run end-to-end smoke test:
 npm run smoke
 ```
 
-## Tools (15 total)
+## Tools (18 total)
 
 ### `preflight_list_bundles`
 List bundle IDs in storage.
@@ -230,6 +231,11 @@ Important: **this tool is strictly read-only**.
 - `excludePatterns`: Filter out paths matching patterns (e.g., `["**/tests/**", "**/__pycache__/**"]`)
 - `maxSnippetLength`: Limit snippet length per result (50-500 chars) to reduce token consumption
 
+**EDDA enhancements** (v0.4.0):
+- `groupByFile`: Group hits by file, returns `{path, hitCount, topSnippet}` - significantly reduces tokens
+- `fileTypeFilters`: Filter by extension (e.g., `[".py", ".ts"]`)
+- `includeScore`: Include BM25 relevance score in results
+
 **Deprecated parameters**: `ensureFresh`, `autoRepairIndex`, `maxAgeHours` are deprecated and will return warnings instead of errors.
 
 ### `preflight_search_by_tags`
@@ -281,6 +287,45 @@ Query traceability links (code↔test, code↔doc, commit↔ticket).
 Export trace links to `trace/trace.json` for direct LLM reading.
 - Note: Auto-exported after each `trace_upsert`, so only needed to manually refresh
 - Triggers: "export trace", "refresh trace.json", "导出trace"
+
+### `preflight_suggest_traces` *(NEW v0.4.0)*
+Automatically suggest trace links based on file naming patterns.
+- **MVP**: Only supports `tested_by` edge type (code↔test relationships)
+- Scans for patterns: `test_*.py`, `*_test.py`, `*.test.ts`, `*.spec.ts`, `*_test.go`
+- Returns ready-to-use `upsertPayload` for `preflight_trace_upsert`
+- Triggers: "suggest test links", "find test coverage", "发现测试关系"
+
+Parameters:
+- `edge_type`: `"tested_by"` (MVP only)
+- `scope`: `"repo"` | `"dir"` | `"file"`
+- `min_confidence`: 0-1 (default: 0.85)
+- `limit`: Max suggestions (default: 50)
+
+### `preflight_deep_analyze_bundle` *(NEW v0.4.0)*
+One-call deep analysis aggregating tree, search, deps, and traces.
+- Returns unified evidence pack with LLM-friendly summary
+- Auto-generates **claims** with evidence references
+- Tracks analysis progress via **checklistStatus**
+- Reports unanswered questions as **openQuestions**
+- Triggers: "deep analyze", "comprehensive analysis", "深度分析"
+
+Output includes:
+- `claims[]`: Auto-generated findings with evidence
+- `checklistStatus`: Analysis progress (repo_tree, deps, entrypoints, etc.)
+- `openQuestions[]`: Questions with `nextEvidenceToFetch` hints
+- `summary`: Markdown summary with checklist and key findings
+
+### `preflight_validate_report` *(NEW v0.4.0)*
+Validate claims and evidence chains for auditability.
+- Checks: missing evidence, invalid file references, broken snippet hashes
+- Returns `passed: boolean` and detailed `issues[]`
+- Triggers: "validate claims", "audit report", "验证报告"
+
+Parameters:
+- `claims[]`: Claims to validate (with evidence)
+- `verifySnippets`: Check SHA256 hashes (default: true)
+- `verifyFileExists`: Check evidence files exist (default: true)
+- `strictMode`: Treat warnings as errors (default: false)
 
 ### `preflight_cleanup_orphans`
 Remove incomplete or corrupted bundles (bundles without valid manifest.json).
