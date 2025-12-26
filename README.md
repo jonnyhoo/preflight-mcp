@@ -3,47 +3,81 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org/)
 [![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-blue)](https://modelcontextprotocol.io/)
+[![npm version](https://img.shields.io/npm/v/preflight-mcp)](https://www.npmjs.com/package/preflight-mcp)
 
 > **English** | [中文](./README.zh-CN.md)
 
-An MCP (Model Context Protocol) **stdio** server that creates evidence-based preflight bundles for GitHub repositories and library documentation.
+**Give your AI assistant deep knowledge of any codebase — in seconds.**
 
-Each bundle contains:
-- A local copy of repo docs + code (normalized text)
-- A lightweight **full-text search index** (SQLite FTS5)
-- Agent-facing entry files: `START_HERE.md`, `AGENTS.md`, and `OVERVIEW.md` (factual-only, with evidence pointers)
+Preflight-MCP creates searchable, indexed knowledge bundles from GitHub repos, so Claude/GPT/Cursor can understand your project structure, find relevant code, and trace dependencies — without copy-pasting or token limits.
 
-## Features
+## Why Preflight?
 
-- **15 MCP tools** to create/update/repair/search/read bundles, generate evidence graphs, and manage trace links
-- **5 MCP prompts** for interactive guidance: menu, analyze guide, search guide, manage guide, trace guide
-- **LLM-friendly outputs**: After bundle creation, prompts user to generate dependency graph for deeper analysis
-- **Proactive trace links**: LLM automatically discovers and records code↔test, code↔doc relationships
-- **Auto-export trace.json**: Trace links are automatically exported to JSON for direct LLM reading (no API needed)
-- **Progress tracking**: Real-time progress reporting for long-running operations (create/update bundles)
-- **Bundle integrity check**: Prevents operations on incomplete bundles with helpful error messages
-- **De-duplication with in-progress lock**: Prevent duplicate bundle creation even during MCP timeouts
-- **Global dependency graph**: Generate project-wide import relationship graphs
-- **Batch file reading**: Read all key bundle files in a single call
-- **Resilient GitHub fetching**: configurable git clone timeout + GitHub archive (zipball) fallback
-- **Offline repair**: rebuild missing/empty derived artifacts (index/guides/overview) without re-fetching
-- **Static facts extraction** via `analysis/FACTS.json` (non-LLM)
-- **Resources** to read bundle files via `preflight://...` URIs
-- **Multi-path mirror backup** for cloud storage redundancy
-- **Resilient storage** with automatic failover when mounts are unavailable
-- **Atomic bundle creation** with crash-safety and zero orphans
-- **Fast background deletion** with 100-300x performance improvement
-- **Auto-cleanup** on startup for historical orphan bundles
+| Problem | Preflight Solution |
+|---------|--------------------|
+| 🤯 AI forgets your codebase context | Persistent, searchable bundles |
+| 📋 Copy-pasting code into chat | One command: `"index this repo"` |
+| 🔍 AI can't find related files | Full-text search + dependency graph |
+| 🧩 Lost in large projects | Auto-generated `START_HERE.md` & `OVERVIEW.md` |
+| 🔗 No idea what tests cover what | Trace links: code↔test↔doc |
+
+## Demo
+
+```
+You: "Create a bundle for the repository facebook/react"
+
+Preflight: ✅ Cloned, indexed 2,847 files, generated overview
+
+You: "Search for 'useState' implementation"
+
+Preflight: 📍 Found 23 matches:
+  → packages/react/src/ReactHooks.js:24
+  → packages/react-reconciler/src/ReactFiberHooks.js:1042
+  ...
+
+You: "Show me what tests cover useState"
+
+Preflight: 🔗 Trace links:
+  → ReactHooks.js tested_by ReactHooksTest.js
+  ...
+```
+
+## Core Features
+
+- 🚀 **One-command indexing** — `"index owner/repo"` creates a complete knowledge bundle
+- 🔍 **Full-text search** — SQLite FTS5 search across all code and docs
+- 🗺️ **Dependency graph** — Visualize imports and file relationships
+- 🔗 **Trace links** — Track code↔test↔doc relationships
+- 📖 **Auto-generated guides** — `START_HERE.md`, `AGENTS.md`, `OVERVIEW.md`
+- ☁️ **Cloud sync** — Multi-path mirror backup for redundancy
+- ⚡ **15 MCP tools + 5 prompts** — Complete toolkit for code exploration
+
+<details>
+<summary><b>All Features (click to expand)</b></summary>
+
+- **Progress tracking**: Real-time progress for long-running operations
+- **Bundle integrity check**: Prevents operations on incomplete bundles
+- **De-duplication**: Prevent duplicate bundle creation even during timeouts
+- **Resilient GitHub fetching**: Git clone timeout + archive fallback
+- **Offline repair**: Rebuild derived artifacts without re-fetching
+- **Static facts extraction**: `analysis/FACTS.json` (non-LLM)
+- **Resources**: Read bundle files via `preflight://...` URIs
+- **Atomic operations**: Crash-safety with zero orphans
+- **Fast deletion**: 100-300x performance improvement
+- **Auto-cleanup**: Removes orphan bundles on startup
+
+</details>
 
 ## Table of Contents
 
-- [Requirements](#requirements)
-- [Installation](#installation)
+- [Why Preflight?](#why-preflight)
+- [Demo](#demo)
+- [Core Features](#core-features)
 - [Quick Start](#quick-start)
-- [Tools](#tools-12-total)
+- [Tools](#tools-15-total)
+- [Prompts](#prompts-5-total)
 - [Environment Variables](#environment-variables)
 - [Contributing](#contributing)
-- [License](#license)
 
 ## Requirements
 

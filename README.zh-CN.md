@@ -3,41 +3,81 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org/)
 [![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-blue)](https://modelcontextprotocol.io/)
+[![npm version](https://img.shields.io/npm/v/preflight-mcp)](https://www.npmjs.com/package/preflight-mcp)
 
 > [English](./README.md) | **中文**
 
-一个 MCP (Model Context Protocol) **stdio** 服务器，用于为 GitHub 仓库与库文档生成"基于证据"的 preflight bundles。
+**让你的 AI 助手秒懂任何代码仓库。**
 
-每个 bundle 包含：
-- 仓库文档 + 代码的本地副本（规范化文本）
-- 轻量级 **全文搜索索引**（SQLite FTS5）
-- 面向 Agent 的入口文件：`START_HERE.md`、`AGENTS.md`、`OVERVIEW.md`（仅事实，带证据指针）
+Preflight-MCP 为 GitHub 仓库创建可搜索的知识库，让 Claude/GPT/Cursor 理解你的项目结构、快速定位代码、追踪依赖关系 —— 无需复制粘贴，不受 token 限制。
 
-## Features
+## 为什么需要 Preflight？
 
-- **15 个 MCP 工具**：create/update/repair/search/evidence/trace/read/cleanup（外加 resources）
-- **5 个 MCP prompts**：交互式引导（菜单、分析指南、搜索指南、管理指南、追溯指南）
-- **去重**：避免对相同的规范化输入重复索引
-- **可靠的 GitHub 获取**：可配置 git clone 超时 + GitHub archive（zipball）兜底
-- **离线修复**：无需重新抓取，重建缺失/为空的派生物（index/guides/overview）
-- **静态事实提取**：生成 `analysis/FACTS.json`（非 LLM）
-- **Resources**：通过 `preflight://...` URI 读取 bundle 文件
-- **多路径镜像备份**：云存储冗余
-- **弹性存储**：挂载点不可用时自动故障转移
-- **原子创建 + 零孤儿**：临时目录 + 原子重命名，崩溃安全
-- **后台快速删除**：<100ms 响应，实际删除在后台进行
-- **启动自动清理**：历史孤儿目录自动清理（非阻塞）
+| 痛点 | Preflight 解决方案 |
+|------|--------------------|
+| 🤯 AI 记不住你的代码库 | 持久化、可搜索的知识包 |
+| 📋 反复复制粘贴代码 | 一句话：「索引这个仓库」 |
+| 🔍 AI 找不到相关文件 | 全文搜索 + 依赖图 |
+| 🧩 大项目里迷失方向 | 自动生成 `START_HERE.md` 和 `OVERVIEW.md` |
+| 🔗 不知道哪些测试覆盖哪些代码 | 追溯链接：代码↔测试↔文档 |
 
-## Table of Contents
+## 效果演示
 
-- [Requirements](#requirements)
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Architecture](#architecture)
-- [Tools](#tools-12-total)
-- [Environment Variables](#environment-variables)
-- [Contributing](#contributing)
-- [License](#license)
+```
+你：「为 facebook/react 创建 bundle」
+
+Preflight：✅ 已克隆，索引了 2,847 个文件，生成概览完成
+
+你：「搜索 useState 的实现」
+
+Preflight：📍 找到 23 处匹配：
+  → packages/react/src/ReactHooks.js:24
+  → packages/react-reconciler/src/ReactFiberHooks.js:1042
+  ...
+
+你：「哪些测试覆盖了 useState」
+
+Preflight：🔗 追溯链接：
+  → ReactHooks.js tested_by ReactHooksTest.js
+  ...
+```
+
+## 核心功能
+
+- 🚀 **一句话索引** — 「索引 owner/repo」即可创建完整知识包
+- 🔍 **全文搜索** — SQLite FTS5 搜索全部代码和文档
+- 🗺️ **依赖图** — 可视化 import 关系和文件依赖
+- 🔗 **追溯链接** — 追踪代码↔测试↔文档关系
+- 📖 **自动生成指南** — `START_HERE.md`、`AGENTS.md`、`OVERVIEW.md`
+- ☁️ **云端同步** — 多路径镜像备份
+- ⚡ **15 个 MCP 工具 + 5 个 prompts** — 完整的代码探索工具集
+
+<details>
+<summary><b>全部功能（点击展开）</b></summary>
+
+- **进度追踪**：长时间操作的实时进度显示
+- **Bundle 完整性检查**：防止对不完整 bundle 进行操作
+- **去重机制**：即使超时也能防止重复创建
+- **可靠的 GitHub 抓取**：git clone 超时 + archive 兜底
+- **离线修复**：无需重新抓取即可重建派生文件
+- **静态事实提取**：`analysis/FACTS.json`（非 LLM）
+- **Resources**：通过 `preflight://...` URI 读取文件
+- **原子操作**：崩溃安全，零孤儿目录
+- **快速删除**：100-300 倍性能提升
+- **自动清理**：启动时自动清理孤儿 bundle
+
+</details>
+
+## 目录
+
+- [为什么需要 Preflight](#为什么需要-preflight)
+- [效果演示](#效果演示)
+- [核心功能](#核心功能)
+- [快速开始](#quick-start)
+- [工具](#tools-15-total)
+- [Prompts](#prompts-5-total)
+- [环境变量](#environment-variables)
+- [贡献指南](#contributing)
 
 ## Requirements
 
