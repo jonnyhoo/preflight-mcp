@@ -172,7 +172,7 @@ export async function startServer(): Promise<void> {
   const server = new McpServer(
     {
       name: 'preflight-mcp',
-version: '0.4.0',
+version: '0.4.1',
       description: 'Create evidence-based preflight bundles for repositories (docs + code) with SQLite FTS search.',
     },
     {
@@ -841,7 +841,11 @@ version: '0.4.0',
     'preflight_create_bundle',
     {
       title: 'Create bundle',
-      description: 'Create a new bundle from GitHub repos or local directories. IMPORTANT: Only call this tool when the user EXPLICITLY asks to create/index a repo. Do NOT automatically create bundles when search fails or bundle is not found - ASK the user first! Use when user says: "index this repo", "create bundle for", "创建bundle", "添加GitHub项目". If ifExists=updateExisting, updates an existing bundle.',
+      description: 'Create a new bundle from GitHub repos or local directories. ' +
+        '**Safe to call proactively** - use `ifExists: "returnExisting"` to avoid duplicates. ' +
+        'Bundle creation is a **read-only collection** operation (clones repo, builds index, generates guides). ' +
+        'When user asks to analyze/understand a project, create the bundle first if it does not exist. ' +
+        'Use when: "analyze this repo", "understand this codebase", "index project", "分析项目", "理解代码".',
       inputSchema: CreateBundleInputSchema,
       outputSchema: {
         // Normal completion fields
