@@ -10,23 +10,20 @@ import { findBundleStorageDir, getBundlePathsForId } from '../bundle/service.js'
 import { readManifest } from '../bundle/manifest.js';
 import { searchIndex } from '../search/sqliteFts.js';
 import { safeJoin, toBundleFileUri } from '../mcp/uris.js';
+import {
+  type EvidenceRef,
+  type SourceRange,
+  type EvidenceMethod,
+  createEmptyCoverageReport,
+} from '../types/evidence.js';
 
-export type EvidenceMethod = 'exact' | 'heuristic';
+// Re-export shared types for backward compatibility
+export type { EvidenceRef, SourceRange, EvidenceMethod } from '../types/evidence.js';
 
-export type SourceRange = {
-  startLine: number;
-  startCol: number;
-  endLine: number;
-  endCol: number;
-};
-
-export type SourceRef = {
-  file: string; // bundle-relative posix path
-  range: SourceRange;
-  uri: string; // preflight://bundle/.../file/...
-  snippet?: string;
-  snippetSha256?: string;
-};
+/**
+ * @deprecated Use EvidenceRef instead. SourceRef is kept for backward compatibility.
+ */
+export type SourceRef = EvidenceRef;
 
 export type EvidenceItem = {
   evidenceId: string;
@@ -1178,6 +1175,31 @@ export async function generateDependencyGraph(cfg: PreflightConfig, rawArgs: unk
   // Stats
   importEdges = edges.filter((e) => e.type === 'imports' || e.type === 'imports_resolved').length;
 
+  // Build minimal coverageReport for target mode (EDDA requirement)
+  const targetExt = path.extname(targetFile).toLowerCase();
+  const targetLang = targetExt.replace('.', '') || 'unknown';
+  const targetCoverageReport: CoverageReport = {
+    scannedFilesCount: 1,
+    parsedFilesCount: 1,
+    perLanguage: {
+      [targetLang]: {
+        scanned: 1,
+        parsed: 1,
+        edges: importEdges,
+      },
+    },
+    perDir: {},
+    skippedFiles: [],
+    truncated,
+    truncatedReason,
+    limits: {
+      maxFiles: limits.maxFiles,
+      maxNodes: limits.maxNodes,
+      maxEdges: limits.maxEdges,
+      timeBudgetMs,
+    },
+  };
+
   const out: DependencyGraphResult = {
     meta: {
       requestId,
@@ -1211,6 +1233,7 @@ export async function generateDependencyGraph(cfg: PreflightConfig, rawArgs: unk
       },
       warnings,
     },
+    coverageReport: targetCoverageReport,
   };
 
   return out;

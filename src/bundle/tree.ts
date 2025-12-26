@@ -13,6 +13,8 @@ export type TreeStats = {
   totalDirs: number;
   byExtension: Record<string, number>;
   byTopDir: Record<string, number>;
+  /** File count per directory (when showFileCountPerDir=true) */
+  byDir?: Record<string, number>;
 };
 
 export type EntryPointCandidate = {
@@ -81,11 +83,20 @@ export async function generateRepoTree(
     depth?: number;
     include?: string[];
     exclude?: string[];
+    /** Focus directory - expand deeper within this path */
+    focusDir?: string;
+    /** Extra depth to apply within focusDir */
+    focusDepthBonus?: number;
+    /** Track file count per directory */
+    showFileCountPerDir?: boolean;
   } = {}
 ): Promise<RepoTreeResult> {
   const depth = options.depth ?? 6;
   const includePatterns = options.include ?? [];
   const excludePatterns = options.exclude ?? ['node_modules', '.git', '__pycache__', '.venv', 'venv', 'dist', 'build', '*.pyc'];
+  const focusDir = options.focusDir?.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  const focusDepthBonus = options.focusDepthBonus ?? 3;
+  const showFileCountPerDir = options.showFileCountPerDir ?? false;
 
   const reposDir = path.join(bundleRootDir, 'repos');
   
@@ -95,12 +106,30 @@ export async function generateRepoTree(
     byExtension: {},
     byTopDir: {},
   };
+  
+  // Track per-directory file counts if requested
+  const dirFileCounts: Record<string, number> = {};
 
   const entryPointCandidates: EntryPointCandidate[] = [];
 
+  // Check if path is within focus directory
+  function isInFocusDir(relPath: string): boolean {
+    if (!focusDir) return false;
+    return relPath === focusDir || relPath.startsWith(focusDir + '/');
+  }
+
+  // Get effective depth limit for a path
+  function getEffectiveDepth(relPath: string): number {
+    if (focusDir && isInFocusDir(relPath)) {
+      return depth + focusDepthBonus;
+    }
+    return depth;
+  }
+
   // Build tree recursively
   async function buildTree(dir: string, currentDepth: number, relativePath: string): Promise<TreeNode | null> {
-    if (currentDepth > depth) return null;
+    const effectiveDepth = getEffectiveDepth(relativePath);
+    if (currentDepth > effectiveDepth) return null;
 
     try {
       const stat = await fs.stat(dir);
@@ -124,6 +153,14 @@ export async function generateRepoTree(
         // Track top directory stats
         const topDir = relativePath.split('/')[0] ?? '(root)';
         stats.byTopDir[topDir] = (stats.byTopDir[topDir] ?? 0) + 1;
+        
+        // Track per-directory file counts
+        if (showFileCountPerDir) {
+          const parentDir = relativePath.includes('/') 
+            ? relativePath.substring(0, relativePath.lastIndexOf('/')) 
+            : '(root)';
+          dirFileCounts[parentDir] = (dirFileCounts[parentDir] ?? 0) + 1;
+        }
 
         // Check for entry point candidates
         for (const ep of ENTRY_POINT_PATTERNS) {
@@ -222,6 +259,11 @@ export async function generateRepoTree(
 
   // Sort entry point candidates by priority
   entryPointCandidates.sort((a, b) => b.priority - a.priority);
+
+  // Add per-directory counts if requested
+  if (showFileCountPerDir) {
+    stats.byDir = dirFileCounts;
+  }
 
   return {
     bundleId,

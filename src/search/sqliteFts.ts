@@ -25,6 +25,8 @@ export type SearchHit = {
   kind: 'doc' | 'code';
   lineNo: number;
   snippet: string;
+  /** BM25 relevance score (lower is more relevant, FTS5 convention) */
+  score?: number;
   context?: {
     functionName?: string;
     className?: string;
@@ -32,6 +34,42 @@ export type SearchHit = {
     endLine: number;
     surroundingLines: string[];
   };
+};
+
+/**
+ * Grouped search hit - aggregates multiple hits from the same file.
+ * Used when groupByFile=true to reduce token consumption.
+ */
+export type GroupedSearchHit = {
+  path: string;
+  repo: string;
+  kind: 'doc' | 'code';
+  /** Number of matching lines in this file */
+  hitCount: number;
+  /** Line numbers of all matches */
+  lines: number[];
+  /** Best matching snippet (highest relevance) */
+  topSnippet: string;
+  /** Best score (most relevant) */
+  topScore?: number;
+};
+
+/**
+ * Extended search options for EDDA token efficiency.
+ */
+export type SearchOptions = {
+  /** Search scope */
+  scope: SearchScope;
+  /** Max results */
+  limit: number;
+  /** Bundle root path (for context extraction) */
+  bundleRoot?: string;
+  /** Include BM25 score in results */
+  includeScore?: boolean;
+  /** Filter by file extensions (e.g., [".py", ".ts"]) */
+  fileTypeFilters?: string[];
+  /** Group results by file */
+  groupByFile?: boolean;
 };
 
 async function ensureDir(p: string): Promise<void> {
@@ -586,6 +624,162 @@ export function searchIndex(
 
       return hit;
     });
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Advanced search with EDDA enhancements.
+ * Supports groupByFile, includeScore, and fileTypeFilters.
+ */
+export function searchIndexAdvanced(
+  dbPath: string,
+  query: string,
+  options: SearchOptions
+): { hits: SearchHit[]; grouped?: GroupedSearchHit[]; meta: { tokenBudgetHint?: string } } {
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const ftsQuery = buildFtsQuery(query);
+    const { scope, limit, bundleRoot, includeScore, fileTypeFilters, groupByFile } = options;
+
+    const whereKind =
+      scope === 'docs' ? `kind = 'doc' AND` : scope === 'code' ? `kind = 'code' AND` : '';
+
+    // Fetch more results if we need to filter by file type
+    const fetchLimit = fileTypeFilters?.length ? Math.min(limit * 3, 500) : limit;
+
+    const stmt = db.prepare(
+      `
+      SELECT
+        path,
+        repo,
+        kind,
+        lineNo,
+        snippet(lines, 0, '[', ']', '…', 10) AS snippet,
+        bm25(lines) AS score
+      FROM lines
+      WHERE ${whereKind} lines MATCH ?
+      ORDER BY bm25(lines)
+      LIMIT ?
+      `
+    );
+
+    let rows = stmt.all(ftsQuery, fetchLimit) as Array<{
+      path: string;
+      repo: string;
+      kind: 'doc' | 'code';
+      lineNo: number;
+      snippet: string;
+      score: number;
+    }>;
+
+    // Apply file type filters
+    if (fileTypeFilters && fileTypeFilters.length > 0) {
+      const normalizedFilters = fileTypeFilters.map(f => f.toLowerCase());
+      rows = rows.filter(r => {
+        const ext = path.extname(r.path).toLowerCase();
+        return normalizedFilters.includes(ext);
+      });
+    }
+
+    // Limit after filtering
+    rows = rows.slice(0, limit);
+
+    // Build grouped results if requested
+    let grouped: GroupedSearchHit[] | undefined;
+    if (groupByFile) {
+      const byFile = new Map<string, {
+        path: string;
+        repo: string;
+        kind: 'doc' | 'code';
+        lines: number[];
+        topSnippet: string;
+        topScore: number;
+      }>();
+
+      for (const r of rows) {
+        const existing = byFile.get(r.path);
+        if (existing) {
+          existing.lines.push(r.lineNo);
+          // Keep the snippet with best score (lower is better in FTS5)
+          if (r.score < existing.topScore) {
+            existing.topSnippet = r.snippet;
+            existing.topScore = r.score;
+          }
+        } else {
+          byFile.set(r.path, {
+            path: r.path,
+            repo: r.repo,
+            kind: r.kind,
+            lines: [r.lineNo],
+            topSnippet: r.snippet,
+            topScore: r.score,
+          });
+        }
+      }
+
+      grouped = Array.from(byFile.values()).map(g => ({
+        path: g.path,
+        repo: g.repo,
+        kind: g.kind,
+        hitCount: g.lines.length,
+        lines: g.lines.sort((a, b) => a - b),
+        topSnippet: g.topSnippet,
+        topScore: includeScore ? g.topScore : undefined,
+      }));
+    }
+
+    // Cache for file contents
+    const fileCache = new Map<string, string>();
+
+    const hits = rows.map((r) => {
+      const hit: SearchHit = {
+        path: r.path,
+        repo: r.repo,
+        kind: r.kind,
+        lineNo: r.lineNo,
+        snippet: r.snippet,
+        score: includeScore ? r.score : undefined,
+      };
+
+      // Add context for code files if bundleRoot is provided
+      if (r.kind === 'code' && bundleRoot && !groupByFile) {
+        try {
+          const filePath = path.join(bundleRoot, r.path);
+          let fileContent = fileCache.get(filePath);
+          if (!fileContent) {
+            fileContent = fsSync.readFileSync(filePath, 'utf8');
+            fileCache.set(filePath, fileContent);
+          }
+          const context = extractContext(fileContent, r.lineNo);
+          if (context) {
+            hit.context = context;
+          }
+        } catch {
+          // Skip context on error
+        }
+      }
+
+      return hit;
+    });
+
+    // Calculate token budget hint
+    let tokenBudgetHint: string | undefined;
+    if (groupByFile && grouped) {
+      const ungroupedTokens = rows.length * 100; // rough estimate
+      const groupedTokens = grouped.length * 80;
+      const savings = Math.round((1 - groupedTokens / ungroupedTokens) * 100);
+      if (savings > 0) {
+        tokenBudgetHint = `groupByFile saves ~${savings}% tokens (${grouped.length} files vs ${rows.length} hits)`;
+      }
+    }
+
+    return {
+      hits: groupByFile ? [] : hits, // Return empty hits when grouped
+      grouped,
+      meta: { tokenBudgetHint },
+    };
   } finally {
     db.close();
   }

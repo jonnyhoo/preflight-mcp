@@ -26,14 +26,18 @@ import { readManifest } from './bundle/manifest.js';
 import { safeJoin, toBundleFileUri } from './mcp/uris.js';
 import { wrapPreflightError } from './mcp/errorKinds.js';
 import { BundleNotFoundError } from './errors.js';
-import { searchIndex, type SearchScope } from './search/sqliteFts.js';
+import { searchIndex, searchIndexAdvanced, type SearchScope, type GroupedSearchHit } from './search/sqliteFts.js';
 import { logger } from './logging/logger.js';
 import { runSearchByTags } from './tools/searchByTags.js';
 import { cleanupOnStartup, cleanupOrphanBundles } from './bundle/cleanup.js';
 import { startHttpServer } from './http/server.js';
 import { DependencyGraphInputSchema, generateDependencyGraph } from './evidence/dependencyGraph.js';
 import { TraceQueryInputSchema, TraceUpsertInputSchema, traceQuery, traceUpsert } from './trace/service.js';
+import { suggestTestedByTraces, type SuggestTracesResult } from './trace/suggest.js';
 import { generateRepoTree, formatTreeResult } from './bundle/tree.js';
+import { buildDeepAnalysis, type TreeSummary, type SearchSummary, type DepsSummary, type TraceSummary } from './analysis/deep.js';
+import { validateReport } from './analysis/validate.js';
+import { type Claim, type EvidenceRef, type SourceRange } from './types/evidence.js';
 
 const CreateRepoInputSchema = z.union([
   z.object({
@@ -86,6 +90,19 @@ const SearchBundleInputSchema = {
     .max(500)
     .optional()
     .describe('Max length of snippet in each result (default: no limit). Use to reduce token consumption.'),
+  // EDDA enhancements (v0.4.0)
+  groupByFile: z
+    .boolean()
+    .optional()
+    .describe('If true, group hits by file. Returns {path, hitCount, lines[], topSnippet} instead of individual hits. Reduces tokens significantly.'),
+  fileTypeFilters: z
+    .array(z.string())
+    .optional()
+    .describe('Filter by file extensions (e.g., [".py", ".ts"]). Only returns hits from matching files.'),
+  includeScore: z
+    .boolean()
+    .optional()
+    .describe('If true, include BM25 relevance score in results. Lower score = more relevant.'),
   // Deprecated (kept for backward compatibility): this tool is strictly read-only.
   ensureFresh: z
     .boolean()
@@ -637,6 +654,10 @@ version: '0.2.5',
         depth: z.number().int().min(1).max(10).default(4).describe('Maximum directory depth to traverse. Default 4.'),
         include: z.array(z.string()).optional().describe('Glob patterns to include (e.g., ["*.ts", "*.py"]). If omitted, includes all files.'),
         exclude: z.array(z.string()).optional().describe('Patterns to exclude (e.g., ["node_modules", "*.pyc"]). Defaults include common excludes.'),
+        // EDDA enhancements
+        focusDir: z.string().optional().describe('Focus directory path - expand deeper within this path (e.g., "owner/repo/norm/src"). Gets +3 extra depth levels.'),
+        focusDepthBonus: z.number().int().min(1).max(6).optional().describe('Extra depth levels for focusDir. Default 3.'),
+        showFileCountPerDir: z.boolean().optional().describe('If true, include file count per directory in stats.byDir.'),
       },
       outputSchema: {
         bundleId: z.string(),
@@ -646,6 +667,7 @@ version: '0.2.5',
           totalDirs: z.number(),
           byExtension: z.record(z.string(), z.number()),
           byTopDir: z.record(z.string(), z.number()),
+          byDir: z.record(z.string(), z.number()).optional().describe('File count per directory (when showFileCountPerDir=true).'),
         }),
         entryPointCandidates: z.array(
           z.object({
@@ -671,6 +693,9 @@ version: '0.2.5',
           depth: args.depth,
           include: args.include,
           exclude: args.exclude,
+          focusDir: args.focusDir,
+          focusDepthBonus: args.focusDepthBonus,
+          showFileCountPerDir: args.showFileCountPerDir,
         });
 
         const textOutput = formatTreeResult(result);
@@ -1222,6 +1247,7 @@ version: '0.2.5',
             path: z.string(),
             lineNo: z.number(),
             snippet: z.string(),
+            score: z.number().optional().describe('BM25 relevance score (lower is more relevant).'),
             uri: z.string(),
             context: z.object({
               functionName: z.string().optional(),
@@ -1231,7 +1257,22 @@ version: '0.2.5',
               surroundingLines: z.array(z.string()),
             }).optional(),
           })
-        ),
+        ).describe('Individual hits (empty when groupByFile=true).'),
+        // EDDA grouped results
+        grouped: z.array(
+          z.object({
+            path: z.string(),
+            repo: z.string(),
+            kind: z.enum(['doc', 'code']),
+            hitCount: z.number().describe('Number of matching lines in this file.'),
+            lines: z.array(z.number()).describe('Line numbers of all matches.'),
+            topSnippet: z.string().describe('Best matching snippet.'),
+            topScore: z.number().optional().describe('Best score (most relevant).'),
+          })
+        ).optional().describe('Grouped results by file (only when groupByFile=true).'),
+        meta: z.object({
+          tokenBudgetHint: z.string().optional().describe('Hint about token savings from groupByFile.'),
+        }).optional().describe('Search metadata for EDDA optimization.'),
         autoUpdated: z
           .boolean()
           .optional()
@@ -1286,14 +1327,73 @@ version: '0.2.5',
 
         const paths = getBundlePathsForId(storageDir, args.bundleId);
 
-        // Fetch more results if we need to filter, to ensure we still get enough after filtering
+        // Use advanced search if EDDA features are requested
+        const useAdvanced = args.groupByFile || args.fileTypeFilters?.length || args.includeScore;
+        
+        if (useAdvanced) {
+          // EDDA-enhanced search path
+          const result = searchIndexAdvanced(paths.searchDbPath, args.query, {
+            scope: args.scope as SearchScope,
+            limit: args.limit,
+            bundleRoot: paths.rootDir,
+            includeScore: args.includeScore,
+            fileTypeFilters: args.fileTypeFilters,
+            groupByFile: args.groupByFile,
+          });
+
+          // Apply excludePatterns to grouped results
+          let grouped = result.grouped;
+          if (grouped && args.excludePatterns?.length) {
+            const patterns = args.excludePatterns.map(p => {
+              const regexStr = p
+                .replace(/\./g, '\\.')
+                .replace(/\*\*/g, '<<<DOUBLESTAR>>>')
+                .replace(/\*/g, '[^/]*')
+                .replace(/<<<DOUBLESTAR>>>/g, '.*');
+              return new RegExp(regexStr, 'i');
+            });
+            grouped = grouped.filter(g => !patterns.some(re => re.test(g.path)));
+          }
+
+          // Apply maxSnippetLength to grouped topSnippet
+          if (grouped && args.maxSnippetLength) {
+            grouped = grouped.map(g => ({
+              ...g,
+              topSnippet: g.topSnippet.length > args.maxSnippetLength!
+                ? g.topSnippet.slice(0, args.maxSnippetLength!) + '…'
+                : g.topSnippet,
+            }));
+          }
+
+          const out: Record<string, unknown> = {
+            bundleId: args.bundleId,
+            query: args.query,
+            scope: args.scope,
+            hits: result.hits.map(h => ({
+              ...h,
+              uri: toBundleFileUri({ bundleId: args.bundleId, relativePath: h.path }),
+            })),
+            grouped,
+            meta: result.meta,
+          };
+          
+          if (warnings.length > 0) {
+            out.warnings = warnings;
+          }
+
+          return {
+            content: [{ type: 'text', text: JSON.stringify(out, null, 2) }],
+            structuredContent: out,
+          };
+        }
+
+        // Legacy search path (unchanged behavior)
         const fetchLimit = args.excludePatterns?.length ? Math.min(args.limit * 2, 200) : args.limit;
         let rawHits = searchIndex(paths.searchDbPath, args.query, args.scope as SearchScope, fetchLimit, paths.rootDir);
 
         // Apply excludePatterns filter
         if (args.excludePatterns && args.excludePatterns.length > 0) {
           const patterns = args.excludePatterns.map(p => {
-            // Convert glob pattern to regex
             const regexStr = p
               .replace(/\./g, '\\.')
               .replace(/\*\*/g, '<<<DOUBLESTAR>>>')
@@ -1337,7 +1437,6 @@ version: '0.2.5',
           hits,
         };
         
-        // Include warnings in output if any deprecated params were used
         if (warnings.length > 0) {
           out.warnings = warnings;
         }
@@ -1774,6 +1873,456 @@ version: '0.2.5',
 
         return {
           content: [{ type: 'text', text: `Exported ${result.exported} trace edge(s) to ${jsonRelPath}` }],
+          structuredContent: out,
+        };
+      } catch (err) {
+        throw wrapPreflightError(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    'preflight_deep_analyze_bundle',
+    {
+      title: 'Deep analyze bundle (EDDA macro)',
+      description:
+        'One-call deep analysis that aggregates tree, search, dependencies, and traces. ' +
+        'Returns a unified evidence pack with LLM-friendly summary.\n\n' +
+        '**Use when:** Starting analysis of unfamiliar codebase, need quick overview, or want comprehensive context.\n\n' +
+        '**Components (all optional, enabled by default):**\n' +
+        '- tree: File structure summary\n' +
+        '- search: Query results (if focus.query provided)\n' +
+        '- deps: Dependency graph summary\n' +
+        '- traces: Test coverage links',
+      inputSchema: {
+        bundleId: z.string().describe('Bundle ID to analyze.'),
+        focus: z.object({
+          path: z.string().optional().describe('Focus on specific directory or file path.'),
+          query: z.string().optional().describe('Search query to include in analysis.'),
+          depth: z.number().int().min(1).max(10).optional().describe('Tree depth for focused path (default: 3).'),
+        }).optional().describe('Optional focus parameters to narrow analysis.'),
+        options: z.object({
+          includeTree: z.boolean().optional().default(true).describe('Include file tree summary.'),
+          includeSearch: z.boolean().optional().default(true).describe('Include search results (requires focus.query).'),
+          includeDeps: z.boolean().optional().default(true).describe('Include dependency analysis.'),
+          includeTraces: z.boolean().optional().default(true).describe('Include trace link summary.'),
+          tokenBudget: z.number().int().optional().describe('Soft limit on output tokens (reduces detail if exceeded).'),
+          maxFiles: z.number().int().min(10).max(1000).optional().default(500).describe('Max files to scan for tree/deps.'),
+        }).optional().describe('Analysis options.'),
+      },
+      outputSchema: {
+        bundleId: z.string(),
+        focus: z.object({ path: z.string().optional(), query: z.string().optional() }).optional(),
+        tree: z.object({
+          totalFiles: z.number(),
+          totalDirs: z.number(),
+          byExtension: z.record(z.string(), z.number()),
+          topDirs: z.array(z.object({ path: z.string(), fileCount: z.number() })),
+          focusedTree: z.string().optional(),
+        }).optional(),
+        search: z.object({
+          query: z.string(),
+          totalHits: z.number(),
+          topFiles: z.array(z.object({ path: z.string(), hitCount: z.number(), snippet: z.string().optional() })),
+          byDirectory: z.record(z.string(), z.number()),
+        }).optional(),
+        deps: z.object({
+          totalNodes: z.number(),
+          totalEdges: z.number(),
+          topImporters: z.array(z.object({ file: z.string(), count: z.number() })),
+          topImported: z.array(z.object({ file: z.string(), count: z.number() })),
+          cycles: z.array(z.string()).optional(),
+        }).optional(),
+        traces: z.object({
+          totalLinks: z.number(),
+          byType: z.record(z.string(), z.number()),
+          coverageEstimate: z.number(),
+        }).optional(),
+        coverageReport: z.any(),
+        summary: z.string().describe('LLM-formatted analysis summary.'),
+        nextSteps: z.array(z.string()),
+      },
+      annotations: {
+        readOnlyHint: true,
+      },
+    },
+    async (args) => {
+      try {
+        await assertBundleComplete(cfg, args.bundleId);
+
+        const storageDir = await findBundleStorageDir(cfg.storageDirs, args.bundleId);
+        if (!storageDir) {
+          throw new BundleNotFoundError(args.bundleId);
+        }
+
+        const paths = getBundlePathsForId(storageDir, args.bundleId);
+        const opts = args.options ?? {} as {
+          includeTree?: boolean;
+          includeSearch?: boolean;
+          includeDeps?: boolean;
+          includeTraces?: boolean;
+          tokenBudget?: number;
+          maxFiles?: number;
+        };
+        const focus = args.focus ?? {};
+        const errors: string[] = [];
+
+        let tree: TreeSummary | undefined;
+        let search: SearchSummary | undefined;
+        let deps: DepsSummary | undefined;
+        let traces: TraceSummary | undefined;
+
+        // 1. Tree
+        if (opts.includeTree ?? true) {
+          try {
+            const treeResult = await generateRepoTree(paths.rootDir, args.bundleId, {
+              depth: focus.depth ?? 4,
+              focusDir: focus.path,
+              showFileCountPerDir: true,
+            });
+            tree = {
+              totalFiles: treeResult.stats.totalFiles,
+              totalDirs: treeResult.stats.totalDirs,
+              byExtension: treeResult.stats.byExtension,
+              topDirs: Object.entries(treeResult.stats.byDir ?? {})
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 10)
+                .map(([p, count]) => ({ path: p, fileCount: count })),
+              focusedTree: focus.path ? formatTreeResult(treeResult) : undefined,
+            };
+          } catch (e) {
+            errors.push(`Tree: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        }
+
+        // 2. Search (only if query provided)
+        if ((opts.includeSearch ?? true) && focus.query) {
+          try {
+            const searchResult = await searchIndexAdvanced(paths.searchDbPath, focus.query, {
+              scope: 'all',
+              limit: 50,
+              groupByFile: true,
+              includeScore: true,
+            });
+            const byDir: Record<string, number> = {};
+            for (const hit of searchResult.hits) {
+              const dir = hit.path.split('/').slice(0, -1).join('/') || '(root)';
+              byDir[dir] = (byDir[dir] ?? 0) + 1;
+            }
+            search = {
+              query: focus.query,
+              totalHits: searchResult.hits.length,
+              topFiles: searchResult.grouped?.slice(0, 10).map(g => ({
+                path: g.path,
+                hitCount: g.hitCount,
+                snippet: g.topSnippet,
+              })) ?? searchResult.hits.slice(0, 10).map(h => ({
+                path: h.path,
+                hitCount: 1,
+                snippet: h.snippet,
+              })),
+              byDirectory: byDir,
+            };
+          } catch (e) {
+            errors.push(`Search: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        }
+
+        // 3. Dependencies
+        if (opts.includeDeps ?? true) {
+          try {
+            const depResult = await generateDependencyGraph(cfg, {
+              bundleId: args.bundleId,
+              options: {
+                timeBudgetMs: 15000,
+                maxNodes: (opts as any).maxFiles ?? 500,
+                maxEdges: 2000,
+              },
+            });
+            const edges = depResult.facts?.edges ?? [];
+            const nodes = depResult.facts?.nodes ?? [];
+            const importCounts: Record<string, number> = {};
+            const importedByCounts: Record<string, number> = {};
+            for (const edge of edges) {
+              if (edge.type === 'imports' || edge.type === 'imports_resolved') {
+                const from = typeof edge.from === 'string' ? edge.from.replace(/^file:/, '') : '';
+                const to = typeof edge.to === 'string' ? edge.to.replace(/^(file:|module:)/, '') : '';
+                if (from) importCounts[from] = (importCounts[from] ?? 0) + 1;
+                if (to) importedByCounts[to] = (importedByCounts[to] ?? 0) + 1;
+              }
+            }
+            deps = {
+              totalNodes: nodes.length,
+              totalEdges: edges.length,
+              topImporters: Object.entries(importCounts)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 10)
+                .map(([file, count]) => ({ file, count })),
+              topImported: Object.entries(importedByCounts)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 10)
+                .map(([file, count]) => ({ file, count })),
+            };
+          } catch (e) {
+            errors.push(`Deps: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        }
+
+        // 4. Traces
+        if (opts.includeTraces ?? true) {
+          try {
+            const traceResult = await traceQuery(cfg, {
+              bundleId: args.bundleId,
+              limit: 500,
+            });
+            const byType: Record<string, number> = {};
+            for (const edge of traceResult.edges) {
+              byType[edge.type] = (byType[edge.type] ?? 0) + 1;
+            }
+            const testedFiles = new Set(traceResult.edges.filter(e => e.type === 'tested_by').map(e => e.source.id));
+            const totalSourceFiles = tree?.totalFiles ?? 100;
+            traces = {
+              totalLinks: traceResult.edges.length,
+              byType,
+              coverageEstimate: testedFiles.size / Math.max(totalSourceFiles, 1),
+            };
+          } catch {
+            traces = { totalLinks: 0, byType: {}, coverageEstimate: 0 };
+          }
+        }
+
+        const result = buildDeepAnalysis(args.bundleId, {
+          tree,
+          search,
+          deps,
+          traces,
+          focusPath: focus.path,
+          focusQuery: focus.query,
+          errors,
+        });
+
+        return {
+          content: [{ type: 'text', text: result.summary }],
+          structuredContent: result,
+        };
+      } catch (err) {
+        throw wrapPreflightError(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    'preflight_validate_report',
+    {
+      title: 'Validate claims and evidence',
+      description:
+        'Validate a report containing claims with evidence chains. ' +
+        'Checks for: missing evidence, invalid file references, broken snippet hashes, etc.\n\n' +
+        '**Use when:** Before finalizing analysis output, after generating claims, for audit compliance.',
+      inputSchema: {
+        bundleId: z.string().describe('Bundle ID for file verification.'),
+        claims: z.array(z.object({
+          id: z.string().describe('Unique claim identifier.'),
+          text: z.string().describe('The claim text.'),
+          confidence: z.number().min(0).max(1).describe('Confidence score (0-1).'),
+          kind: z.enum(['feature', 'entrypoint', 'module', 'dependency', 'test_coverage', 'behavior', 'architecture', 'unknown']),
+          status: z.enum(['supported', 'inferred', 'unknown']),
+          evidence: z.array(z.object({
+            file: z.string(),
+            range: z.object({
+              startLine: z.number().int().min(1),
+              startCol: z.number().int().min(1),
+              endLine: z.number().int().min(1),
+              endCol: z.number().int().min(1),
+            }),
+            uri: z.string().optional(),
+            snippet: z.string().optional(),
+            snippetSha256: z.string().optional(),
+            note: z.string().optional(),
+          })),
+          whyInferred: z.string().optional(),
+        })).describe('Claims to validate.'),
+        options: z.object({
+          verifySnippets: z.boolean().optional().default(true).describe('Verify snippet SHA256 hashes.'),
+          verifyFileExists: z.boolean().optional().default(true).describe('Verify evidence files exist in bundle.'),
+          strictMode: z.boolean().optional().default(false).describe('Treat warnings as errors.'),
+        }).optional(),
+      },
+      outputSchema: {
+        bundleId: z.string(),
+        totalClaims: z.number(),
+        validClaims: z.number(),
+        invalidClaims: z.number(),
+        issues: z.array(z.object({
+          severity: z.enum(['error', 'warning', 'info']),
+          code: z.string(),
+          message: z.string(),
+          claimId: z.string().optional(),
+          evidenceIndex: z.number().optional(),
+          file: z.string().optional(),
+        })),
+        summary: z.string(),
+        passed: z.boolean(),
+      },
+      annotations: {
+        readOnlyHint: true,
+      },
+    },
+    async (args) => {
+      try {
+        await assertBundleComplete(cfg, args.bundleId);
+
+        const storageDir = await findBundleStorageDir(cfg.storageDirs, args.bundleId);
+        if (!storageDir) {
+          throw new BundleNotFoundError(args.bundleId);
+        }
+
+        const paths = getBundlePathsForId(storageDir, args.bundleId);
+
+        const result = await validateReport(paths.rootDir, {
+          bundleId: args.bundleId,
+          claims: args.claims as Claim[],
+          options: args.options,
+        });
+
+        return {
+          content: [{ type: 'text', text: result.summary }],
+          structuredContent: {
+            bundleId: result.bundleId,
+            totalClaims: result.totalClaims,
+            validClaims: result.validClaims,
+            invalidClaims: result.invalidClaims,
+            issues: result.issues,
+            summary: result.summary,
+            passed: result.passed,
+          },
+        };
+      } catch (err) {
+        throw wrapPreflightError(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    'preflight_suggest_traces',
+    {
+      title: 'Trace: suggest links',
+      description:
+        'Automatically suggest trace links based on file naming patterns. ' +
+        'MVP: Only supports tested_by edge type (code↔test relationships). ' +
+        'Use to bulk-discover test coverage relationships before reviewing/upserting.\n\n' +
+        '**Workflow:**\n' +
+        '1. Call with dryRun-style output to preview suggestions\n' +
+        '2. Review suggestions (LLM or human)\n' +
+        '3. Use trace_upsert with returned upsertPayload to persist approved links',
+      inputSchema: {
+        bundleId: z.string().describe('Bundle ID to scan for trace suggestions.'),
+        edge_type: z.enum(['tested_by']).default('tested_by').describe('Type of edge to suggest. MVP only supports tested_by.'),
+        scope: z.enum(['repo', 'dir', 'file']).default('repo').describe('Scope of scan: repo=entire bundle, dir=specific directory, file=single file.'),
+        scopePath: z.string().optional().describe('Path within bundle when scope is dir or file.'),
+        min_confidence: z.number().min(0).max(1).default(0.85).describe('Minimum confidence threshold (0-1). Default 0.85.'),
+        limit: z.number().int().min(1).max(200).default(50).describe('Maximum number of suggestions to return.'),
+        skipExisting: z.boolean().default(true).describe('If true, skip pairs that already have trace links.'),
+      },
+      outputSchema: {
+        bundleId: z.string(),
+        edgeType: z.string(),
+        suggestions: z.array(z.object({
+          type: z.string(),
+          source: z.object({ type: z.string(), id: z.string() }),
+          target: z.object({ type: z.string(), id: z.string() }),
+          confidence: z.number(),
+          method: z.enum(['exact', 'heuristic']),
+          why: z.string(),
+          upsertPayload: z.any().describe('Ready-to-use payload for trace_upsert'),
+        })),
+        stats: z.object({
+          scannedFiles: z.number(),
+          matchedPairs: z.number(),
+          suggestionsReturned: z.number(),
+        }),
+        nextSteps: z.array(z.string()),
+      },
+      annotations: {
+        readOnlyHint: true,
+      },
+    },
+    async (args) => {
+      try {
+        await assertBundleComplete(cfg, args.bundleId);
+
+        const storageDir = await findBundleStorageDir(cfg.storageDirs, args.bundleId);
+        if (!storageDir) {
+          throw new BundleNotFoundError(args.bundleId);
+        }
+
+        const paths = getBundlePathsForId(storageDir, args.bundleId);
+        
+        // Get existing edges if skipExisting is true
+        let existingEdges: Set<string> | undefined;
+        if (args.skipExisting) {
+          try {
+            const existingResult = await traceQuery(cfg, {
+              bundleId: args.bundleId,
+              edgeType: 'tested_by',
+              limit: 1000,
+            });
+            existingEdges = new Set(
+              existingResult.edges.map(e => `${e.source.id}|${e.target.id}`)
+            );
+          } catch {
+            existingEdges = new Set();
+          }
+        }
+
+        const result = await suggestTestedByTraces(paths.rootDir, {
+          bundleId: args.bundleId,
+          edgeType: args.edge_type,
+          scope: args.scope,
+          scopePath: args.scopePath,
+          minConfidence: args.min_confidence,
+          limit: args.limit,
+          skipExisting: args.skipExisting,
+          existingEdges,
+        });
+
+        const out = {
+          bundleId: args.bundleId,
+          edgeType: args.edge_type,
+          suggestions: result.suggestions,
+          stats: {
+            scannedFiles: result.scannedFiles,
+            matchedPairs: result.matchedPairs,
+            suggestionsReturned: result.suggestions.length,
+          },
+          nextSteps: result.suggestions.length > 0
+            ? [
+                'Review suggestions for accuracy',
+                'Call trace_upsert with upsertPayload (set dryRun=false) to persist approved links',
+              ]
+            : [
+                'No test patterns found. Try manual trace_upsert for non-standard patterns.',
+              ],
+        };
+
+        // Human-readable summary
+        let text = `## Trace Suggestions (${args.edge_type})\n\n`;
+        text += `Scanned ${result.scannedFiles} files, found ${result.matchedPairs} potential pairs.\n`;
+        text += `Returning ${result.suggestions.length} suggestions (min confidence: ${args.min_confidence}).\n\n`;
+        
+        if (result.suggestions.length > 0) {
+          text += `### Top Suggestions\n`;
+          for (const s of result.suggestions.slice(0, 5)) {
+            text += `- ${s.source.id} ← tested_by ← ${s.target.id} (${(s.confidence * 100).toFixed(0)}%)\n`;
+          }
+          if (result.suggestions.length > 5) {
+            text += `\n... and ${result.suggestions.length - 5} more (see structuredContent)\n`;
+          }
+          text += `\n💡 Use trace_upsert with the upsertPayload from each suggestion to persist.`;
+        }
+
+        return {
+          content: [{ type: 'text', text }],
           structuredContent: out,
         };
       } catch (err) {

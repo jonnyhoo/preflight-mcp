@@ -53,6 +53,7 @@
     "better-sqlite3": "^12.5.0",
     "ignore": "^7.0.5",
     "node-cron": "^4.2.1",
+    "preflight-mcp": "file:",
     "web-tree-sitter": "^0.26.3",
     "zod": "^4.2.1"
   },
