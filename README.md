@@ -310,19 +310,38 @@ Parameters:
 - `min_confidence`: 0-1 (default: 0.85)
 - `limit`: Max suggestions (default: 50)
 
-### `preflight_deep_analyze_bundle` *(NEW v0.4.0)*
-One-call deep analysis aggregating tree, search, deps, and traces.
+### `preflight_deep_analyze_bundle` *(Enhanced v0.5.1)*
+One-call deep analysis aggregating tree, search, deps, traces, **overview content**, and **test detection**.
 - Returns unified evidence pack with LLM-friendly summary
+- **Now includes OVERVIEW.md, START_HERE.md, AGENTS.md, README content** (v0.5.1)
+- **Auto-detects test frameworks** (jest, vitest, pytest, go, mocha) (v0.5.1)
+- **Generates copyable `nextCommands`** for follow-up actions (v0.5.1)
 - Auto-generates **claims** with evidence references
 - Tracks analysis progress via **checklistStatus**
 - Reports unanswered questions as **openQuestions**
-- Triggers: "deep analyze", "comprehensive analysis", "深度分析"
+- Triggers: "deep analyze", "comprehensive analysis", "深度分析", "快速了解项目"
+
+**New in v0.5.1 - Aggregated content (reduces round-trips):**
+- `includeOverview` (default: true): Include OVERVIEW.md, START_HERE.md, AGENTS.md
+- `includeReadme` (default: true): Include repo README.md
+- `includeTests` (default: true): Detect test directories and frameworks
 
 Output includes:
+- `overviewContent`: `{overview, startHere, agents, readme}` - bundle documentation content
+- `testInfo`: `{detected, framework, testDirs, testFileCount, configFiles, hint}` - test detection result
+- `nextCommands[]`: Copyable tool calls for next steps (can be directly used as arguments)
 - `claims[]`: Auto-generated findings with evidence
 - `checklistStatus`: Analysis progress (repo_tree, deps, entrypoints, etc.)
 - `openQuestions[]`: Questions with `nextEvidenceToFetch` hints
 - `summary`: Markdown summary with checklist and key findings
+
+**Example `nextCommands` output:**
+```json
+[
+  { "tool": "preflight_search_bundle", "description": "Search for specific code", "args": { "bundleId": "...", "query": "<填入关键词>" } },
+  { "tool": "preflight_read_file", "description": "Read core module", "args": { "bundleId": "...", "file": "src/server.ts" } }
+]
+```
 
 ### `preflight_validate_report` *(NEW v0.4.0)*
 Validate claims and evidence chains for auditability.

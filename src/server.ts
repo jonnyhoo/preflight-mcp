@@ -35,7 +35,7 @@ import { DependencyGraphInputSchema, generateDependencyGraph } from './evidence/
 import { TraceQueryInputSchema, TraceUpsertInputSchema, traceQuery, traceUpsert } from './trace/service.js';
 import { suggestTestedByTraces, type SuggestTracesResult } from './trace/suggest.js';
 import { generateRepoTree, formatTreeResult } from './bundle/tree.js';
-import { buildDeepAnalysis, type TreeSummary, type SearchSummary, type DepsSummary, type TraceSummary } from './analysis/deep.js';
+import { buildDeepAnalysis, detectTestInfo, type TreeSummary, type SearchSummary, type DepsSummary, type TraceSummary, type OverviewContent, type TestInfo, type NextCommand } from './analysis/deep.js';
 import { validateReport } from './analysis/validate.js';
 import { type Claim, type EvidenceRef, type SourceRange } from './types/evidence.js';
 // RFC v2: New aggregation tools
@@ -185,7 +185,7 @@ export async function startServer(): Promise<void> {
   const server = new McpServer(
     {
       name: 'preflight-mcp',
-version: '0.5.0',
+version: '0.5.1',
       description: 'Create evidence-based preflight bundles for repositories (docs + code) with SQLite FTS search.',
     },
     {
@@ -2386,6 +2386,9 @@ version: '0.5.0',
           includeSearch: z.boolean().optional().default(true).describe('Include search results (requires focus.query).'),
           includeDeps: z.boolean().optional().default(true).describe('Include dependency analysis.'),
           includeTraces: z.boolean().optional().default(true).describe('Include trace link summary.'),
+          includeOverview: z.boolean().optional().default(true).describe('Include OVERVIEW.md, START_HERE.md, AGENTS.md content.'),
+          includeReadme: z.boolean().optional().default(true).describe('Include README.md content from repos.'),
+          includeTests: z.boolean().optional().default(true).describe('Detect test directories and frameworks.'),
           tokenBudget: z.number().int().optional().describe('Soft limit on output tokens (reduces detail if exceeded).'),
           maxFiles: z.number().int().min(10).max(1000).optional().default(500).describe('Max files to scan for tree/deps.'),
         }).optional().describe('Analysis options.'),
@@ -2418,6 +2421,20 @@ version: '0.5.0',
           byType: z.record(z.string(), z.number()),
           coverageEstimate: z.number(),
         }).optional(),
+        overviewContent: z.object({
+          overview: z.string().optional(),
+          startHere: z.string().optional(),
+          agents: z.string().optional(),
+          readme: z.string().optional(),
+        }).optional().describe('Overview content from bundle files (OVERVIEW.md, START_HERE.md, AGENTS.md, README.md).'),
+        testInfo: z.object({
+          detected: z.boolean(),
+          framework: z.enum(['jest', 'vitest', 'pytest', 'go', 'mocha', 'unknown']).nullable(),
+          testDirs: z.array(z.string()),
+          testFileCount: z.number(),
+          configFiles: z.array(z.string()),
+          hint: z.string(),
+        }).optional().describe('Test detection result.'),
         claims: z.array(z.object({
           id: z.string(),
           text: z.string(),
@@ -2444,7 +2461,12 @@ version: '0.5.0',
         })).describe('Questions that could not be answered.'),
         coverageReport: z.any(),
         summary: z.string().describe('LLM-formatted analysis summary with checklist and claims.'),
-        nextSteps: z.array(z.string()),
+        nextSteps: z.array(z.string()).describe('Human-readable next step suggestions.'),
+        nextCommands: z.array(z.object({
+          tool: z.string(),
+          description: z.string(),
+          args: z.record(z.string(), z.unknown()),
+        })).describe('Copyable next commands for LLM/automation - can be directly used as tool call arguments.'),
         // RFC v2: Top-level evidence aggregation
         evidence: z.array(
           z.object({
@@ -2477,6 +2499,9 @@ version: '0.5.0',
           includeSearch?: boolean;
           includeDeps?: boolean;
           includeTraces?: boolean;
+          includeOverview?: boolean;
+          includeReadme?: boolean;
+          includeTests?: boolean;
           tokenBudget?: number;
           maxFiles?: number;
         };
@@ -2487,6 +2512,8 @@ version: '0.5.0',
         let search: SearchSummary | undefined;
         let deps: DepsSummary | undefined;
         let traces: TraceSummary | undefined;
+        let overviewContent: OverviewContent | undefined;
+        let testInfo: TestInfo | undefined;
 
         // 1. Tree
         if (opts.includeTree ?? true) {
@@ -2607,11 +2634,88 @@ version: '0.5.0',
           }
         }
 
+        // 5. Overview content (OVERVIEW.md, START_HERE.md, AGENTS.md)
+        if (opts.includeOverview ?? true) {
+          overviewContent = {};
+          const readFile = async (filename: string): Promise<string | undefined> => {
+            try {
+              const absPath = safeJoin(paths.rootDir, filename);
+              return await fs.readFile(absPath, 'utf8');
+            } catch {
+              return undefined;
+            }
+          };
+          overviewContent.overview = await readFile('OVERVIEW.md');
+          overviewContent.startHere = await readFile('START_HERE.md');
+          overviewContent.agents = await readFile('AGENTS.md');
+        }
+
+        // 6. README content (from repos)
+        if (opts.includeReadme ?? true) {
+          if (!overviewContent) overviewContent = {};
+          try {
+            const manifest = await readManifest(paths.manifestPath);
+            for (const repo of manifest.repos ?? []) {
+              if (!repo.id) continue;
+              const [owner, repoName] = repo.id.split('/');
+              if (!owner || !repoName) continue;
+              
+              const readmeNames = ['README.md', 'readme.md', 'Readme.md'];
+              for (const readmeName of readmeNames) {
+                const readmePath = `repos/${owner}/${repoName}/norm/${readmeName}`;
+                try {
+                  const absPath = safeJoin(paths.rootDir, readmePath);
+                  overviewContent.readme = await fs.readFile(absPath, 'utf8');
+                  break; // Found README, stop searching
+                } catch {
+                  // Try next README name
+                }
+              }
+              if (overviewContent.readme) break; // Only read first repo's README
+            }
+          } catch {
+            // Ignore manifest read errors
+          }
+        }
+
+        // 7. Test detection
+        if ((opts.includeTests ?? true) && tree) {
+          // Collect files for framework detection
+          const filesFound: Array<{ path: string; name: string }> = [];
+          try {
+            // Scan for config files at bundle root
+            const configPatterns = [
+              'jest.config.js', 'jest.config.ts', 'jest.config.mjs', 'jest.config.json',
+              'vitest.config.js', 'vitest.config.ts',
+              'pytest.ini', 'pyproject.toml', 'setup.cfg',
+              '.mocharc.js', '.mocharc.json', '.mocharc.yml',
+            ];
+            for (const cfg of configPatterns) {
+              try {
+                const cfgPath = safeJoin(paths.rootDir, cfg);
+                await fs.access(cfgPath);
+                filesFound.push({ path: cfg, name: cfg });
+              } catch {
+                // Config file doesn't exist
+              }
+            }
+          } catch {
+            // Ignore errors during config scanning
+          }
+          
+          testInfo = detectTestInfo(
+            { byExtension: tree.byExtension, byTopDir: tree.topDirs.reduce((acc, d) => ({ ...acc, [d.path]: d.fileCount }), {} as Record<string, number>) },
+            filesFound.length > 0 ? filesFound : undefined
+          );
+        }
+
         const result = buildDeepAnalysis(args.bundleId, {
           tree,
           search,
           deps,
           traces,
+          overviewContent,
+          testInfo,
           focusPath: focus.path,
           focusQuery: focus.query,
           errors,

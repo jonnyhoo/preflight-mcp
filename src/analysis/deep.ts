@@ -25,6 +25,12 @@ export type DeepAnalysisInput = {
     includeSearch?: boolean;
     includeDeps?: boolean;
     includeTraces?: boolean;
+    /** Include OVERVIEW.md, START_HERE.md, AGENTS.md content (default: true) */
+    includeOverview?: boolean;
+    /** Include README.md content (default: true) */
+    includeReadme?: boolean;
+    /** Detect test directories and frameworks (default: true) */
+    includeTests?: boolean;
     tokenBudget?: number;
     maxFiles?: number;
   };
@@ -59,6 +65,31 @@ export type TraceSummary = {
   coverageEstimate: number; // 0-1
 };
 
+/** Test detection result */
+export type TestInfo = {
+  detected: boolean;
+  framework: 'jest' | 'vitest' | 'pytest' | 'go' | 'mocha' | 'unknown' | null;
+  testDirs: string[];
+  testFileCount: number;
+  configFiles: string[];
+  hint: string;
+};
+
+/** Overview content from bundle files */
+export type OverviewContent = {
+  overview?: string;      // OVERVIEW.md
+  startHere?: string;     // START_HERE.md
+  agents?: string;        // AGENTS.md
+  readme?: string;        // First repo README.md
+};
+
+/** Copyable next command suggestion */
+export type NextCommand = {
+  tool: string;
+  description: string;
+  args: Record<string, unknown>;
+};
+
 export type DeepAnalysisResult = {
   bundleId: string;
   focus?: { path?: string; query?: string };
@@ -67,6 +98,12 @@ export type DeepAnalysisResult = {
   search?: SearchSummary;
   deps?: DepsSummary;
   traces?: TraceSummary;
+  
+  /** Overview content from bundle files */
+  overviewContent?: OverviewContent;
+  
+  /** Test detection result */
+  testInfo?: TestInfo;
   
   /** Auto-generated claims with evidence */
   claims: Claim[];
@@ -82,8 +119,11 @@ export type DeepAnalysisResult = {
   /** LLM-formatted summary text */
   summary: string;
   
-  /** Suggested next actions */
+  /** Suggested next actions (human-readable) */
   nextSteps: string[];
+  
+  /** Copyable next commands for LLM/automation */
+  nextCommands: NextCommand[];
 };
 
 /**
@@ -97,12 +137,14 @@ export function buildDeepAnalysis(
     search?: SearchSummary;
     deps?: DepsSummary;
     traces?: TraceSummary;
+    overviewContent?: OverviewContent;
+    testInfo?: TestInfo;
     focusPath?: string;
     focusQuery?: string;
     errors?: string[];
   }
 ): DeepAnalysisResult {
-  const { tree, search, deps, traces, focusPath, focusQuery, errors = [] } = components;
+  const { tree, search, deps, traces, overviewContent, testInfo, focusPath, focusQuery, errors = [] } = components;
   
   // Build coverage report
   const coverageReport = createEmptyCoverageReport();
@@ -175,9 +217,28 @@ export function buildDeepAnalysis(
     summaryParts.push('');
   }
   
+  // Test detection summary
+  if (testInfo) {
+    summaryParts.push(`## Test Detection`);
+    if (testInfo.detected) {
+      summaryParts.push(`- Framework: ${testInfo.framework ?? 'unknown'}`);
+      summaryParts.push(`- Test files: ${testInfo.testFileCount}`);
+      if (testInfo.testDirs.length > 0) {
+        summaryParts.push(`- Test directories: ${testInfo.testDirs.slice(0, 3).join(', ')}`);
+      }
+      if (testInfo.configFiles.length > 0) {
+        summaryParts.push(`- Config files: ${testInfo.configFiles.join(', ')}`);
+      }
+    } else {
+      summaryParts.push(`- No tests detected`);
+    }
+    summaryParts.push(`- 💡 ${testInfo.hint}`);
+    summaryParts.push('');
+  }
+  
   // Build checklist status
   const checklistStatus: ChecklistStatus = {
-    read_overview: false, // Would need OVERVIEW.md read - caller should set
+    read_overview: !!(overviewContent?.overview || overviewContent?.startHere),
     repo_tree: !!tree && tree.totalFiles > 0,
     search_focus: !!search && search.totalHits > 0,
     dependency_graph_global: !!deps && deps.totalNodes > 0,
@@ -396,6 +457,57 @@ export function buildDeepAnalysis(
     nextSteps.push('🎉 Analysis complete - all key areas covered. Ready for detailed review.');
   }
   
+  // Build nextCommands (copyable JSON for LLM)
+  const nextCommands: NextCommand[] = [];
+  
+  // Always suggest search as a useful next step
+  nextCommands.push({
+    tool: 'preflight_search_bundle',
+    description: 'Search for specific code or concepts',
+    args: { bundleId, query: '<填入关键词>', scope: 'all', limit: 30 },
+  });
+  
+  // Suggest reading a specific entry point if identified
+  if (deps && deps.topImported.length > 0) {
+    const coreFile = deps.topImported[0]!.file;
+    nextCommands.push({
+      tool: 'preflight_read_file',
+      description: `Read core module: ${coreFile}`,
+      args: { bundleId, file: coreFile, withLineNumbers: true },
+    });
+  }
+  
+  // Suggest dependency analysis for a specific file if entry point identified
+  if (deps && deps.topImporters.length > 0) {
+    const entryFile = deps.topImporters[0]!.file;
+    nextCommands.push({
+      tool: 'preflight_evidence_dependency_graph',
+      description: `Analyze dependencies of entry point: ${entryFile}`,
+      args: { bundleId, target: { file: entryFile } },
+    });
+  }
+  
+  // Suggest trace discovery if no traces exist
+  if (!traces || traces.totalLinks === 0) {
+    nextCommands.push({
+      tool: 'preflight_suggest_traces',
+      description: 'Auto-discover test↔code relationships',
+      args: { bundleId, edge_type: 'tested_by', scope: 'repo' },
+    });
+  }
+  
+  // Suggest focused tree if large directory detected
+  if (tree) {
+    const largeDir = tree.topDirs.find(d => d.fileCount > 50);
+    if (largeDir) {
+      nextCommands.push({
+        tool: 'preflight_repo_tree',
+        description: `Explore large directory: ${largeDir.path}`,
+        args: { bundleId, focusDir: largeDir.path, depth: 6 },
+      });
+    }
+  }
+  
   // Add checklist and claims to summary
   summaryParts.push(`## Analysis Checklist`);
   const checklistItems = [
@@ -435,11 +547,112 @@ export function buildDeepAnalysis(
     search,
     deps,
     traces,
+    overviewContent,
+    testInfo,
     claims,
     checklistStatus,
     openQuestions,
     coverageReport,
     summary: summaryParts.join('\n'),
     nextSteps,
+    nextCommands,
+  };
+}
+
+/**
+ * Detect test setup from file tree statistics.
+ * Scans for test directories, test files, and framework config files.
+ */
+export function detectTestInfo(
+  stats: { byExtension: Record<string, number>; byTopDir?: Record<string, number> },
+  filesFound?: Array<{ path: string; name: string }>
+): TestInfo {
+  const testDirs: string[] = [];
+  let testFileCount = 0;
+  const configFiles: string[] = [];
+  let framework: TestInfo['framework'] = null;
+  
+  // Common test directory patterns
+  const testDirPatterns = ['tests', 'test', '__tests__', 'spec', 'specs', 'e2e', 'integration'];
+  
+  // Check byTopDir for test directories
+  if (stats.byTopDir) {
+    for (const [dir, count] of Object.entries(stats.byTopDir)) {
+      const dirLower = dir.toLowerCase();
+      if (testDirPatterns.some(p => dirLower === p || dirLower.endsWith('/' + p))) {
+        testDirs.push(dir);
+        testFileCount += count;
+      }
+    }
+  }
+  
+  // Framework detection from config files (if filesFound provided)
+  const frameworkConfigs: Array<{ pattern: RegExp; framework: TestInfo['framework'] }> = [
+    { pattern: /^jest\.config\.(js|ts|mjs|cjs|json)$/i, framework: 'jest' },
+    { pattern: /^vitest\.config\.(js|ts|mjs|cjs)$/i, framework: 'vitest' },
+    { pattern: /^pytest\.ini$/i, framework: 'pytest' },
+    { pattern: /^pyproject\.toml$/i, framework: 'pytest' }, // May contain pytest config
+    { pattern: /^setup\.cfg$/i, framework: 'pytest' },
+    { pattern: /^\.mocharc\.(js|json|yml|yaml)$/i, framework: 'mocha' },
+    { pattern: /^mocha\.opts$/i, framework: 'mocha' },
+  ];
+  
+  if (filesFound) {
+    for (const file of filesFound) {
+      for (const cfg of frameworkConfigs) {
+        if (cfg.pattern.test(file.name)) {
+          configFiles.push(file.path);
+          if (!framework) {
+            framework = cfg.framework;
+          }
+        }
+      }
+    }
+  }
+  
+  // Infer framework from file extensions if not detected from config
+  if (!framework && stats.byExtension) {
+    // Check for test file patterns in extensions
+    const hasTs = (stats.byExtension['.ts'] ?? 0) > 0 || (stats.byExtension['.tsx'] ?? 0) > 0;
+    const hasPy = (stats.byExtension['.py'] ?? 0) > 0;
+    const hasGo = (stats.byExtension['.go'] ?? 0) > 0;
+    
+    if (testDirs.length > 0 || testFileCount > 0) {
+      if (hasGo) framework = 'go';
+      else if (hasPy) framework = 'pytest';
+      else if (hasTs) framework = 'unknown'; // Could be jest/vitest/mocha
+    }
+  }
+  
+  // Count test files by pattern (approximate from extensions)
+  // This is a heuristic - actual test files may vary
+  if (testFileCount === 0 && stats.byExtension) {
+    // If no test directories found, estimate based on common patterns
+    // This is imprecise but gives a hint
+  }
+  
+  const detected = testDirs.length > 0 || testFileCount > 0 || configFiles.length > 0;
+  
+  // Generate hint based on detection results
+  let hint: string;
+  if (detected) {
+    if (testFileCount > 0) {
+      hint = `Found ${testFileCount} test files. Run preflight_suggest_traces to map code↔test relationships.`;
+    } else if (configFiles.length > 0) {
+      hint = `Test config found (${configFiles[0]}). Run preflight_suggest_traces to discover test files.`;
+    } else {
+      hint = `Test directories found. Run preflight_suggest_traces to map code↔test relationships.`;
+    }
+  } else {
+    hint = 'No tests detected. Consider adding tests or check if test files use non-standard naming.';
+  }
+  
+  return {
+    detected,
+    framework,
+    testDirs,
+    testFileCount,
+    configFiles,
+    hint,
   };
 }
