@@ -101,12 +101,26 @@ async function buildIgnore(repoRoot: string): Promise<Ignore> {
   return ig;
 }
 
-async function* walkFiles(repoRoot: string, ig: Ignore): AsyncGenerator<{ absPath: string; relPosix: string }> {
+async function* walkFiles(
+  repoRoot: string,
+  ig: Ignore,
+  onSkip?: (relPosix: string, reason: string) => void
+): AsyncGenerator<{ absPath: string; relPosix: string }> {
   const stack: string[] = [repoRoot];
 
   while (stack.length) {
     const dir = stack.pop()!;
-    const entries = await fs.readdir(dir, { withFileTypes: true });
+    
+    let entries;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch (err) {
+      // Skip directories that cannot be read (broken symlinks, permission issues, etc.)
+      const rel = path.relative(repoRoot, dir);
+      const relPosix = toPosix(rel);
+      onSkip?.(relPosix, `cannot read directory: ${(err as NodeJS.ErrnoException).code ?? 'unknown'}`);
+      continue;
+    }
 
     for (const ent of entries) {
       const abs = path.join(dir, ent.name);
@@ -118,11 +132,27 @@ async function* walkFiles(repoRoot: string, ig: Ignore): AsyncGenerator<{ absPat
         continue;
       }
       
-      if (ent.isDirectory()) {
-        stack.push(abs);
+      // Handle symlinks and other special entries
+      try {
+        if (ent.isSymbolicLink()) {
+          // Check if symlink target exists
+          try {
+            await fs.stat(abs);
+          } catch {
+            onSkip?.(relPosix, 'broken symlink');
+            continue;
+          }
+        }
+        
+        if (ent.isDirectory()) {
+          stack.push(abs);
+          continue;
+        }
+        if (!ent.isFile()) continue;
+      } catch (err) {
+        onSkip?.(relPosix, `cannot stat: ${(err as NodeJS.ErrnoException).code ?? 'unknown'}`);
         continue;
       }
-      if (!ent.isFile()) continue;
 
       yield { absPath: abs, relPosix };
     }
@@ -145,7 +175,9 @@ export async function ingestRepoToBundle(params: {
 
   const decoder = new TextDecoder('utf-8', { fatal: true });
 
-  for await (const f of walkFiles(params.repoRoot, ig)) {
+  for await (const f of walkFiles(params.repoRoot, ig, (relPosix, reason) => {
+    skipped.push(`${relPosix} (${reason})`);
+  })) {
     // ignore check already done in walkFiles
 
     const st = await fs.stat(f.absPath);
