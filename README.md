@@ -51,7 +51,7 @@ Preflight: 🔗 Trace links:
 - 📖 **Auto-generated guides** — `START_HERE.md`, `AGENTS.md`, `OVERVIEW.md`
 - ☁️ **Cloud sync** — Multi-path mirror backup for redundancy
 - 🧠 **EDDA (Evidence-Driven Deep Analysis)** — Auto-generate auditable claims with evidence
-- ⚡ **22 MCP tools + 5 prompts** — Complete toolkit for code exploration
+- ⚡ **21 MCP tools + 5 prompts** — Complete toolkit for code exploration
 - 📄 **Cursor pagination** — Handle large result sets efficiently (RFC v2)
 
 <details>
@@ -76,7 +76,7 @@ Preflight: 🔗 Trace links:
 - [Demo](#demo)
 - [Core Features](#core-features)
 - [Quick Start](#quick-start)
-- [Tools](#tools-22-total)
+- [Tools](#tools-21-total)
 - [Prompts](#prompts-5-total)
 - [Environment Variables](#environment-variables)
 - [Contributing](#contributing)
@@ -161,7 +161,7 @@ Run end-to-end smoke test:
 npm run smoke
 ```
 
-## Tools (22 total)
+## Tools (21 total)
 
 ### `preflight_list_bundles`
 List bundle IDs in storage.
