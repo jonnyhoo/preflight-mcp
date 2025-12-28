@@ -2258,7 +2258,7 @@ export async function startServer(): Promise<void> {
           let commonRepo: string | undefined;
           if (grouped && grouped.length > 0) {
             const repos = new Set(grouped.map(g => g.repo));
-            if (repos.size === 1) {
+            if (repos.size === 1 && grouped[0]) {
               commonRepo = grouped[0].repo;
             }
           }
@@ -2345,7 +2345,7 @@ export async function startServer(): Promise<void> {
 
         // Auto-compress: extract common repo if all hits from same repo
         let commonRepo: string | undefined;
-        if (rawHits.length > 0) {
+        if (rawHits.length > 0 && rawHits[0]) {
           const repos = new Set(rawHits.map(h => h.repo).filter(Boolean));
           if (repos.size === 1) {
             commonRepo = rawHits[0].repo;
@@ -2357,7 +2357,7 @@ export async function startServer(): Promise<void> {
           const { uri: _uri, repo, context, ...rest } = h as Record<string, unknown>;
           const hit: Record<string, unknown> = commonRepo && repo === commonRepo
             ? rest  // Omit repo when extracted to top-level
-            : { ...rest, ...(repo && { repo }) };
+            : { ...rest, ...(repo ? { repo } : {}) };
           
           // Apply maxSnippetLength truncation
           if (args.maxSnippetLength && h.snippet && h.snippet.length > args.maxSnippetLength) {
