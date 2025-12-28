@@ -24,6 +24,18 @@ export type ImportKind =
   | 'rustUse'
   | 'rustExternCrate';
 
+// Symbol outline types for code structure extraction
+export type SymbolKind = 'function' | 'class' | 'method' | 'interface' | 'type' | 'enum' | 'variable';
+
+export type SymbolOutline = {
+  kind: SymbolKind;
+  name: string;
+  signature?: string;  // e.g. "(a: number, b: string): boolean"
+  range: { startLine: number; endLine: number };
+  exported: boolean;
+  children?: SymbolOutline[];  // For class methods
+};
+
 export type ImportRef = {
   language: TreeSitterLanguageId;
   kind: ImportKind;
@@ -701,4 +713,508 @@ export async function extractExportedSymbolsWasm(
   const res = await extractModuleSyntaxWasm(filePath, normalizedContent);
   if (!res) return null;
   return { language: res.language, exports: res.exports };
+}
+
+// ============================================================================
+// Outline extraction (symbol structure for code navigation)
+// ============================================================================
+
+/**
+ * Check if a node is preceded by an export keyword (for JS/TS).
+ */
+function isExportedJsTs(node: Node): boolean {
+  const parent = node.parent;
+  if (!parent) return false;
+  
+  // Direct export: export function foo() {}
+  if (parent.type === 'export_statement') return true;
+  
+  // export default function foo() {}
+  if (parent.type === 'export_statement' && parent.text.includes('default')) return true;
+  
+  return false;
+}
+
+/**
+ * Extract function signature from a function declaration node.
+ */
+function extractFunctionSignatureJsTs(node: Node): string | undefined {
+  const params = node.childForFieldName('parameters');
+  const returnType = node.childForFieldName('return_type');
+  
+  if (!params) return undefined;
+  
+  let sig = params.text;
+  if (returnType) {
+    sig += `: ${returnType.text}`;
+  }
+  
+  return sig;
+}
+
+/**
+ * Extract method signature from a method definition node.
+ */
+function extractMethodSignatureJsTs(node: Node): string | undefined {
+  const params = node.childForFieldName('parameters');
+  const returnType = node.childForFieldName('return_type');
+  
+  if (!params) return undefined;
+  
+  let sig = params.text;
+  if (returnType) {
+    sig += `: ${returnType.text}`;
+  }
+  
+  return sig;
+}
+
+/**
+ * Extract class methods as children.
+ */
+function extractClassMethodsJsTs(classNode: Node): SymbolOutline[] {
+  const methods: SymbolOutline[] = [];
+  const body = classNode.childForFieldName('body');
+  if (!body) return methods;
+  
+  for (const child of body.namedChildren) {
+    if (child.type === 'method_definition' || child.type === 'public_field_definition') {
+      const name = child.childForFieldName('name');
+      if (!name) continue;
+      
+      const isMethod = child.type === 'method_definition';
+      
+      methods.push({
+        kind: isMethod ? 'method' : 'variable',
+        name: name.text,
+        signature: isMethod ? extractMethodSignatureJsTs(child) : undefined,
+        range: {
+          startLine: child.startPosition.row + 1,
+          endLine: child.endPosition.row + 1,
+        },
+        exported: true,  // Class members are implicitly accessible
+      });
+    }
+  }
+  
+  return methods;
+}
+
+/**
+ * Extract outline from JavaScript/TypeScript/TSX files.
+ */
+function extractOutlineJsTs(root: Node, lang: TreeSitterLanguageId): SymbolOutline[] {
+  const outline: SymbolOutline[] = [];
+  
+  // Collect all exported names for checking
+  const exportedNames = new Set<string>();
+  for (const st of root.descendantsOfType('export_statement')) {
+    // export { name1, name2 }
+    const clause = st.descendantsOfType('export_clause')[0];
+    if (clause) {
+      for (const spec of clause.descendantsOfType('export_specifier')) {
+        const name = spec.childForFieldName('name');
+        if (name) exportedNames.add(name.text);
+      }
+    }
+  }
+  
+  for (const child of root.namedChildren) {
+    // Handle export statements
+    let actualNode = child;
+    let isExported = false;
+    
+    if (child.type === 'export_statement') {
+      isExported = true;
+      // Get the actual declaration inside
+      const decl = child.namedChildren.find(n => 
+        n.type !== 'export_clause' && 
+        n.type !== 'string' &&
+        n.type !== 'comment'
+      );
+      if (decl) {
+        actualNode = decl;
+      } else {
+        continue;  // export { ... } without declaration
+      }
+    }
+    
+    const name = actualNode.childForFieldName('name');
+    
+    switch (actualNode.type) {
+      case 'function_declaration': {
+        if (!name) continue;
+        outline.push({
+          kind: 'function',
+          name: name.text,
+          signature: extractFunctionSignatureJsTs(actualNode),
+          range: {
+            startLine: actualNode.startPosition.row + 1,
+            endLine: actualNode.endPosition.row + 1,
+          },
+          exported: isExported || exportedNames.has(name.text),
+        });
+        break;
+      }
+      
+      case 'class_declaration': {
+        if (!name) continue;
+        const children = extractClassMethodsJsTs(actualNode);
+        outline.push({
+          kind: 'class',
+          name: name.text,
+          range: {
+            startLine: actualNode.startPosition.row + 1,
+            endLine: actualNode.endPosition.row + 1,
+          },
+          exported: isExported || exportedNames.has(name.text),
+          children: children.length > 0 ? children : undefined,
+        });
+        break;
+      }
+      
+      case 'interface_declaration': {
+        if (!name) continue;
+        outline.push({
+          kind: 'interface',
+          name: name.text,
+          range: {
+            startLine: actualNode.startPosition.row + 1,
+            endLine: actualNode.endPosition.row + 1,
+          },
+          exported: isExported || exportedNames.has(name.text),
+        });
+        break;
+      }
+      
+      case 'type_alias_declaration': {
+        if (!name) continue;
+        outline.push({
+          kind: 'type',
+          name: name.text,
+          range: {
+            startLine: actualNode.startPosition.row + 1,
+            endLine: actualNode.endPosition.row + 1,
+          },
+          exported: isExported || exportedNames.has(name.text),
+        });
+        break;
+      }
+      
+      case 'enum_declaration': {
+        if (!name) continue;
+        outline.push({
+          kind: 'enum',
+          name: name.text,
+          range: {
+            startLine: actualNode.startPosition.row + 1,
+            endLine: actualNode.endPosition.row + 1,
+          },
+          exported: isExported || exportedNames.has(name.text),
+        });
+        break;
+      }
+      
+      case 'lexical_declaration':
+      case 'variable_declaration': {
+        // const/let/var declarations
+        for (const decl of actualNode.descendantsOfType('variable_declarator')) {
+          const varName = decl.childForFieldName('name');
+          if (!varName || varName.type !== 'identifier') continue;
+          
+          // Check if it's an arrow function
+          const value = decl.childForFieldName('value');
+          const isArrowFn = value?.type === 'arrow_function';
+          
+          outline.push({
+            kind: isArrowFn ? 'function' : 'variable',
+            name: varName.text,
+            signature: isArrowFn ? extractFunctionSignatureJsTs(value) : undefined,
+            range: {
+              startLine: decl.startPosition.row + 1,
+              endLine: decl.endPosition.row + 1,
+            },
+            exported: isExported || exportedNames.has(varName.text),
+          });
+        }
+        break;
+      }
+    }
+  }
+  
+  return outline;
+}
+
+/**
+ * Extract function signature from Python function definition.
+ */
+function extractFunctionSignaturePython(node: Node): string | undefined {
+  const params = node.childForFieldName('parameters');
+  const returnType = node.childForFieldName('return_type');
+  
+  if (!params) return undefined;
+  
+  let sig = params.text;
+  if (returnType) {
+    sig += ` -> ${returnType.text}`;
+  }
+  
+  return sig;
+}
+
+/**
+ * Extract class methods for Python.
+ */
+function extractClassMethodsPython(classNode: Node): SymbolOutline[] {
+  const methods: SymbolOutline[] = [];
+  const body = classNode.childForFieldName('body');
+  if (!body) return methods;
+  
+  for (const child of body.namedChildren) {
+    if (child.type === 'function_definition') {
+      const name = child.childForFieldName('name');
+      if (!name) continue;
+      
+      const methodName = name.text;
+      // Skip private methods (starting with __) except __init__
+      const isPrivate = methodName.startsWith('_') && methodName !== '__init__';
+      
+      methods.push({
+        kind: 'method',
+        name: methodName,
+        signature: extractFunctionSignaturePython(child),
+        range: {
+          startLine: child.startPosition.row + 1,
+          endLine: child.endPosition.row + 1,
+        },
+        exported: !isPrivate,
+      });
+    }
+  }
+  
+  return methods;
+}
+
+/**
+ * Extract outline from Python files.
+ */
+function extractOutlinePython(root: Node): SymbolOutline[] {
+  const outline: SymbolOutline[] = [];
+  
+  // Check __all__ for explicit exports
+  const exportedNames = new Set<string>();
+  for (const asn of root.descendantsOfType(['assignment', 'assignment_statement'])) {
+    const left = asn.childForFieldName('left') ?? asn.namedChild(0);
+    if (!left || left.text !== '__all__') continue;
+    
+    const right = asn.childForFieldName('right') ?? asn.namedChild(asn.namedChildCount - 1);
+    if (!right) continue;
+    
+    // Extract names from list/tuple
+    for (const s of right.descendantsOfType('string')) {
+      const inner = s.text.replace(/^['"]|['"]$/g, '');
+      if (inner) exportedNames.add(inner);
+    }
+  }
+  
+  const hasExplicitAll = exportedNames.size > 0;
+  
+  for (const child of root.namedChildren) {
+    switch (child.type) {
+      case 'function_definition': {
+        const name = child.childForFieldName('name');
+        if (!name) continue;
+        
+        const funcName = name.text;
+        // Public if: in __all__, or doesn't start with _ (when no __all__)
+        const isPublic = hasExplicitAll 
+          ? exportedNames.has(funcName)
+          : !funcName.startsWith('_');
+        
+        outline.push({
+          kind: 'function',
+          name: funcName,
+          signature: extractFunctionSignaturePython(child),
+          range: {
+            startLine: child.startPosition.row + 1,
+            endLine: child.endPosition.row + 1,
+          },
+          exported: isPublic,
+        });
+        break;
+      }
+      
+      case 'class_definition': {
+        const name = child.childForFieldName('name');
+        if (!name) continue;
+        
+        const className = name.text;
+        const isPublic = hasExplicitAll
+          ? exportedNames.has(className)
+          : !className.startsWith('_');
+        
+        const methods = extractClassMethodsPython(child);
+        
+        outline.push({
+          kind: 'class',
+          name: className,
+          range: {
+            startLine: child.startPosition.row + 1,
+            endLine: child.endPosition.row + 1,
+          },
+          exported: isPublic,
+          children: methods.length > 0 ? methods : undefined,
+        });
+        break;
+      }
+    }
+  }
+  
+  return outline;
+}
+
+/**
+ * Extract outline from Go files.
+ */
+function extractOutlineGo(root: Node): SymbolOutline[] {
+  const outline: SymbolOutline[] = [];
+  
+  for (const child of root.namedChildren) {
+    switch (child.type) {
+      case 'function_declaration': {
+        const name = child.childForFieldName('name');
+        if (!name) continue;
+        
+        const funcName = name.text;
+        // Go: exported if starts with uppercase
+        const isExported = /^[A-Z]/.test(funcName);
+        
+        // Extract signature
+        const params = child.childForFieldName('parameters');
+        const result = child.childForFieldName('result');
+        let sig = params?.text || '()';
+        if (result) sig += ` ${result.text}`;
+        
+        outline.push({
+          kind: 'function',
+          name: funcName,
+          signature: sig,
+          range: {
+            startLine: child.startPosition.row + 1,
+            endLine: child.endPosition.row + 1,
+          },
+          exported: isExported,
+        });
+        break;
+      }
+      
+      case 'method_declaration': {
+        const name = child.childForFieldName('name');
+        if (!name) continue;
+        
+        const methodName = name.text;
+        const isExported = /^[A-Z]/.test(methodName);
+        
+        // Get receiver type
+        const receiver = child.childForFieldName('receiver');
+        const params = child.childForFieldName('parameters');
+        const result = child.childForFieldName('result');
+        
+        let sig = params?.text || '()';
+        if (result) sig += ` ${result.text}`;
+        if (receiver) sig = `${receiver.text} ${sig}`;
+        
+        outline.push({
+          kind: 'method',
+          name: methodName,
+          signature: sig,
+          range: {
+            startLine: child.startPosition.row + 1,
+            endLine: child.endPosition.row + 1,
+          },
+          exported: isExported,
+        });
+        break;
+      }
+      
+      case 'type_declaration': {
+        // type Foo struct { ... } or type Bar interface { ... }
+        for (const spec of child.descendantsOfType('type_spec')) {
+          const name = spec.childForFieldName('name');
+          if (!name) continue;
+          
+          const typeName = name.text;
+          const isExported = /^[A-Z]/.test(typeName);
+          
+          // Determine kind based on type definition
+          const typeNode = spec.childForFieldName('type');
+          let kind: SymbolKind = 'type';
+          if (typeNode?.type === 'struct_type') kind = 'class';  // Treat struct as class
+          else if (typeNode?.type === 'interface_type') kind = 'interface';
+          
+          outline.push({
+            kind,
+            name: typeName,
+            range: {
+              startLine: spec.startPosition.row + 1,
+              endLine: spec.endPosition.row + 1,
+            },
+            exported: isExported,
+          });
+        }
+        break;
+      }
+    }
+  }
+  
+  return outline;
+}
+
+/**
+ * Extract symbol outline from a source file.
+ * Returns null if the file type is not supported.
+ */
+export async function extractOutlineWasm(
+  filePath: string,
+  normalizedContent: string
+): Promise<{ language: TreeSitterLanguageId; outline: SymbolOutline[] } | null> {
+  const lang = languageForFile(filePath);
+  if (!lang) return null;
+  
+  // Supported languages: JS/TS, Python, Go
+  if (!['javascript', 'typescript', 'tsx', 'python', 'go'].includes(lang)) {
+    return null;
+  }
+  
+  const language = await loadLanguage(lang);
+  
+  const parser = new Parser();
+  try {
+    parser.setLanguage(language);
+    
+    const tree = parser.parse(normalizedContent);
+    if (!tree) return { language: lang, outline: [] };
+    
+    try {
+      const root = tree.rootNode;
+      let outline: SymbolOutline[];
+      
+      switch (lang) {
+        case 'python':
+          outline = extractOutlinePython(root);
+          break;
+        case 'go':
+          outline = extractOutlineGo(root);
+          break;
+        default:
+          outline = extractOutlineJsTs(root, lang);
+      }
+      
+      return { language: lang, outline };
+    } finally {
+      tree.delete();
+    }
+  } finally {
+    parser.delete();
+  }
 }

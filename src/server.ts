@@ -38,6 +38,7 @@ import { generateRepoTree, formatTreeResult } from './bundle/tree.js';
 import { buildDeepAnalysis, detectTestInfo, type TreeSummary, type SearchSummary, type DepsSummary, type TraceSummary, type OverviewContent, type TestInfo, type NextCommand } from './analysis/deep.js';
 import { validateReport } from './analysis/validate.js';
 import { type Claim, type EvidenceRef, type SourceRange } from './types/evidence.js';
+import { extractOutlineWasm, type SymbolOutline } from './ast/treeSitter.js';
 // RFC v2: New aggregation tools
 import { ReadFilesInputSchema, createReadFilesHandler, readFilesToolDescription } from './tools/readFiles.js';
 import { SearchAndReadInputSchema, createSearchAndReadHandler, searchAndReadToolDescription } from './tools/searchAndRead.js';
@@ -185,7 +186,7 @@ export async function startServer(): Promise<void> {
   const server = new McpServer(
     {
       name: 'preflight-mcp',
-version: '0.5.2',
+version: '0.5.3',
       description: 'Create evidence-based preflight bundles for repositories (docs + code) with SQLite FTS search.',
     },
     {
@@ -480,6 +481,20 @@ version: '0.5.2',
         includeDepsGraph: z.boolean().optional().default(false).describe('Include deps/dependency-graph.json in batch mode.'),
         withLineNumbers: z.boolean().optional().default(false).describe('If true, prefix each line with line number in "N|" format for evidence citation.'),
         ranges: z.array(z.string()).optional().describe('Line ranges to read, e.g. ["20-80", "100-120"]. Each range is "start-end" (1-indexed, inclusive). If omitted, reads entire file.'),
+        // NEW: outline mode for code structure extraction
+        outline: z.boolean().optional().default(false).describe(
+          'If true, return symbol outline instead of file content. ' +
+          'Returns function/class/method/interface/type/enum with line ranges. ' +
+          'Saves tokens by showing code structure without full content. ' +
+          'Supports: .ts, .tsx, .js, .jsx, .py, .go files.'
+        ),
+        // NEW: symbol-based reading
+        symbol: z.string().optional().describe(
+          'Read a specific symbol (function/class/method) by name. ' +
+          'Format: "functionName" or "ClassName" or "ClassName.methodName". ' +
+          'Automatically locates and returns the symbol\'s code with context. ' +
+          'Requires outline-supported file types (.ts, .tsx, .js, .jsx, .py).'
+        ),
       },
       outputSchema: {
         bundleId: z.string(),
@@ -495,6 +510,16 @@ version: '0.5.2',
             end: z.number(),
           })),
         }).optional(),
+        // NEW: outline output
+        outline: z.array(z.object({
+          kind: z.enum(['function', 'class', 'method', 'interface', 'type', 'enum', 'variable']),
+          name: z.string(),
+          signature: z.string().optional(),
+          range: z.object({ startLine: z.number(), endLine: z.number() }),
+          exported: z.boolean(),
+          children: z.array(z.any()).optional(),
+        })).optional().describe('Symbol outline (when outline=true).'),
+        language: z.string().optional().describe('Detected language (when outline=true).'),
       },
       annotations: {
         readOnlyHint: true,
@@ -561,6 +586,131 @@ version: '0.5.2',
         if (args.file) {
           const absPath = safeJoin(bundleRoot, args.file);
           const rawContent = await fs.readFile(absPath, 'utf8');
+          const normalizedContent = rawContent.replace(/\r\n/g, '\n');
+
+          // NEW: Outline mode - extract symbol structure
+          if (args.outline) {
+            const outlineResult = await extractOutlineWasm(args.file, normalizedContent);
+            
+            if (!outlineResult) {
+              // Unsupported file type
+              return {
+                content: [{ type: 'text', text: `[${args.file}] Outline not supported for this file type. Supported: .ts, .tsx, .js, .jsx` }],
+                structuredContent: {
+                  bundleId: args.bundleId,
+                  file: args.file,
+                  outline: null,
+                  language: null,
+                },
+              };
+            }
+            
+            // Format outline as readable text
+            const formatOutlineText = (symbols: SymbolOutline[], indent = ''): string[] => {
+              const lines: string[] = [];
+              for (let i = 0; i < symbols.length; i++) {
+                const sym = symbols[i]!;
+                const isLast = i === symbols.length - 1;
+                const prefix = indent + (isLast ? '└── ' : '├── ');
+                const exportMark = sym.exported ? '⚡' : '';
+                const sig = sym.signature ? sym.signature : '';
+                lines.push(`${prefix}${exportMark}${sym.kind} ${sym.name}${sig} :${sym.range.startLine}-${sym.range.endLine}`);
+                
+                if (sym.children && sym.children.length > 0) {
+                  const childIndent = indent + (isLast ? '    ' : '│   ');
+                  lines.push(...formatOutlineText(sym.children, childIndent));
+                }
+              }
+              return lines;
+            };
+            
+            const outlineText = formatOutlineText(outlineResult.outline);
+            const totalSymbols = outlineResult.outline.length;
+            const header = `[${args.file}] Outline (${totalSymbols} top-level symbols, ${outlineResult.language}):\n`;
+            
+            return {
+              content: [{ type: 'text', text: header + outlineText.join('\n') }],
+              structuredContent: {
+                bundleId: args.bundleId,
+                file: args.file,
+                outline: outlineResult.outline,
+                language: outlineResult.language,
+              },
+            };
+          }
+
+          // NEW: Symbol-based reading - locate and read a specific symbol
+          if (args.symbol) {
+            const outlineResult = await extractOutlineWasm(args.file, normalizedContent);
+            
+            if (!outlineResult) {
+              return {
+                content: [{ type: 'text', text: `[${args.file}] Symbol lookup not supported for this file type. Supported: .ts, .tsx, .js, .jsx, .py` }],
+                structuredContent: { bundleId: args.bundleId, file: args.file, error: 'unsupported_file_type' },
+              };
+            }
+            
+            // Parse symbol query: "funcName" or "ClassName.methodName"
+            const parts = args.symbol.split('.');
+            const targetName = parts[0]!;
+            const methodName = parts[1];
+            
+            // Find the symbol in outline
+            let foundSymbol: SymbolOutline | undefined;
+            let foundIn: 'top' | 'child' = 'top';
+            
+            for (const sym of outlineResult.outline) {
+              if (sym.name === targetName) {
+                if (methodName && sym.children) {
+                  // Looking for a method inside this class
+                  const method = sym.children.find(c => c.name === methodName);
+                  if (method) {
+                    foundSymbol = method;
+                    foundIn = 'child';
+                    break;
+                  }
+                } else {
+                  foundSymbol = sym;
+                  break;
+                }
+              }
+            }
+            
+            if (!foundSymbol) {
+              // Symbol not found - provide helpful error with available symbols
+              const available = outlineResult.outline.map(s => {
+                if (s.children && s.children.length > 0) {
+                  return `${s.name} (${s.kind}, methods: ${s.children.map(c => c.name).join(', ')})`;
+                }
+                return `${s.name} (${s.kind})`;
+              }).join(', ');
+              
+              return {
+                content: [{ type: 'text', text: `[${args.file}] Symbol "${args.symbol}" not found.\n\nAvailable symbols: ${available}` }],
+                structuredContent: { bundleId: args.bundleId, file: args.file, error: 'symbol_not_found', available: outlineResult.outline.map(s => s.name) },
+              };
+            }
+            
+            // Read the symbol's code (with 2 lines of context before)
+            const contextLines = 2;
+            const startLine = Math.max(1, foundSymbol.range.startLine - contextLines);
+            const endLine = foundSymbol.range.endLine;
+            
+            const { content, lineInfo } = formatContent(rawContent, true, [{ start: startLine, end: endLine }]);
+            
+            const header = `[${args.file}:${startLine}-${endLine}] ${foundSymbol.kind} ${foundSymbol.name}${foundSymbol.signature || ''}\n\n`;
+            
+            return {
+              content: [{ type: 'text', text: header + content }],
+              structuredContent: {
+                bundleId: args.bundleId,
+                file: args.file,
+                symbol: foundSymbol,
+                content,
+                lineInfo,
+              },
+            };
+          }
 
           // Parse ranges if provided
           let parsedRanges: Array<{ start: number; end: number }> | undefined;

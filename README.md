@@ -191,11 +191,30 @@ Input (example):
 **Note**: If the bundle contains code files, consider using `preflight_evidence_dependency_graph` for dependency analysis or `preflight_trace_upsert` for trace links.
 
 ### `preflight_read_file`
-Read file(s) from bundle. Two modes:
+Read file(s) from bundle. Multiple modes:
 - **Batch mode** (omit `file`): Returns ALL key files (OVERVIEW.md, START_HERE.md, AGENTS.md, manifest.json, deps/dependency-graph.json, repo READMEs) in one call
 - **Single file mode** (provide `file`): Returns that specific file
 - **Evidence citation**: Use `withLineNumbers: true` to get `N|line` format; use `ranges: ["20-80"]` to read specific lines
 - Triggers: "查看bundle", "bundle概览", "项目信息", "show bundle", "读取依赖图"
+
+**NEW in v0.5.3 - Symbol outline & reading:**
+- `outline: true`: Returns symbol structure (function/class/method/interface/type/enum) with line ranges
+  - Supports: `.ts`, `.tsx`, `.js`, `.jsx`, `.py`, `.go`
+  - 90%+ token savings for understanding file structure
+- `symbol: "name"`: Read a specific symbol by name
+  - Format: `"functionName"` or `"ClassName.methodName"`
+  - Auto-includes context lines and returns with line numbers
+
+**Example - Outline mode:**
+```
+[src/server.ts] Outline (15 top-level symbols, typescript):
+├── ⚡function startServer(): Promise<void> :174-200
+├── ⚡class McpServer :205-400
+│   ├── method registerTool :210-250
+│   └── method start :380-400
+└── ⚡interface Config :45-71
+```
+(`⚡` = exported)
 
 ### `preflight_repo_tree`
 Get repository structure overview without wasting tokens on search.

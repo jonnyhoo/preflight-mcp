@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] - 2025-12-28
+
+### Added
+- **Symbol outline extraction**: `preflight_read_file` now supports `outline: true` parameter
+  - Returns function/class/method/interface/type/enum with line ranges
+  - Supports TypeScript, JavaScript, TSX, Python, and Go
+  - Dramatically reduces token consumption for understanding file structure
+- **Symbol-based reading**: `preflight_read_file` now supports `symbol: "name"` parameter
+  - Directly read a specific function/class/method by name
+  - Supports `"ClassName.methodName"` format for class methods
+  - Auto-includes 2 lines of context before the symbol
+- **Tree-sitter AST parsing** for outline extraction:
+  - TypeScript/JavaScript: function, class, method, interface, type, enum, arrow functions
+  - Python: function, class, methods, respects `__all__` for exports
+  - Go: func, method, struct (as class), interface, type declarations
+
+### Changed
+- **Token efficiency**: Large file analysis now possible with 90%+ token savings using outline mode
+- **API simplification**: Single `preflight_read_file` tool handles content, outline, and symbol reading
+
+### Technical Details
+- New exports from `src/ast/treeSitter.ts`: `SymbolKind`, `SymbolOutline`, `extractOutlineWasm()`
+- New test file: `tests/ast/outline.test.ts` (9 test cases)
+
 ## [0.5.0] - 2025-12-26
 
 ### Added
