@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.6] - 2025-12-28
+
+### Added
+- **Read Core Mode** (`preflight_read_file` with `mode: "core"`): One-shot loading of core source files
+  - Automatically identifies core files using dependency graph (most imported) + entry points (index.ts, main.ts)
+  - Returns symbol outline + full content for each core file
+  - `coreOptions.maxFiles`: Control how many core files to read (default: 5)
+  - `coreOptions.tokenBudget`: Approximate token limit - files exceeding budget return outline only
+  - `coreOptions.includeOutline` / `includeContent`: Fine-grained control over output
+- **Dynamic version reporting**: MCP server now reads version from package.json instead of hardcoding
+
+### Changed
+- `preflight_read_file` mode enum extended: `"light" | "full" | "core"`
+- Light mode hint now suggests `mode: "core"` for accessing source code
+
+### Example Usage
+```
+preflight_read_file({
+  bundleId: "xxx",
+  mode: "core",
+  coreOptions: { maxFiles: 5, tokenBudget: 8000 }
+})
+```
+Returns: Top 5 most-imported files with outline + content (~8000 tokens)
+
 ## [0.5.5] - 2025-12-28
 
 ### Fixed

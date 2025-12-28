@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -172,6 +173,17 @@ const GetTaskStatusInputSchema = {
 };
 
 
+// Read version from package.json at startup
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const packageJsonPath = path.resolve(__dirname, '..', 'package.json');
+let PACKAGE_VERSION = '0.0.0';
+try {
+  const pkgJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf8'));
+  PACKAGE_VERSION = pkgJson.version ?? '0.0.0';
+} catch {
+  // Fallback if package.json cannot be read
+}
+
 export async function startServer(): Promise<void> {
   const cfg = getConfig();
 
@@ -186,7 +198,7 @@ export async function startServer(): Promise<void> {
   const server = new McpServer(
     {
       name: 'preflight-mcp',
-version: '0.5.3',
+      version: PACKAGE_VERSION,
       description: 'Create evidence-based preflight bundles for repositories (docs + code) with SQLite FTS search.',
     },
     {
@@ -410,23 +422,128 @@ version: '0.5.3',
 
       const out: Record<string, unknown> = { bundles: filtered, truncation };
 
-      // Stable human-readable format for UI logs.
-      const lines = filtered.map((b) => {
-        const repos = b.repos.length ? b.repos.join(', ') : '(none)';
-        const tags = b.tags.length ? b.tags.join(', ') : '(none)';
-        return `${b.bundleId} | ${b.displayName} | repos: ${repos} | tags: ${tags}`;
-      });
+      // LLM-friendly Markdown format (easier to parse than pipe-separated)
+      const lines: string[] = [];
+      lines.push(`## Bundles (${filtered.length}${hasMore ? '+' : ''})`);
+      lines.push('');
       
-      // Add pagination hint to text output
-      let textOutput = lines.join('\n') || '(no bundles)';
-      if (hasMore) {
-        textOutput += `\n\n📄 More bundles available. Use cursor to fetch next page.`;
+      for (const b of filtered) {
+        lines.push(`### ${b.displayName}`);
+        lines.push(`- **ID**: \`${b.bundleId}\``);
+        if (b.repos.length > 0) {
+          lines.push(`- **Repos**: ${b.repos.join(', ')}`);
+        }
+        if (b.tags.length > 0) {
+          lines.push(`- **Tags**: ${b.tags.join(', ')}`);
+        }
+        lines.push('');
       }
+      
+      // Add pagination hint
+      if (hasMore) {
+        lines.push('---');
+        lines.push(`📄 More bundles available (total: ${allIds.length}). Use cursor to fetch next page.`);
+      }
+      
+      const textOutput = filtered.length > 0 ? lines.join('\n') : '(no bundles found)';
 
       return {
         content: [{ type: 'text', text: textOutput }],
         structuredContent: out,
       };
+    }
+  );
+
+  // ==================== NEW: preflight_get_overview ====================
+  // Simplified tool for getting project overview - the FIRST step when exploring a bundle
+  server.registerTool(
+    'preflight_get_overview',
+    {
+      title: 'Get bundle overview',
+      description:
+        '⭐ **START HERE** - Get project overview in one call. Returns OVERVIEW.md + START_HERE.md + AGENTS.md. ' +
+        'This is the recommended FIRST tool to call when exploring any bundle. ' +
+        'Use when: "了解项目", "项目概览", "what is this project", "show overview", "get started".\n\n' +
+        '**Returns:**\n' +
+        '- OVERVIEW.md: AI-generated project summary & architecture\n' +
+        '- START_HERE.md: Key entry points & critical paths\n' +
+        '- AGENTS.md: AI agent usage guide\n\n' +
+        '**Next steps after overview:**\n' +
+        '1. `preflight_repo_tree` - See file structure\n' +
+        '2. `preflight_search` - Find specific code\n' +
+        '3. `preflight_read_file` - Read specific files',
+      inputSchema: {
+        bundleId: z.string().describe('Bundle ID to get overview for.'),
+      },
+      outputSchema: {
+        bundleId: z.string(),
+        overview: z.string().nullable().describe('OVERVIEW.md content'),
+        startHere: z.string().nullable().describe('START_HERE.md content'),
+        agents: z.string().nullable().describe('AGENTS.md content'),
+        sections: z.array(z.string()).describe('List of available sections'),
+      },
+      annotations: {
+        readOnlyHint: true,
+      },
+    },
+    async (args) => {
+      try {
+        const storageDir = await findBundleStorageDir(cfg.storageDirs, args.bundleId);
+        if (!storageDir) {
+          throw new BundleNotFoundError(args.bundleId);
+        }
+        const paths = getBundlePathsForId(storageDir, args.bundleId);
+        const bundleRoot = paths.rootDir;
+
+        const readFile = async (name: string): Promise<string | null> => {
+          try {
+            return await fs.readFile(safeJoin(bundleRoot, name), 'utf8');
+          } catch {
+            return null;
+          }
+        };
+
+        const overview = await readFile('OVERVIEW.md');
+        const startHere = await readFile('START_HERE.md');
+        const agents = await readFile('AGENTS.md');
+
+        const sections: string[] = [];
+        if (overview) sections.push('OVERVIEW.md');
+        if (startHere) sections.push('START_HERE.md');
+        if (agents) sections.push('AGENTS.md');
+
+        // Build human-readable text output
+        const textParts: string[] = [];
+        textParts.push(`[Bundle: ${args.bundleId}] Overview (${sections.length} sections)`);
+        textParts.push('');
+        
+        if (overview) {
+          textParts.push('=== OVERVIEW.md ===');
+          textParts.push(overview);
+          textParts.push('');
+        }
+        if (startHere) {
+          textParts.push('=== START_HERE.md ===');
+          textParts.push(startHere);
+          textParts.push('');
+        }
+        if (agents) {
+          textParts.push('=== AGENTS.md ===');
+          textParts.push(agents);
+        }
+
+        if (sections.length === 0) {
+          textParts.push('⚠️ No overview files found. Try preflight_repo_tree to explore structure.');
+        }
+
+        const out = { bundleId: args.bundleId, overview, startHere, agents, sections };
+        return {
+          content: [{ type: 'text', text: textParts.join('\n') }],
+          structuredContent: out,
+        };
+      } catch (err) {
+        throw wrapPreflightError(err);
+      }
     }
   );
 
@@ -472,11 +589,18 @@ version: '0.5.3',
       inputSchema: {
         bundleId: z.string().describe('Bundle ID to read.'),
         file: z.string().optional().describe('Specific file to read (e.g., "deps/dependency-graph.json"). If omitted, uses mode-based batch reading.'),
-        mode: z.enum(['light', 'full']).optional().default('light').describe(
+        mode: z.enum(['light', 'full', 'core']).optional().default('light').describe(
           'Batch reading mode (used when file param is omitted). ' +
           'light: OVERVIEW + START_HERE + AGENTS + manifest only (recommended, saves tokens). ' +
-          'full: includes README and deps graph too.'
+          'full: includes README and deps graph too. ' +
+          'core: ⭐ NEW - reads core source files (top imported + entry points) with outline and content.'
         ),
+        coreOptions: z.object({
+          maxFiles: z.number().int().min(1).max(10).default(5).describe('Max core files to read.'),
+          includeOutline: z.boolean().default(true).describe('Include symbol outline for each file.'),
+          includeContent: z.boolean().default(true).describe('Include full file content.'),
+          tokenBudget: z.number().int().optional().describe('Approximate token budget (chars/4). Files exceeding budget return outline only.'),
+        }).optional().describe('Options for mode="core". Controls which files and how much content to return.'),
         includeReadme: z.boolean().optional().default(false).describe('Include repo README files in batch mode (can be large).'),
         includeDepsGraph: z.boolean().optional().default(false).describe('Include deps/dependency-graph.json in batch mode.'),
         withLineNumbers: z.boolean().optional().default(false).describe('If true, prefix each line with line number in "N|" format for evidence citation.'),
@@ -520,6 +644,20 @@ version: '0.5.3',
           children: z.array(z.any()).optional(),
         })).optional().describe('Symbol outline (when outline=true).'),
         language: z.string().optional().describe('Detected language (when outline=true).'),
+        // NEW: core mode output
+        coreFiles: z.array(z.object({
+          path: z.string(),
+          reason: z.string().describe('Why this file is considered core (e.g., "Most imported (5 dependents)")'),
+          outline: z.array(z.any()).optional().describe('Symbol outline'),
+          content: z.string().optional().describe('Full content (if within token budget)'),
+          language: z.string().optional(),
+          charCount: z.number().describe('Character count of file'),
+        })).optional().describe('Core files with outline and content (when mode="core").'),
+        coreStats: z.object({
+          totalFiles: z.number(),
+          totalChars: z.number(),
+          truncatedFiles: z.number().describe('Files where content was omitted due to token budget'),
+        }).optional().describe('Statistics for core mode.'),
       },
       annotations: {
         readOnlyHint: true,
@@ -751,6 +889,226 @@ version: '0.5.3',
 
         // Batch mode: read key files based on mode
         const mode = args.mode ?? 'light';
+        
+        // ==================== MODE: CORE ====================
+        // Read core source files (top imported + entry points) with outline and content
+        if (mode === 'core') {
+          const coreOpts = (args.coreOptions ?? {}) as {
+            maxFiles?: number;
+            includeOutline?: boolean;
+            includeContent?: boolean;
+            tokenBudget?: number;
+          };
+          const maxFiles = coreOpts.maxFiles ?? 5;
+          const includeOutline = coreOpts.includeOutline ?? true;
+          const includeContent = coreOpts.includeContent ?? true;
+          const tokenBudget = coreOpts.tokenBudget; // chars / 4 ≈ tokens
+          const charBudget = tokenBudget ? tokenBudget * 4 : undefined;
+          
+          // Step 1: Generate dependency graph to find core files
+          let depResult;
+          try {
+            depResult = await generateDependencyGraph(cfg, {
+              bundleId: args.bundleId,
+              options: { timeBudgetMs: 10000, maxNodes: 200, maxEdges: 1000 },
+            });
+          } catch {
+            depResult = null;
+          }
+          
+          // Step 2: Identify core files (most imported + entry points)
+          const coreFileCandidates: Array<{ path: string; reason: string; score: number }> = [];
+          
+          if (depResult?.facts?.edges) {
+            // Count how many times each file is imported
+            const importedByCounts: Record<string, number> = {};
+            for (const edge of depResult.facts.edges) {
+              if (edge.type === 'imports' || edge.type === 'imports_resolved') {
+                const to = typeof edge.to === 'string' ? edge.to.replace(/^(file:|module:)/, '') : '';
+                if (to && !to.startsWith('node_modules') && !to.includes('node:')) {
+                  importedByCounts[to] = (importedByCounts[to] ?? 0) + 1;
+                }
+              }
+            }
+            
+            // Sort by import count and add top files
+            const sortedByImports = Object.entries(importedByCounts)
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, maxFiles * 2); // Get more candidates for filtering
+            
+            for (const [filePath, count] of sortedByImports) {
+              coreFileCandidates.push({
+                path: filePath,
+                reason: `Most imported (${count} dependents)`,
+                score: count * 10,
+              });
+            }
+          }
+          
+          // Add entry points (index.ts, main.ts, etc.)
+          const entryPointPatterns = [
+            { pattern: /\/(index|main)\.(ts|js|tsx|jsx)$/i, reason: 'Entry point', score: 50 },
+            { pattern: /\/app\.(ts|js|tsx|jsx)$/i, reason: 'App entry', score: 40 },
+            { pattern: /\/server\.(ts|js)$/i, reason: 'Server entry', score: 40 },
+            { pattern: /\/types\.(ts|d\.ts)$/i, reason: 'Type definitions', score: 30 },
+          ];
+          
+          // Scan for entry points in repos directory
+          const scanEntryPoints = async (dir: string, relPath: string): Promise<void> => {
+            try {
+              const entries = await fs.readdir(dir, { withFileTypes: true });
+              for (const entry of entries) {
+                if (entry.name.startsWith('.') || ['node_modules', '__pycache__', 'dist', 'build'].includes(entry.name)) continue;
+                const fullPath = path.join(dir, entry.name);
+                const entryRelPath = relPath ? `${relPath}/${entry.name}` : entry.name;
+                
+                if (entry.isFile()) {
+                  for (const ep of entryPointPatterns) {
+                    if (ep.pattern.test('/' + entryRelPath)) {
+                      // Check if already in candidates
+                      const existing = coreFileCandidates.find(c => c.path.endsWith(entry.name) || c.path === entryRelPath);
+                      if (!existing) {
+                        coreFileCandidates.push({ path: entryRelPath, reason: ep.reason, score: ep.score });
+                      }
+                    }
+                  }
+                } else if (entry.isDirectory() && relPath.split('/').length < 6) {
+                  await scanEntryPoints(fullPath, entryRelPath);
+                }
+              }
+            } catch { /* ignore */ }
+          };
+          
+          await scanEntryPoints(paths.reposDir, 'repos');
+          
+          // Sort by score and dedupe
+          coreFileCandidates.sort((a, b) => b.score - a.score);
+          const seenPaths = new Set<string>();
+          const uniqueCandidates = coreFileCandidates.filter(c => {
+            const key = c.path.split('/').pop() ?? c.path;
+            if (seenPaths.has(key)) return false;
+            seenPaths.add(key);
+            return true;
+          }).slice(0, maxFiles);
+          
+          // Step 3: Read each core file with outline and content
+          const coreFilesResult: Array<{
+            path: string;
+            reason: string;
+            outline?: SymbolOutline[];
+            content?: string;
+            language?: string;
+            charCount: number;
+          }> = [];
+          
+          let totalChars = 0;
+          let truncatedFiles = 0;
+          
+          for (const candidate of uniqueCandidates) {
+            // Resolve actual file path
+            let actualPath = candidate.path;
+            let absPath: string;
+            
+            // Try different path resolutions
+            const pathsToTry = [
+              candidate.path,
+              `repos/${candidate.path}`,
+              candidate.path.startsWith('repos/') ? candidate.path : null,
+            ].filter(Boolean) as string[];
+            
+            let fileContent: string | null = null;
+            for (const tryPath of pathsToTry) {
+              try {
+                absPath = safeJoin(bundleRoot, tryPath);
+                fileContent = await fs.readFile(absPath, 'utf8');
+                actualPath = tryPath;
+                break;
+              } catch { /* try next */ }
+            }
+            
+            if (!fileContent) continue;
+            
+            const charCount = fileContent.length;
+            const withinBudget = !charBudget || (totalChars + charCount <= charBudget);
+            
+            const result: typeof coreFilesResult[number] = {
+              path: actualPath,
+              reason: candidate.reason,
+              charCount,
+            };
+            
+            // Extract outline if requested
+            if (includeOutline) {
+              const outlineResult = await extractOutlineWasm(actualPath, fileContent);
+              if (outlineResult) {
+                result.outline = outlineResult.outline;
+                result.language = outlineResult.language;
+              }
+            }
+            
+            // Include content if requested and within budget
+            if (includeContent && withinBudget) {
+              result.content = fileContent;
+              totalChars += charCount;
+            } else if (includeContent && !withinBudget) {
+              truncatedFiles++;
+            }
+            
+            coreFilesResult.push(result);
+          }
+          
+          // Build text output
+          const textParts: string[] = [];
+          textParts.push(`[Mode: core] ${coreFilesResult.length} core files identified`);
+          textParts.push(`Total: ${totalChars} chars (~${Math.round(totalChars / 4)} tokens)`);
+          if (truncatedFiles > 0) {
+            textParts.push(`⚠️ ${truncatedFiles} file(s) exceeded token budget - showing outline only`);
+          }
+          textParts.push('');
+          
+          for (const cf of coreFilesResult) {
+            textParts.push(`=== ${cf.path} (${cf.reason}) ===`);
+            
+            // Show outline
+            if (cf.outline && cf.outline.length > 0) {
+              textParts.push(`[Outline - ${cf.outline.length} symbols]`);
+              for (const sym of cf.outline.slice(0, 10)) {
+                const exp = sym.exported ? '⚡' : '';
+                textParts.push(`  ${exp}${sym.kind} ${sym.name}${sym.signature || ''} :${sym.range.startLine}-${sym.range.endLine}`);
+              }
+              if (cf.outline.length > 10) {
+                textParts.push(`  ... and ${cf.outline.length - 10} more symbols`);
+              }
+            }
+            
+            // Show content
+            if (cf.content) {
+              textParts.push(`[Content - ${cf.charCount} chars]`);
+              textParts.push('```' + (cf.language || ''));
+              textParts.push(cf.content);
+              textParts.push('```');
+            }
+            textParts.push('');
+          }
+          
+          const out = {
+            bundleId: args.bundleId,
+            mode: 'core' as const,
+            coreFiles: coreFilesResult,
+            coreStats: {
+              totalFiles: coreFilesResult.length,
+              totalChars,
+              truncatedFiles,
+            },
+          };
+          
+          return {
+            content: [{ type: 'text', text: textParts.join('\n') }],
+            structuredContent: out,
+          };
+        }
+        
+        // ==================== MODE: LIGHT / FULL ====================
         const includeReadme = args.includeReadme ?? (mode === 'full');
         const includeDepsGraph = args.includeDepsGraph ?? (mode === 'full');
         
@@ -821,6 +1179,7 @@ version: '0.5.3',
           textParts.push('💡 To include README: set includeReadme=true');
           textParts.push('💡 To include dependency graph: set includeDepsGraph=true');
           textParts.push('💡 For all content: set mode="full"');
+          textParts.push('💡 ⭐ For core source code: set mode="core"');
         }
 
         const out = { bundleId: args.bundleId, mode, files, sections };
@@ -1692,8 +2051,10 @@ version: '0.5.3',
   server.registerTool(
     'preflight_search_bundle',
     {
-      title: 'Search bundle',
-      description: 'Full-text search in bundle docs and code (strictly read-only). If you need to update or repair, call preflight_update_bundle or preflight_repair_bundle explicitly, then search again. Use when: "search in bundle", "find in repo", "look for X in bundle", "搜索bundle", "在仓库中查找", "搜代码", "搜文档".',
+      title: 'Search bundle (DEPRECATED)',
+      description: '⚠️ **DEPRECATED**: Use `preflight_search_and_read` instead. ' +
+        'For index-only search without reading content, use `preflight_search_and_read` with `readContent: false`.\n\n' +
+        'Full-text search in bundle docs and code (strictly read-only). If you need to update or repair, call preflight_update_bundle or preflight_repair_bundle explicitly, then search again.',
       inputSchema: SearchBundleInputSchema,
       outputSchema: {
         bundleId: z.string(),
@@ -1893,15 +2254,37 @@ version: '0.5.3',
             }));
           }
 
+          // Auto-compress: extract common repo to top-level if all results from same repo
+          let commonRepo: string | undefined;
+          if (grouped && grouped.length > 0) {
+            const repos = new Set(grouped.map(g => g.repo));
+            if (repos.size === 1) {
+              commonRepo = grouped[0].repo;
+            }
+          }
+
+          // Build compressed grouped results (omit repo when extracted to top-level)
+          const compressedGrouped = grouped?.map(g => {
+            const { repo, ...rest } = g;
+            return commonRepo ? rest : g;
+          });
+
           const out: Record<string, unknown> = {
             bundleId: args.bundleId,
             query: args.query,
             scope: args.scope,
-            hits: paginatedHits.map(h => ({
-              ...h,
-              uri: toBundleFileUri({ bundleId: args.bundleId, relativePath: h.path }),
-            })),
-            grouped,
+            // Auto-compress: omit uri (can be derived from bundleId + path)
+            hits: paginatedHits.map(h => {
+              const { context, ...rest } = h;
+              // Auto-compress: trim surroundingLines to save tokens
+              const compressedContext = context ? {
+                ...context,
+                surroundingLines: context.surroundingLines?.slice(0, 5),
+              } : undefined;
+              return compressedContext ? { ...rest, context: compressedContext } : rest;
+            }),
+            grouped: compressedGrouped,
+            ...(commonRepo && { repo: commonRepo }), // Extracted common repo
             meta: result.meta,
           };
           
@@ -1960,23 +2343,36 @@ version: '0.5.3',
         // Apply cursor pagination
         rawHits = rawHits.slice(offset, offset + pageSize);
 
+        // Auto-compress: extract common repo if all hits from same repo
+        let commonRepo: string | undefined;
+        if (rawHits.length > 0) {
+          const repos = new Set(rawHits.map(h => h.repo).filter(Boolean));
+          if (repos.size === 1) {
+            commonRepo = rawHits[0].repo;
+          }
+        }
+
         const hits = rawHits.map((h) => {
-          const hit: Record<string, unknown> = {
-            ...h,
-            uri: toBundleFileUri({ bundleId: args.bundleId, relativePath: h.path }),
-          };
+          // Auto-compress: omit uri (derivable from bundleId + path), omit repo when extracted
+          const { uri: _uri, repo, context, ...rest } = h as Record<string, unknown>;
+          const hit: Record<string, unknown> = commonRepo && repo === commonRepo
+            ? rest  // Omit repo when extracted to top-level
+            : { ...rest, ...(repo && { repo }) };
           
           // Apply maxSnippetLength truncation
           if (args.maxSnippetLength && h.snippet && h.snippet.length > args.maxSnippetLength) {
             hit.snippet = h.snippet.slice(0, args.maxSnippetLength) + '…';
           }
           
-          // Truncate surroundingLines if maxSnippetLength is set
-          if (args.maxSnippetLength && h.context?.surroundingLines) {
-            const maxLines = Math.max(3, Math.floor(args.maxSnippetLength / 50));
+          // Auto-compress: limit surroundingLines to save tokens (default 5, or based on maxSnippetLength)
+          if ((context as { surroundingLines?: string[] } | undefined)?.surroundingLines) {
+            const ctx = context as { surroundingLines: string[]; [k: string]: unknown };
+            const maxLines = args.maxSnippetLength
+              ? Math.max(3, Math.floor(args.maxSnippetLength / 50))
+              : 5; // Default auto-compress to 5 lines
             hit.context = {
-              ...h.context,
-              surroundingLines: h.context.surroundingLines.slice(0, maxLines),
+              ...ctx,
+              surroundingLines: ctx.surroundingLines.slice(0, maxLines),
             };
           }
           
@@ -1988,6 +2384,7 @@ version: '0.5.3',
           query: args.query,
           scope: args.scope,
           hits,
+          ...(commonRepo && { repo: commonRepo }), // Auto-compress: extracted common repo
         };
         
         if (warnings.length > 0) {
@@ -2025,28 +2422,13 @@ version: '0.5.3',
   server.registerTool(
     'preflight_evidence_dependency_graph',
     {
-      title: 'Evidence: dependency graph',
+      title: 'Evidence: dependency graph (DEPRECATED)',
       description:
-        '**Proactive use recommended**: Generate dependency graphs to understand code structure. ' +
-        'Generate an evidence-based dependency graph. IMPORTANT: Before running, ASK the user which bundle and which file/mode they want! ' +
+        '⚠️ **DEPRECATED**: Use `preflight_dependency_graph` instead. ' +
+        'This tool provides the same functionality with a simpler interface.\n\n' +
+        'Generate an evidence-based dependency graph. ' +
         'Two modes: (1) TARGET MODE: analyze a specific file (provide target.file). (2) GLOBAL MODE: project-wide graph (omit target). ' +
-        'Do NOT automatically choose bundle or mode - confirm with user first! ' +
-        'File path must be bundle-relative: repos/{owner}/{repo}/norm/{path}.\n\n' +
-        '📊 **Coverage Report (Global Mode):**\n' +
-        'The response includes a `coverageReport` explaining what was analyzed:\n' +
-        '- `scannedFilesCount` / `parsedFilesCount`: Files discovered vs successfully parsed\n' +
-        '- `perLanguage`: Statistics per programming language (TypeScript, Python, etc.)\n' +
-        '- `perDir`: File counts per top-level directory\n' +
-        '- `skippedFiles`: Files that were skipped with reasons (too large, read error, etc.)\n' +
-        '- `truncated` / `truncatedReason`: Whether limits were hit\n\n' +
-        'Use this to understand graph completeness and identify gaps.\n\n' +
-        '📂 **Large File Handling (LLM Guidance):**\n' +
-        '- Default: files >1MB are skipped to avoid timeouts\n' +
-        '- If coverageReport.skippedFiles shows important files were skipped:\n' +
-        '  1. Try `largeFileStrategy: "truncate"` to read first 500 lines\n' +
-        '  2. Or increase `maxFileSizeBytes` (e.g., 5000000 for 5MB)\n' +
-        '- Options: `{ maxFileSizeBytes: 5000000, largeFileStrategy: "truncate", truncateLines: 1000 }`\n' +
-        '- User can override these settings if needed',
+        'File path must be bundle-relative: repos/{owner}/{repo}/norm/{path}.',
       inputSchema: DependencyGraphInputSchema,
       outputSchema: {
         meta: z.any(),
@@ -2124,21 +2506,22 @@ version: '0.5.3',
     }
   );
 
-  // Simplified dependency graph tool for single-point tasks
+  // ==================== MAIN: preflight_dependency_graph ====================
+  // Unified tool for dependency graphs (replaces both evidence_dependency_graph and get_dependency_graph)
   server.registerTool(
-    'preflight_get_dependency_graph',
+    'preflight_dependency_graph',
     {
-      title: 'Get dependency graph (simplified)',
+      title: 'Dependency graph',
       description:
-        'Get dependency graph with minimal parameters. ' +
-        'Use when user asks: "show dependencies", "看依赖图", "import graph", "what does X depend on". ' +
-        'This is a simplified wrapper around preflight_evidence_dependency_graph.\n\n' +
+        'Get or generate dependency graph for a bundle. ' +
+        'Auto-generates if not cached, returns cached version if available. ' +
+        'Use when: "show dependencies", "看依赖图", "import graph", "what does X depend on".\n\n' +
         '**Modes:**\n' +
         '- `scope: "global"` (default): Project-wide dependency graph\n' +
         '- `scope: "target"` with `targetFile`: Dependencies for a specific file\n\n' +
         '**Format:**\n' +
         '- `format: "summary"` (default): Top nodes, aggregated by directory, key edges only\n' +
-        '- `format: "full"`: Complete graph data',
+        '- `format: "full"`: Complete graph data with coverage report',
       inputSchema: {
         bundleId: z.string().describe('Bundle ID. Use preflight_list_bundles to find available bundles.'),
         scope: z.enum(['global', 'target']).optional().default('global').describe('global=project-wide, target=single file.'),
@@ -2463,11 +2846,11 @@ version: '0.5.3',
   server.registerTool(
     'preflight_trace_export',
     {
-      title: 'Trace: export to JSON',
+      title: 'Trace: export to JSON (DEPRECATED)',
       description:
-        'Export trace links to trace/trace.json for direct LLM reading. ' +
-        'Note: trace.json is auto-exported after each trace_upsert, so this tool is only needed to manually refresh or verify the export. ' +
-        'Use when: "export trace", "refresh trace.json", "导出trace", "刷新trace.json".',
+        '⚠️ **DEPRECATED**: trace.json is auto-exported after each trace_upsert, so this tool is rarely needed. ' +
+        'Use `preflight_read_file` with `file: "trace/trace.json"` to read exported traces directly.\n\n' +
+        'Export trace links to trace/trace.json. Only needed to manually refresh or verify the export.',
       inputSchema: {
         bundleId: z.string().describe('Bundle ID to export trace links from.'),
       },
@@ -3025,15 +3408,12 @@ version: '0.5.3',
   server.registerTool(
     'preflight_suggest_traces',
     {
-      title: 'Trace: suggest links',
+      title: 'Trace: suggest links (DEPRECATED)',
       description:
+        '⚠️ **DEPRECATED**: This tool has limited value. Use `preflight_deep_analyze_bundle` for test detection, ' +
+        'then manually create trace links with `preflight_trace_upsert` if needed.\n\n' +
         'Automatically suggest trace links based on file naming patterns. ' +
-        'MVP: Only supports tested_by edge type (code↔test relationships). ' +
-        'Use to bulk-discover test coverage relationships before reviewing/upserting.\n\n' +
-        '**Workflow:**\n' +
-        '1. Call with dryRun-style output to preview suggestions\n' +
-        '2. Review suggestions (LLM or human)\n' +
-        '3. Use trace_upsert with returned upsertPayload to persist approved links',
+        'MVP: Only supports tested_by edge type (code↔test relationships).',
       inputSchema: {
         bundleId: z.string().describe('Bundle ID to scan for trace suggestions.'),
         edge_type: z.enum(['tested_by']).default('tested_by').describe('Type of edge to suggest. MVP only supports tested_by.'),

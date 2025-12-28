@@ -295,18 +295,10 @@ export function createReadFilesHandler(deps: {
  * Tool description for MCP registration.
  */
 export const readFilesToolDescription = {
-  title: 'Read multiple files',
+  title: 'Read multiple files (DEPRECATED)',
   description:
+    '⚠️ **DEPRECATED**: Use multiple `preflight_read_file` calls, or use `preflight_search_and_read` ' +
+    'which combines search and reading in one call.\n\n' +
     'Read multiple files from a bundle in a single call. ' +
-    'Reduces round-trips for evidence gathering. ' +
-    'Each file can specify optional line ranges and line number formatting.\n\n' +
-    '**LLM Usage Guide:**\n' +
-    '- Use when you know which files to read (from search results, tree, or overview)\n' +
-    '- Specify ranges to read only relevant portions (saves tokens)\n' +
-    '- Default withLineNumbers=true provides citation-ready format\n' +
-    '- Max 20 files per call, 1MB total response limit\n\n' +
-    '**Evidence Citation:**\n' +
-    '- Response includes evidence[] with path + range for each file read\n' +
-    '- Use format "path:startLine-endLine" in your citations\n\n' +
-    'Triggers: "read these files", "get content of", "批量读取", "读取多个文件"',
+    'Each file can specify optional line ranges and line number formatting.',
 };

@@ -165,6 +165,30 @@ export function buildDeepAnalysis(
   // Build summary text
   const summaryParts: string[] = [];
   
+  // ✅ Enhancement: Include OVERVIEW.md summary at the top for one-call context
+  if (overviewContent?.overview) {
+    summaryParts.push(`## Project Overview`);
+    // Extract first meaningful paragraph (skip title lines starting with #)
+    const lines = overviewContent.overview.split('\n');
+    const contentLines: string[] = [];
+    let charCount = 0;
+    const MAX_CHARS = 800; // Limit to ~200 tokens
+    for (const line of lines) {
+      if (charCount >= MAX_CHARS) break;
+      // Skip empty lines at start and title lines
+      if (contentLines.length === 0 && (line.trim() === '' || line.startsWith('#'))) continue;
+      contentLines.push(line);
+      charCount += line.length + 1;
+    }
+    if (contentLines.length > 0) {
+      summaryParts.push(contentLines.join('\n'));
+      if (charCount >= MAX_CHARS) {
+        summaryParts.push('...(truncated, see OVERVIEW.md for full content)');
+      }
+    }
+    summaryParts.push('');
+  }
+  
   if (focusPath || focusQuery) {
     summaryParts.push(`## Analysis Focus`);
     if (focusPath) summaryParts.push(`- Path: \`${focusPath}\``);

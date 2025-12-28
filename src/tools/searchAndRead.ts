@@ -80,6 +80,15 @@ export const SearchAndReadInputSchema = {
     .enum(['json', 'text'])
     .default('json')
     .describe('Response format. json=unified envelope (default).'),
+  // NEW: readContent parameter for search-only mode (replaces search_bundle)
+  readContent: z
+    .boolean()
+    .default(true)
+    .describe(
+      'If true (default), read file excerpts for each hit. ' +
+      'If false, return search metadata only (path, lineNo, score) without reading file content. ' +
+      'Use false for quick index-only searches (like groupByFile in search_bundle).'
+    ),
 };
 
 /**
@@ -208,6 +217,7 @@ export type SearchAndReadInput = {
   tokenBudget?: number;
   cursor?: string;
   format?: 'json' | 'text';
+  readContent?: boolean;
 };
 
 /**
@@ -288,16 +298,17 @@ export function createSearchAndReadHandler(deps: {
       // Apply pagination offset
       rawHits = rawHits.slice(offset);
 
-      // Build result hits with excerpts
+      // Build result hits with excerpts (or metadata-only if readContent=false)
       const hits: SearchAndReadHit[] = [];
       let totalBytes = 0;
       const estimatedTokensPerByte = 0.25; // Rough estimate
+      const shouldReadContent = args.readContent ?? true;
 
       for (const rawHit of rawHits) {
         if (hits.length >= limit) break;
 
-        // Check token budget
-        if (tokenBudget && totalBytes * estimatedTokensPerByte > tokenBudget) {
+        // Check token budget (only relevant when reading content)
+        if (shouldReadContent && tokenBudget && totalBytes * estimatedTokensPerByte > tokenBudget) {
           addWarning(ctx, WarningCodes.RESULT_TRUNCATED, 'Token budget exceeded', true);
           setTruncation(ctx, true, {
             reason: 'Token budget exceeded',
@@ -306,6 +317,22 @@ export function createSearchAndReadHandler(deps: {
           break;
         }
 
+        // readContent=false: return metadata only (index-only search)
+        if (!shouldReadContent) {
+          const hit: SearchAndReadHit = {
+            path: rawHit.path,
+            repo: rawHit.repo,
+            kind: rawHit.kind,
+            matchRange: { startLine: rawHit.lineNo, endLine: rawHit.lineNo },
+            excerptRange: { startLine: rawHit.lineNo, endLine: rawHit.lineNo },
+            excerpt: rawHit.snippet || '', // Use indexed snippet if available
+            score: rawHit.score,
+          };
+          hits.push(hit);
+          continue;
+        }
+
+        // readContent=true: read full excerpt with context
         const excerptResult = await readExcerpt(
           paths.rootDir,
           rawHit,

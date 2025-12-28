@@ -51,8 +51,9 @@ Preflight: 🔗 Trace links:
 - 📖 **Auto-generated guides** — `START_HERE.md`, `AGENTS.md`, `OVERVIEW.md`
 - ☁️ **Cloud sync** — Multi-path mirror backup for redundancy
 - 🧠 **EDDA (Evidence-Driven Deep Analysis)** — Auto-generate auditable claims with evidence
-- ⚡ **21 MCP tools + 5 prompts** — Complete toolkit for code exploration
+- ⚡ **17 MCP tools + 5 prompts** — Streamlined toolkit optimized for LLM use
 - 📄 **Cursor pagination** — Handle large result sets efficiently (RFC v2)
+- 🧠 **LLM-friendly** — Auto-compressed outputs, unified interfaces (v0.6.0)
 
 <details>
 <summary><b>All Features (click to expand)</b></summary>
@@ -161,12 +162,19 @@ Run end-to-end smoke test:
 npm run smoke
 ```
 
-## Tools (21 total)
+## Tools (17 active + 5 deprecated)
 
 ### `preflight_list_bundles`
 List bundle IDs in storage.
+- **Markdown output** (v0.6.0): LLM-friendly structured format
 - **Cursor pagination** (v0.5.0): Use `cursor` parameter for large bundle lists
 - Triggers: "show bundles", "查看bundle", "有哪些bundle"
+
+### `preflight_get_overview` *(NEW v0.6.0)*
+⭐ **START HERE** - Get project overview in one call.
+- Returns: OVERVIEW.md + START_HERE.md + AGENTS.md
+- Simplest entry point for exploring any bundle
+- Triggers: "了解项目", "项目概览", "what is this project", "show overview"
 
 ### `preflight_create_bundle`
 Create a new bundle from GitHub repos or local directories.
@@ -240,28 +248,10 @@ Offline repair for a bundle (no fetching): rebuild missing/empty derived artifac
 - Rebuilds `indexes/search.sqlite3`, `START_HERE.md`, `AGENTS.md`, `OVERVIEW.md` when missing/empty.
 - Use when: search fails due to index corruption, bundle files were partially deleted, etc.
 
-### `preflight_search_bundle`
+### `preflight_search_bundle` *(DEPRECATED)*
+⚠️ **Use `preflight_search_and_read` instead** with `readContent: false` for index-only searches.
+
 Full-text search across ingested docs/code (line-based SQLite FTS5).
-- Triggers: "搜索bundle", "在仓库中查找", "搜代码"
-
-Important: **this tool is strictly read-only**.
-- To update: call `preflight_update_bundle`, then search again.
-- To repair: call `preflight_repair_bundle`, then search again.
-
-**New filtering options** (v0.3.1):
-- `excludePatterns`: Filter out paths matching patterns (e.g., `["**/tests/**", "**/__pycache__/**"]`)
-- `maxSnippetLength`: Limit snippet length per result (50-500 chars) to reduce token consumption
-
-**EDDA enhancements** (v0.4.0):
-- `groupByFile`: Group hits by file, returns `{path, hitCount, topSnippet}` - significantly reduces tokens
-- `fileTypeFilters`: Filter by extension (e.g., `[".py", ".ts"]`)
-- `includeScore`: Include BM25 relevance score in results
-
-**Cursor pagination** (v0.5.0):
-- `cursor`: Pagination cursor from previous call for fetching next page
-- Response includes `truncation.nextCursor` when more results available
-
-**Deprecated parameters**: `ensureFresh`, `autoRepairIndex`, `maxAgeHours` are deprecated and will return warnings instead of errors.
 
 ### `preflight_search_by_tags`
 Search across multiple bundles filtered by tags (line-based SQLite FTS5).
@@ -278,25 +268,17 @@ Optional parameters:
 - `limit`: Max total hits across all bundles
 - `cursor`: Pagination cursor for fetching next page
 
-### `preflight_evidence_dependency_graph`
-Generate an evidence-based dependency graph. Two modes:
-- **Target mode** (provide `target.file`): Analyze a specific file's imports and references
-- **Global mode** (omit `target`): Generate project-wide import graph of all code files
-- Deterministic output with source ranges for edges.
-- Uses Tree-sitter parsing when `PREFLIGHT_AST_ENGINE=wasm`; falls back to regex extraction otherwise.
+### `preflight_dependency_graph` *(UNIFIED v0.6.0)*
+Get or generate dependency graph for a bundle.
+- **Auto-generates** if not cached, returns cached version if available
+- `scope: "global"` (default): Project-wide dependency graph
+- `scope: "target"` with `targetFile`: Dependencies for a specific file
+- `format: "summary"` (default): Top nodes, aggregated by directory
+- `format: "full"`: Complete graph data with coverage report
+- Triggers: "show dependencies", "看依赖图", "import graph"
 
-**Edge types** (v0.2.7+):
-- `edgeTypes: "imports"` (default): Only AST-based import edges (high confidence, recommended)
-- `edgeTypes: "all"`: Include FTS-based reference edges (name matching, may have false positives)
-
-**Cache transparency** (v0.2.7+):
-- Response includes `meta.cacheInfo` with `fromCache`, `generatedAt`, `cacheAgeMs`
-- Use `force: true` to regenerate cached global graphs
-
-**Large file handling**:
-- `options.maxFileSizeBytes` (default: 1MB): Skip files larger than this
-- `options.largeFileStrategy`: `"skip"` (default) or `"truncate"`
-- `options.excludeExtensions`: Filter out non-code files from reference search (default: `.json`, `.md`, `.txt`, `.yml`, etc.)
+### `preflight_evidence_dependency_graph` *(DEPRECATED)*
+⚠️ **Use `preflight_dependency_graph` instead** - simpler interface with same functionality.
 
 ### `preflight_trace_upsert`
 Create or update traceability links (code↔test, code↔doc, file↔requirement).
@@ -311,27 +293,16 @@ Query traceability links (code↔test, code↔doc, commit↔ticket).
 - Returns `reason` and `nextSteps` when no edges found (helps LLM decide next action)
 - Fast when `bundleId` is provided; can scan across bundles when omitted.
 
-### `preflight_trace_export`
-Export trace links to `trace/trace.json` for direct LLM reading.
-- Note: Auto-exported after each `trace_upsert`, so only needed to manually refresh
-- Triggers: "export trace", "refresh trace.json", "导出trace"
+### `preflight_trace_export` *(DEPRECATED)*
+⚠️ trace.json is auto-exported after each `trace_upsert`. Use `preflight_read_file` with `file: "trace/trace.json"` to read.
 
-### `preflight_suggest_traces` *(NEW v0.4.0)*
-Automatically suggest trace links based on file naming patterns.
-- **MVP**: Only supports `tested_by` edge type (code↔test relationships)
-- Scans for patterns: `test_*.py`, `*_test.py`, `*.test.ts`, `*.spec.ts`, `*_test.go`
-- Returns ready-to-use `upsertPayload` for `preflight_trace_upsert`
-- Triggers: "suggest test links", "find test coverage", "发现测试关系"
+### `preflight_suggest_traces` *(DEPRECATED)*
+⚠️ Use `preflight_deep_analyze_bundle` for test detection, then `preflight_trace_upsert` manually.
 
-Parameters:
-- `edge_type`: `"tested_by"` (MVP only)
-- `scope`: `"repo"` | `"dir"` | `"file"`
-- `min_confidence`: 0-1 (default: 0.85)
-- `limit`: Max suggestions (default: 50)
-
-### `preflight_deep_analyze_bundle` *(Enhanced v0.5.1)*
+### `preflight_deep_analyze_bundle` *(Enhanced v0.6.0)*
 One-call deep analysis aggregating tree, search, deps, traces, **overview content**, and **test detection**.
 - Returns unified evidence pack with LLM-friendly summary
+- **Summary now includes OVERVIEW.md excerpt** (v0.6.0) - one call for complete context
 - **Now includes OVERVIEW.md, START_HERE.md, AGENTS.md, README content** (v0.5.1)
 - **Auto-detects test frameworks** (jest, vitest, pytest, go, mocha) (v0.5.1)
 - **Generates copyable `nextCommands`** for follow-up actions (v0.5.1)
@@ -374,36 +345,23 @@ Parameters:
 - `verifyFileExists`: Check evidence files exist (default: true)
 - `strictMode`: Treat warnings as errors (default: false)
 
-### `preflight_read_files` *(NEW v0.5.0)*
-Batch read multiple files from a bundle in a single call.
-- Reduces round-trips for evidence gathering
-- **RFC v2 unified envelope**: Returns `ok`, `meta`, `data`, `evidence[]`
-- Triggers: "read these files", "get content of", "批量读取"
+### `preflight_read_files` *(DEPRECATED)*
+⚠️ Use multiple `preflight_read_file` calls, or use `preflight_search_and_read`.
 
-Parameters:
-- `bundleId`: Bundle ID
-- `files[]`: Array of `{path, ranges?, withLineNumbers?}`
-- `format`: `"json"` (default) or `"text"`
-
-### `preflight_search_and_read` *(NEW v0.5.0)*
-Search + excerpt in one call - finds relevant code and returns context.
+### `preflight_search_and_read` *(Enhanced v0.6.0)*
+Search + excerpt in one call - the **primary search tool**.
 - Combines search with automatic context extraction
+- **`readContent: false`** (v0.6.0): Index-only search (replaces `preflight_search_bundle`)
 - **RFC v2 unified envelope**: Returns `ok`, `meta`, `data`, `evidence[]`
 - Triggers: "search and show code", "find and read", "搜索并读取"
 
 Parameters:
 - `bundleId`: Bundle ID
 - `query`: Search query
-- `contextLines`: Lines of context around matches (default: 5)
-- `maxFiles`: Max files to read (default: 5)
+- `contextLines`: Lines of context around matches (default: 30)
+- `readContent`: If false, return metadata only without reading files (default: true)
 - `format`: `"json"` (default) or `"text"`
 
-### `preflight_get_dependency_graph` *(Simplified wrapper)*
-Simplified dependency graph query.
-- `scope: "global"` (default): Project-wide graph
-- `scope: "target"` with `targetFile`: Single file dependencies
-- `format: "summary"` (default): Aggregated view
-- `format: "full"`: Raw graph data
 
 ### `preflight_cleanup_orphans`
 Remove incomplete or corrupted bundles (bundles without valid manifest.json).
