@@ -486,7 +486,7 @@ version: '0.5.3',
           'If true, return symbol outline instead of file content. ' +
           'Returns function/class/method/interface/type/enum with line ranges. ' +
           'Saves tokens by showing code structure without full content. ' +
-          'Supports: .ts, .tsx, .js, .jsx, .py, .go files.'
+          'Supports: .ts, .tsx, .js, .jsx, .py, .go, .rs files.'
         ),
         // NEW: symbol-based reading
         symbol: z.string().optional().describe(

@@ -1171,6 +1171,172 @@ function extractOutlineGo(root: Node): SymbolOutline[] {
 }
 
 /**
+ * Extract outline from Rust files.
+ */
+function extractOutlineRust(root: Node): SymbolOutline[] {
+  const outline: SymbolOutline[] = [];
+  
+  for (const child of root.namedChildren) {
+    switch (child.type) {
+      case 'function_item': {
+        const name = child.childForFieldName('name');
+        if (!name) continue;
+        
+        const funcName = name.text;
+        const isExported = hasRustPubVisibility(child);
+        
+        // Extract signature
+        const params = child.childForFieldName('parameters');
+        const returnType = child.childForFieldName('return_type');
+        let sig = params?.text || '()';
+        if (returnType) sig += ` -> ${returnType.text}`;
+        
+        outline.push({
+          kind: 'function',
+          name: funcName,
+          signature: sig,
+          range: {
+            startLine: child.startPosition.row + 1,
+            endLine: child.endPosition.row + 1,
+          },
+          exported: isExported,
+        });
+        break;
+      }
+      
+      case 'struct_item': {
+        const name = child.childForFieldName('name');
+        if (!name) continue;
+        
+        const structName = name.text;
+        const isExported = hasRustPubVisibility(child);
+        
+        outline.push({
+          kind: 'class',  // Treat struct as class
+          name: structName,
+          range: {
+            startLine: child.startPosition.row + 1,
+            endLine: child.endPosition.row + 1,
+          },
+          exported: isExported,
+        });
+        break;
+      }
+      
+      case 'enum_item': {
+        const name = child.childForFieldName('name');
+        if (!name) continue;
+        
+        const enumName = name.text;
+        const isExported = hasRustPubVisibility(child);
+        
+        outline.push({
+          kind: 'enum',
+          name: enumName,
+          range: {
+            startLine: child.startPosition.row + 1,
+            endLine: child.endPosition.row + 1,
+          },
+          exported: isExported,
+        });
+        break;
+      }
+      
+      case 'trait_item': {
+        const name = child.childForFieldName('name');
+        if (!name) continue;
+        
+        const traitName = name.text;
+        const isExported = hasRustPubVisibility(child);
+        
+        outline.push({
+          kind: 'interface',  // Treat trait as interface
+          name: traitName,
+          range: {
+            startLine: child.startPosition.row + 1,
+            endLine: child.endPosition.row + 1,
+          },
+          exported: isExported,
+        });
+        break;
+      }
+      
+      case 'type_item': {
+        const name = child.childForFieldName('name');
+        if (!name) continue;
+        
+        const typeName = name.text;
+        const isExported = hasRustPubVisibility(child);
+        
+        outline.push({
+          kind: 'type',
+          name: typeName,
+          range: {
+            startLine: child.startPosition.row + 1,
+            endLine: child.endPosition.row + 1,
+          },
+          exported: isExported,
+        });
+        break;
+      }
+      
+      case 'impl_item': {
+        // Extract methods from impl blocks
+        const typeNode = child.childForFieldName('type');
+        const typeName = typeNode?.text || 'impl';
+        
+        // Find all function_items inside the impl
+        const body = child.childForFieldName('body');
+        if (!body) continue;
+        
+        const methods: SymbolOutline[] = [];
+        for (const item of body.namedChildren) {
+          if (item.type === 'function_item') {
+            const name = item.childForFieldName('name');
+            if (!name) continue;
+            
+            const methodName = name.text;
+            const isExported = hasRustPubVisibility(item);
+            
+            const params = item.childForFieldName('parameters');
+            const returnType = item.childForFieldName('return_type');
+            let sig = params?.text || '()';
+            if (returnType) sig += ` -> ${returnType.text}`;
+            
+            methods.push({
+              kind: 'method',
+              name: methodName,
+              signature: sig,
+              range: {
+                startLine: item.startPosition.row + 1,
+                endLine: item.endPosition.row + 1,
+              },
+              exported: isExported,
+            });
+          }
+        }
+        
+        if (methods.length > 0) {
+          outline.push({
+            kind: 'class',  // impl block as a class-like container
+            name: `impl ${typeName}`,
+            range: {
+              startLine: child.startPosition.row + 1,
+              endLine: child.endPosition.row + 1,
+            },
+            exported: true,  // impl blocks are always "public" in terms of structure
+            children: methods,
+          });
+        }
+        break;
+      }
+    }
+  }
+  
+  return outline;
+}
+
+/**
  * Extract symbol outline from a source file.
  * Returns null if the file type is not supported.
  */
@@ -1181,8 +1347,8 @@ export async function extractOutlineWasm(
   const lang = languageForFile(filePath);
   if (!lang) return null;
   
-  // Supported languages: JS/TS, Python, Go
-  if (!['javascript', 'typescript', 'tsx', 'python', 'go'].includes(lang)) {
+  // Supported languages: JS/TS, Python, Go, Rust
+  if (!['javascript', 'typescript', 'tsx', 'python', 'go', 'rust'].includes(lang)) {
     return null;
   }
   
@@ -1205,6 +1371,9 @@ export async function extractOutlineWasm(
           break;
         case 'go':
           outline = extractOutlineGo(root);
+          break;
+        case 'rust':
+          outline = extractOutlineRust(root);
           break;
         default:
           outline = extractOutlineJsTs(root, lang);
