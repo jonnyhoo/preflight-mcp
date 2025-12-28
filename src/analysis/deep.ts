@@ -70,6 +70,8 @@ export type TestInfo = {
   detected: boolean;
   framework: 'jest' | 'vitest' | 'pytest' | 'go' | 'mocha' | 'unknown' | null;
   testDirs: string[];
+  /** Test files detected by naming pattern (*.test.ts, *.spec.ts, etc.) */
+  testFiles: string[];
   testFileCount: number;
   configFiles: string[];
   hint: string;
@@ -583,14 +585,26 @@ export function buildDeepAnalysis(
 }
 
 /**
+ * Test file naming patterns (language-agnostic)
+ */
+const TEST_FILE_PATTERNS = [
+  /\.test\.(ts|tsx|js|jsx|mjs|cjs)$/i,   // *.test.ts, *.test.js
+  /\.spec\.(ts|tsx|js|jsx|mjs|cjs)$/i,   // *.spec.ts, *.spec.js
+  /_test\.(py|go)$/i,                     // *_test.py, *_test.go
+  /^test_.*\.py$/i,                       // test_*.py (pytest convention)
+  /_test\.rs$/i,                          // *_test.rs (Rust)
+];
+
+/**
  * Detect test setup from file tree statistics.
- * Scans for test directories, test files, and framework config files.
+ * Scans for test directories, test files by naming pattern, and framework config files.
  */
 export function detectTestInfo(
   stats: { byExtension: Record<string, number>; byTopDir?: Record<string, number> },
   filesFound?: Array<{ path: string; name: string }>
 ): TestInfo {
   const testDirs: string[] = [];
+  const testFiles: string[] = [];
   let testFileCount = 0;
   const configFiles: string[] = [];
   let framework: TestInfo['framework'] = null;
@@ -605,6 +619,18 @@ export function detectTestInfo(
       if (testDirPatterns.some(p => dirLower === p || dirLower.endsWith('/' + p))) {
         testDirs.push(dir);
         testFileCount += count;
+      }
+    }
+  }
+  
+  // **CRITICAL FIX**: Detect test files by naming pattern (*.test.ts, *.spec.ts, etc.)
+  // This catches test files that live alongside source files (e.g., src/foo.test.ts)
+  if (filesFound) {
+    for (const file of filesFound) {
+      const isTestFile = TEST_FILE_PATTERNS.some(pattern => pattern.test(file.name));
+      if (isTestFile) {
+        testFiles.push(file.path);
+        testFileCount++;
       }
     }
   }
@@ -633,25 +659,27 @@ export function detectTestInfo(
     }
   }
   
-  // Infer framework from file extensions if not detected from config
-  if (!framework && stats.byExtension) {
-    // Check for test file patterns in extensions
+  // Infer framework from test file patterns if not detected from config
+  if (!framework && testFiles.length > 0) {
+    // Infer from file extensions
+    const hasTsTests = testFiles.some(f => /\.(ts|tsx)$/i.test(f));
+    const hasPyTests = testFiles.some(f => /\.py$/i.test(f));
+    const hasGoTests = testFiles.some(f => /\.go$/i.test(f));
+    
+    if (hasGoTests) framework = 'go';
+    else if (hasPyTests) framework = 'pytest';
+    else if (hasTsTests) framework = 'unknown'; // Could be jest/vitest/mocha
+  }
+  
+  // Fallback: infer from general extension stats
+  if (!framework && testDirs.length > 0 && stats.byExtension) {
     const hasTs = (stats.byExtension['.ts'] ?? 0) > 0 || (stats.byExtension['.tsx'] ?? 0) > 0;
     const hasPy = (stats.byExtension['.py'] ?? 0) > 0;
     const hasGo = (stats.byExtension['.go'] ?? 0) > 0;
     
-    if (testDirs.length > 0 || testFileCount > 0) {
-      if (hasGo) framework = 'go';
-      else if (hasPy) framework = 'pytest';
-      else if (hasTs) framework = 'unknown'; // Could be jest/vitest/mocha
-    }
-  }
-  
-  // Count test files by pattern (approximate from extensions)
-  // This is a heuristic - actual test files may vary
-  if (testFileCount === 0 && stats.byExtension) {
-    // If no test directories found, estimate based on common patterns
-    // This is imprecise but gives a hint
+    if (hasGo) framework = 'go';
+    else if (hasPy) framework = 'pytest';
+    else if (hasTs) framework = 'unknown';
   }
   
   const detected = testDirs.length > 0 || testFileCount > 0 || configFiles.length > 0;
@@ -659,12 +687,17 @@ export function detectTestInfo(
   // Generate hint based on detection results
   let hint: string;
   if (detected) {
-    if (testFileCount > 0) {
-      hint = `Found ${testFileCount} test files. Run preflight_suggest_traces to map code↔test relationships.`;
+    if (testFiles.length > 0) {
+      // Show sample of detected test files
+      const sampleFiles = testFiles.slice(0, 3).map(f => f.split('/').pop()).join(', ');
+      const moreCount = testFiles.length > 3 ? ` (+${testFiles.length - 3} more)` : '';
+      hint = `Found ${testFileCount} test files (${sampleFiles}${moreCount}). Run preflight_suggest_traces to map code↔test relationships.`;
+    } else if (testDirs.length > 0) {
+      hint = `Test directories found (${testDirs.join(', ')}). Run preflight_suggest_traces to map code↔test relationships.`;
     } else if (configFiles.length > 0) {
       hint = `Test config found (${configFiles[0]}). Run preflight_suggest_traces to discover test files.`;
     } else {
-      hint = `Test directories found. Run preflight_suggest_traces to map code↔test relationships.`;
+      hint = `Tests detected. Run preflight_suggest_traces to map code↔test relationships.`;
     }
   } else {
     hint = 'No tests detected. Consider adding tests or check if test files use non-standard naming.';
@@ -674,6 +707,7 @@ export function detectTestInfo(
     detected,
     framework,
     testDirs,
+    testFiles: testFiles.slice(0, 20), // Limit to 20 for output size
     testFileCount,
     configFiles,
     hint,

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.5] - 2025-12-28
+
+### Fixed
+- **Critical: Test detection false negatives** - `detectTestInfo` now scans files by naming pattern (`*.test.ts`, `*.spec.ts`, `*_test.py`, etc.), not just directory names
+  - Previously: Only detected tests in `tests/`, `__tests__/` directories
+  - Now: Detects `src/foo.test.ts`, `lib/bar.spec.js`, `module_test.py` etc.
+  - Fixes "No tests detected" false negative reported for `mcp-deep-think-barl` bundle
+
+### Added
+- `TestInfo.testFiles` field: Returns list of detected test files (up to 20)
+- Enhanced hint messages: Shows sample of detected test file names
+- Full file scanning in `preflight_deep_analyze_bundle` for accurate test detection
+
+### Changed
+- Test detection patterns now include:
+  - `*.test.(ts|tsx|js|jsx|mjs|cjs)` - Jest/Vitest style
+  - `*.spec.(ts|tsx|js|jsx|mjs|cjs)` - Jasmine/Mocha style  
+  - `*_test.(py|go)` - pytest/Go convention
+  - `test_*.py` - pytest convention
+  - `*_test.rs` - Rust convention
+
 ## [0.5.4] - 2025-12-28
 
 ### Added

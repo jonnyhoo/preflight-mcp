@@ -2585,6 +2585,7 @@ version: '0.5.3',
           detected: z.boolean(),
           framework: z.enum(['jest', 'vitest', 'pytest', 'go', 'mocha', 'unknown']).nullable(),
           testDirs: z.array(z.string()),
+          testFiles: z.array(z.string()).describe('Test files detected by naming pattern (*.test.ts, *.spec.ts, etc.)'),
           testFileCount: z.number(),
           configFiles: z.array(z.string()),
           hint: z.string(),
@@ -2834,8 +2835,30 @@ version: '0.5.3',
 
         // 7. Test detection
         if ((opts.includeTests ?? true) && tree) {
-          // Collect files for framework detection
+          // Collect files for test detection (config files + source files)
           const filesFound: Array<{ path: string; name: string }> = [];
+          
+          // Helper to recursively scan for files
+          const scanDir = async (dir: string, relPath: string, maxDepth: number): Promise<void> => {
+            if (maxDepth <= 0) return;
+            try {
+              const entries = await fs.readdir(dir, { withFileTypes: true });
+              for (const entry of entries) {
+                if (entry.name.startsWith('.') || ['node_modules', '__pycache__', 'venv', '.venv', 'dist', 'build'].includes(entry.name)) continue;
+                const fullPath = safeJoin(dir, entry.name);
+                const entryRelPath = relPath ? `${relPath}/${entry.name}` : entry.name;
+                
+                if (entry.isFile()) {
+                  filesFound.push({ path: entryRelPath, name: entry.name });
+                } else if (entry.isDirectory()) {
+                  await scanDir(fullPath, entryRelPath, maxDepth - 1);
+                }
+              }
+            } catch {
+              // Ignore directory access errors
+            }
+          };
+          
           try {
             // Scan for config files at bundle root
             const configPatterns = [
@@ -2853,8 +2876,12 @@ version: '0.5.3',
                 // Config file doesn't exist
               }
             }
+            
+            // **CRITICAL**: Scan repos/ directory to find test files (*.test.ts, *.spec.ts, etc.)
+            // This is essential for detecting tests that live alongside source files
+            await scanDir(paths.reposDir, 'repos', 8); // Scan up to 8 levels deep
           } catch {
-            // Ignore errors during config scanning
+            // Ignore errors during scanning
           }
           
           testInfo = detectTestInfo(
