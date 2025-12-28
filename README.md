@@ -199,7 +199,7 @@ Read file(s) from bundle. Multiple modes:
 
 **NEW in v0.5.3 - Symbol outline & reading:**
 - `outline: true`: Returns symbol structure (function/class/method/interface/type/enum) with line ranges
-  - Supports: `.ts`, `.tsx`, `.js`, `.jsx`, `.py`, `.go`
+  - Supports: `.ts`, `.tsx`, `.js`, `.jsx`, `.py`, `.go`, `.rs`
   - 90%+ token savings for understanding file structure
 - `symbol: "name"`: Read a specific symbol by name
   - Format: `"functionName"` or `"ClassName.methodName"`
