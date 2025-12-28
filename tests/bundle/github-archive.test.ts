@@ -66,6 +66,7 @@ describe('github archive helper', () => {
           ok: true,
           status: 200,
           statusText: 'OK',
+          headers: new Map([['content-length', String(zipBuf.length)]]),
           arrayBuffer: async () => zipBuf,
         } as any;
       }

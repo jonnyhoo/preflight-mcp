@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.4] - 2025-12-28
+
+### Added
+- **Smart Auto-Focus Tree View**: `preflight_repo_tree` now automatically focuses to `repos/{source}/{repo}/norm/` for single-repo bundles
+  - Eliminates the "empty tree" problem where deep bundle structure consumed all depth budget
+  - Shows `📍 Auto-focused to: {path}` indicator when active
+  - Can be disabled with `autoFocusSingleRepo: false`
+- **Consistency Warning in Deep Analyze**: When file tree count differs significantly from dependency graph module count (>50% discrepancy), shows warning: `⚠️ File tree truncated due to depth limit`
+- **Enhanced Trace Discovery**: When tests detected but no trace links exist, `preflight_deep_analyze_bundle` now suggests both `preflight_suggest_traces` and `preflight_trace_upsert` workflow
+
+### Changed
+- `RepoTreeResult` type now includes `autoFocused?: { enabled: boolean; path?: string }` field
+- Improved user guidance when tree/dependency data appears inconsistent
+
 ## [0.5.3] - 2025-12-28
 
 ### Added

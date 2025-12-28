@@ -887,6 +887,10 @@ version: '0.5.3',
             size: z.number().optional(),
           })
         ).optional().describe('Files skipped during indexing (only when showSkippedFiles=true). These files are NOT searchable.'),
+        autoFocused: z.object({
+          enabled: z.boolean(),
+          path: z.string().optional(),
+        }).optional().describe('Auto-focus info for single-repo bundles. When enabled, tree starts from repos/{source}/{repo}/norm instead of repos/.'),
         // RFC v2: Evidence pointers
         evidence: z.array(
           z.object({

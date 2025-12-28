@@ -184,6 +184,15 @@ export function buildDeepAnalysis(
       summaryParts.push(tree.focusedTree);
       summaryParts.push('```');
     }
+    
+    // Proposal 2: Consistency check - warn when tree count differs significantly from deps count
+    if (deps && deps.totalNodes > 0 && tree.totalFiles > 0) {
+      const ratio = tree.totalFiles / deps.totalNodes;
+      if (ratio < 0.5) {
+        summaryParts.push(`⚠️ **Note:** File tree shows ${tree.totalFiles} files but dependency graph found ${deps.totalNodes} modules.`);
+        summaryParts.push(`   Tree is truncated due to depth limit. Use \`focusDir\` or increase \`depth\` to see more files.`);
+      }
+    }
     summaryParts.push('');
   }
   
@@ -487,13 +496,27 @@ export function buildDeepAnalysis(
     });
   }
   
-  // Suggest trace discovery if no traces exist
+  // Proposal 3: Enhanced trace discovery when tests detected but no traces exist
   if (!traces || traces.totalLinks === 0) {
+    // Suggest trace discovery
     nextCommands.push({
       tool: 'preflight_suggest_traces',
       description: 'Auto-discover test↔code relationships',
       args: { bundleId, edge_type: 'tested_by', scope: 'repo' },
     });
+    
+    // If tests detected, also suggest trace_upsert workflow
+    if (testInfo?.detected && testInfo.testFileCount > 0) {
+      nextCommands.push({
+        tool: 'preflight_trace_upsert',
+        description: `💡 Detected ${testInfo.testFileCount}+ test files. After suggest_traces, use this to persist links.`,
+        args: { 
+          bundleId, 
+          edges: [{ from: '<source_file>', to: '<test_file>', type: 'tested_by' }],
+          dryRun: false,
+        },
+      });
+    }
   }
   
   // Suggest focused tree if large directory detected

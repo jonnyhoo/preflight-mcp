@@ -28,6 +28,8 @@ export type RepoTreeResult = {
   tree: string;
   stats: TreeStats;
   entryPointCandidates: EntryPointCandidate[];
+  /** Info about auto-focus behavior for single-repo bundles */
+  autoFocused?: { enabled: boolean; path?: string };
 };
 
 const ENTRY_POINT_PATTERNS: Array<{ pattern: RegExp; type: EntryPointCandidate['type']; priority: number }> = [
@@ -76,6 +78,36 @@ function shouldExclude(relativePath: string, excludePatterns: string[]): boolean
   return false;
 }
 
+/**
+ * Detect if bundle contains a single repository and return its norm path.
+ * Returns null if multiple repos or structure is non-standard.
+ */
+async function detectSingleRepoNormPath(reposDir: string): Promise<string | null> {
+  try {
+    // repos/{source}/{repo}/norm structure
+    const sources = await fs.readdir(reposDir, { withFileTypes: true });
+    const sourceDirs = sources.filter(d => d.isDirectory() && !d.name.startsWith('.'));
+    
+    if (sourceDirs.length !== 1) return null;
+    
+    const sourceDir = path.join(reposDir, sourceDirs[0]!.name);
+    const repos = await fs.readdir(sourceDir, { withFileTypes: true });
+    const repoDirs = repos.filter(d => d.isDirectory() && !d.name.startsWith('.'));
+    
+    if (repoDirs.length !== 1) return null;
+    
+    const normPath = path.join(sourceDir, repoDirs[0]!.name, 'norm');
+    try {
+      await fs.access(normPath);
+      return normPath;
+    } catch {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+}
+
 export async function generateRepoTree(
   bundleRootDir: string,
   bundleId: string,
@@ -89,16 +121,33 @@ export async function generateRepoTree(
     focusDepthBonus?: number;
     /** Track file count per directory */
     showFileCountPerDir?: boolean;
+    /** Auto-focus to norm/ for single-repo bundles (default: true) */
+    autoFocusSingleRepo?: boolean;
   } = {}
-): Promise<RepoTreeResult> {
+): Promise<RepoTreeResult & { autoFocused?: { enabled: boolean; path?: string } }> {
   const depth = options.depth ?? 6;
   const includePatterns = options.include ?? [];
   const excludePatterns = options.exclude ?? ['node_modules', '.git', '__pycache__', '.venv', 'venv', 'dist', 'build', '*.pyc'];
   const focusDir = options.focusDir?.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
   const focusDepthBonus = options.focusDepthBonus ?? 3;
   const showFileCountPerDir = options.showFileCountPerDir ?? false;
+  const autoFocusSingleRepo = options.autoFocusSingleRepo ?? true;
 
   const reposDir = path.join(bundleRootDir, 'repos');
+  
+  // Auto-focus detection for single-repo bundles
+  let effectiveStartDir = reposDir;
+  let autoFocusInfo: { enabled: boolean; path?: string } = { enabled: false };
+  
+  if (autoFocusSingleRepo && !focusDir) {
+    const singleRepoNormPath = await detectSingleRepoNormPath(reposDir);
+    if (singleRepoNormPath) {
+      effectiveStartDir = singleRepoNormPath;
+      // Calculate relative path from reposDir for display
+      const relativePath = path.relative(reposDir, singleRepoNormPath).replace(/\\/g, '/');
+      autoFocusInfo = { enabled: true, path: relativePath };
+    }
+  }
   
   const stats: TreeStats = {
     totalFiles: 0,
@@ -213,14 +262,19 @@ export async function generateRepoTree(
     }
   }
 
-  // Build tree starting from repos directory
+  // Build tree starting from repos directory (or auto-focused path)
   let rootNode: TreeNode | null = null;
   try {
-    await fs.access(reposDir);
-    rootNode = await buildTree(reposDir, 0, '');
+    await fs.access(effectiveStartDir);
+    rootNode = await buildTree(effectiveStartDir, 0, '');
   } catch {
-    // repos directory doesn't exist, try bundle root
-    rootNode = await buildTree(bundleRootDir, 0, '');
+    // Try repos dir, then bundle root as fallbacks
+    try {
+      await fs.access(reposDir);
+      rootNode = await buildTree(reposDir, 0, '');
+    } catch {
+      rootNode = await buildTree(bundleRootDir, 0, '');
+    }
   }
 
   // Generate ASCII tree
@@ -270,6 +324,7 @@ export async function generateRepoTree(
     tree: treeText.trim(),
     stats,
     entryPointCandidates: entryPointCandidates.slice(0, 20), // Limit to top 20
+    autoFocused: autoFocusInfo,
   };
 }
 
@@ -280,6 +335,11 @@ export function formatTreeResult(result: RepoTreeResult): string {
   const lines: string[] = [];
 
   lines.push(`📂 Repository Structure for bundle: ${result.bundleId}`);
+  
+  // Show auto-focus info if enabled
+  if (result.autoFocused?.enabled && result.autoFocused.path) {
+    lines.push(`📍 Auto-focused to: \`${result.autoFocused.path}\` (single-repo bundle)`);
+  }
   lines.push('');
   lines.push('## Directory Tree');
   lines.push('```');
