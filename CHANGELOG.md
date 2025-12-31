@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2025-12-31
+
+### Added
+- **Tree-sitter AST for Extension Point Analysis**:
+  - Python: ABC/Protocol classes, abstract methods, decorators extraction via tree-sitter
+  - Go: interface definitions, func types, type constraints extraction via tree-sitter
+  - Rust: trait definitions, enum variants, macro definitions extraction via tree-sitter
+  - Regex fallback preserved for compatibility
+- **Dynamic Guide Generation**:
+  - `START_HERE.md`: Now includes project summary, entry points, architecture patterns, language-specific search suggestions
+  - `AGENTS.md`: Now includes key extension points, interfaces/traits/protocols, union types, callback hooks, language-specific evidence citation guidance
+
+### Changed
+- `python-analyzer.ts`, `go-analyzer.ts`, `rust-analyzer.ts`: Refactored to use tree-sitter with regex fallback
+- `guides.ts`: Complete rewrite for dynamic content generation based on FACTS.json
+- `treeSitter.ts`: Added `extractExtensionPointsWasm()` for Python/Go/Rust extension point extraction
+
+### Removed
+- **Deleted deprecated tools**:
+  - `preflight_search_bundle` — Use `preflight_search_and_read` instead
+  - `preflight_evidence_dependency_graph` — Use `preflight_dependency_graph` instead
+  - `preflight_trace_export` — trace.json is auto-exported after each trace_upsert
+  - `preflight_suggest_traces` — Use `preflight_deep_analyze_bundle` for test detection
+- Deleted `src/trace/suggest.ts` (only used by preflight_suggest_traces)
+- **Tool count**: Now 21 active tools (was 25 total with 4 deprecated)
+
+## [0.7.0] - 2025-12-31
+
+### Added
+- **Document Parsing**: Parse complex documents and extract structured content
+  - **PDF** — Text, images, tables, equations (OCR supported)
+  - **Word (.docx)** — Full content extraction with formatting
+  - **Excel (.xlsx)** — Sheet data as structured tables
+  - **PowerPoint (.pptx)** — Slide content and embedded media
+  - **HTML** — Clean text extraction with structure preservation
+- **Multimodal Content Processing**: Extract and index visual content from documents
+  - Images with captions, alt-text, and OCR
+  - Tables as structured data with headers and cells
+  - Equations in LaTeX/MathML format
+  - Diagrams (flowcharts, architecture diagrams)
+- **Intelligent Tool Router** (`preflight_router` prompt): LLM-friendly tool selection
+  - Auto-recommend tools based on task description
+  - Workflow suggestions for complex tasks
+  - Bilingual (Chinese/English) keyword support
+- **New Tools**:
+  - `preflight_parse_document` — Parse PDF, Word, Excel, PowerPoint, HTML documents
+  - `preflight_search_modal` — Search multimodal content (images, tables, equations)
+  - `preflight_analyze_modal` — Analyze and process multimodal content in bundles
+  - `preflight_get_overview` — Get project overview in one call (START HERE tool)
+  - `preflight_dependency_graph` — Unified dependency graph tool (replaces evidence_dependency_graph)
+
+### Changed
+- **Tool count**: 21 active tools + 6 prompts (after v0.7.1 cleanup; originally 25 with 4 deprecated)
+- **Bundle layout**: Added `indexes/modal.sqlite3` for multimodal content index
+- **README.zh-CN.md**: Synchronized with English README for v0.7.0 features
+
+### Deprecated
+- `preflight_search_bundle` → Use `preflight_search_and_read` instead
+- `preflight_evidence_dependency_graph` → Use `preflight_dependency_graph` instead
+- `preflight_trace_export` → trace.json is auto-exported after each trace_upsert
+- `preflight_suggest_traces` → Use `preflight_deep_analyze_bundle` for test detection
+
 ## [0.5.6] - 2025-12-28
 
 ### Added

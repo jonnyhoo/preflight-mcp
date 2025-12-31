@@ -2,6 +2,16 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { extractModuleSyntaxWasm } from '../ast/treeSitter.js';
 import { type IngestedFile } from './ingest.js';
+import {
+  createUnifiedAnalyzer,
+  type ExtensionPointInfo,
+  type TypeSemantics,
+  type UnifiedAnalysisResult,
+} from '../analysis/index.js';
+import {
+  createArchitectureSummaryExtractor,
+  type ArchitectureSummary,
+} from '../analysis/architecture-summary.js';
 
 export type BundleFacts = {
   version: string;
@@ -14,6 +24,12 @@ export type BundleFacts = {
   modules?: ModuleInfo[]; // Phase 2: Module analysis
   patterns?: string[]; // Phase 2: Architecture patterns
   techStack?: TechStackInfo; // Phase 2: Technology stack
+  // Phase 3: Extension point analysis
+  extensionPoints?: ExtensionPointInfo[];
+  typeSemantics?: TypeSemantics;
+  extensionSummary?: UnifiedAnalysisResult['summary'];
+  // Phase 4: Architecture overview (gives LLM bird's eye view)
+  architectureSummary?: ArchitectureSummary;
 };
 
 export type LanguageStats = {
@@ -349,6 +365,7 @@ export async function extractBundleFacts(params: {
   bundleRoot: string;
   repos: Array<{ repoId: string; files: IngestedFile[] }>;
   enablePhase2?: boolean; // Enable Phase 2 module analysis
+  enablePhase3?: boolean; // Enable Phase 3 extension point analysis
 }): Promise<BundleFacts> {
   // Aggregate all files
   const allFiles = params.repos.flatMap((r) => r.files);
@@ -377,6 +394,67 @@ export async function extractBundleFacts(params: {
     techStack = analyzeTechStack(languages, dependencies, frameworks);
   }
 
+  // Phase 3: Extension point analysis (optional, uses ts-morph for TS/JS)
+  let extensionPoints: ExtensionPointInfo[] | undefined;
+  let typeSemantics: TypeSemantics | undefined;
+  let extensionSummary: UnifiedAnalysisResult['summary'] | undefined;
+  let architectureSummary: ArchitectureSummary | undefined;
+
+  // Supported extensions for Phase 3 (TypeScript + JavaScript + Python + Go + Rust)
+  const phase3Extensions = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.rs']);
+
+  if (params.enablePhase3) {
+    const analyzer = createUnifiedAnalyzer();
+    
+    // Prepare files for analysis (both TypeScript and JavaScript)
+    const filesToAnalyze = allFiles
+      .filter((f) => f.kind === 'code' && phase3Extensions.has(path.extname(f.repoRelativePath).toLowerCase()))
+      .map((f) => ({
+        absPath: f.bundleNormAbsPath,
+        relativePath: f.bundleNormRelativePath,
+      }));
+    
+    const analysisResult = await analyzer.analyzeFiles(filesToAnalyze);
+    
+    extensionPoints = analysisResult.extensionPoints;
+    typeSemantics = analysisResult.typeSemantics;
+    extensionSummary = analysisResult.summary;
+    
+    analyzer.clearCache();
+
+    // Phase 4: Architecture summary (bird's eye view for LLMs)
+    const archExtractor = createArchitectureSummaryExtractor();
+    const extToLang: Record<string, string> = {
+      '.ts': 'typescript', '.tsx': 'typescript',
+      '.js': 'javascript', '.jsx': 'javascript', '.mjs': 'javascript', '.cjs': 'javascript',
+      '.py': 'python', '.go': 'go', '.rs': 'rust',
+    };
+    
+    const filesForArch = await Promise.all(
+      allFiles
+        .filter((f) => f.kind === 'code' && phase3Extensions.has(path.extname(f.repoRelativePath).toLowerCase()))
+        .map(async (f) => {
+          const content = await fs.readFile(f.bundleNormAbsPath, 'utf8');
+          const ext = path.extname(f.repoRelativePath).toLowerCase();
+          return {
+            absPath: f.bundleNormAbsPath,
+            relativePath: f.bundleNormRelativePath,
+            content,
+            language: extToLang[ext] || 'unknown',
+          };
+        })
+    );
+    
+    architectureSummary = await archExtractor.extractSummary(filesForArch, {
+      extensionPoints: extensionPoints?.map((ep) => ({
+        kind: ep.kind,
+        name: ep.name,
+        file: ep.file,
+        line: ep.line,
+      })),
+    });
+  }
+
   return {
     version: '1.0',
     timestamp: new Date().toISOString(),
@@ -388,6 +466,10 @@ export async function extractBundleFacts(params: {
     modules,
     patterns,
     techStack,
+    extensionPoints,
+    typeSemantics,
+    extensionSummary,
+    architectureSummary,
   };
 }
 

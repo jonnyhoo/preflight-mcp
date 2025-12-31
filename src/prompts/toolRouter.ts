@@ -48,15 +48,6 @@ export const TOOL_REGISTRY: ToolInfo[] = [
 
   // === Search Tools ===
   {
-    name: 'preflight_search_bundle',
-    category: 'search',
-    description: 'Full-text search for code and documentation within a single bundle.',
-    keywords: ['search', 'find', 'query', 'code', 'docs', 'text'],
-    chineseKeywords: ['搜索', '查找', '查询', '代码', '文档', '全文'],
-    requires: 'bundleId',
-    mutating: false,
-  },
-  {
     name: 'preflight_search_by_tags',
     category: 'search',
     description: 'Search across multiple bundles filtered by tags.',
@@ -133,16 +124,16 @@ export const TOOL_REGISTRY: ToolInfo[] = [
 
   // === Analysis Tools ===
   {
-    name: 'preflight_evidence_dependency_graph',
+    name: 'preflight_dependency_graph',
     category: 'analysis',
     description: 'Generate dependency graph showing module relationships.',
     keywords: ['dependency', 'graph', 'import', 'module', 'architecture'],
     chineseKeywords: ['依赖', '图', '架构', '模块', '关系'],
     requires: 'bundleId',
-    mutating: true,
+    mutating: false,
   },
   {
-    name: 'preflight_deep_analysis',
+    name: 'preflight_deep_analyze_bundle',
     category: 'analysis',
     description: 'Comprehensive project analysis (structure, tests, deps).',
     keywords: ['analyze', 'deep', 'comprehensive', 'structure', 'overview'],
@@ -150,16 +141,6 @@ export const TOOL_REGISTRY: ToolInfo[] = [
     requires: 'bundleId',
     mutating: false,
   },
-  {
-    name: 'preflight_extract_outline',
-    category: 'analysis',
-    description: 'Extract code outline (functions, classes, symbols) from file.',
-    keywords: ['outline', 'symbols', 'functions', 'classes', 'structure'],
-    chineseKeywords: ['大纲', '符号', '函数', '类', '结构'],
-    requires: 'bundleId',
-    mutating: false,
-  },
-
   // === Multimodal Tools ===
   {
     name: 'preflight_analyze_modal',
@@ -193,7 +174,7 @@ export const TOOL_REGISTRY: ToolInfo[] = [
 
   // === Navigation Tools ===
   {
-    name: 'preflight_read_files',
+    name: 'preflight_read_file',
     category: 'navigation',
     description: 'Read one or more files from a bundle.',
     keywords: ['read', 'file', 'content', 'view', 'open'],

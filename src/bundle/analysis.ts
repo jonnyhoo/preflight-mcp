@@ -3,7 +3,8 @@ import { type IngestedFile } from './ingest.js';
 import { extractBundleFacts, writeFacts, type BundleFacts } from './facts.js';
 import { logger } from '../logging/logger.js';
 
-export type AnalysisMode = 'none' | 'quick' | 'full'; // 'full' enables Phase 2
+export type AnalysisMode = 'none' | 'quick' | 'full';
+// 'full' enables Phase 2 + Phase 3 (for TypeScript projects)
 
 export type AnalysisResult = {
   facts?: BundleFacts;
@@ -11,8 +12,34 @@ export type AnalysisResult = {
   error?: string;
 };
 
+/** Supported extensions for Phase 3 semantic analysis */
+const PHASE3_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.rs']);
+
+/**
+ * Check if project uses languages supported by Phase 3 analysis.
+ * Supports: TypeScript, JavaScript, Python, Go, Rust
+ * Triggers if >30% of code files are in supported languages.
+ */
+function isPhase3SupportedProject(files: IngestedFile[]): boolean {
+  const codeFiles = files.filter((f) => f.kind === 'code');
+  if (codeFiles.length === 0) return false;
+  
+  const supportedFiles = codeFiles.filter((f) => {
+    const ext = path.extname(f.repoRelativePath).toLowerCase();
+    return PHASE3_EXTENSIONS.has(ext);
+  });
+  
+  return supportedFiles.length / codeFiles.length > 0.3;
+}
+
 /**
  * Run static analysis on a bundle
+ * 
+ * Modes:
+ * - 'none': Skip all analysis
+ * - 'quick': Phase 1 only (basic stats, fast)
+ * - 'full': Phase 1 + Phase 2 + Phase 3 (complete analysis)
+ *           Phase 3 (ts-morph) only runs for TypeScript projects
  */
 export async function analyzeBundleStatic(params: {
   bundleId: string;
@@ -24,11 +51,23 @@ export async function analyzeBundleStatic(params: {
     return {};
   }
 
+  const allFiles = params.repos.flatMap((r) => r.files);
+  const isFull = params.mode === 'full';
+  const isSupported = isPhase3SupportedProject(allFiles);
+  
+  // Phase 3 supports TypeScript, JavaScript, and Python
+  const enablePhase3 = isFull && isSupported;
+  
+  if (enablePhase3) {
+    logger.info('Enabling Phase 3 semantic analysis (supported language detected)');
+  }
+
   try {
     const facts = await extractBundleFacts({
       bundleRoot: params.bundleRoot,
       repos: params.repos,
-      enablePhase2: params.mode === 'full', // Enable Phase 2 module analysis for 'full' mode
+      enablePhase2: isFull,
+      enablePhase3,
     });
 
     const factsPath = path.join(params.bundleRoot, 'analysis', 'FACTS.json');
@@ -162,6 +201,128 @@ export function generateQuickSummary(facts: BundleFacts): string {
     if (facts.techStack.testFrameworks) {
       sections.push(`- Test Frameworks: ${facts.techStack.testFrameworks.join(', ')}`);
     }
+    sections.push('');
+  }
+
+  // Phase 3: Extension Points (if available)
+  if (facts.extensionSummary) {
+    const summary = facts.extensionSummary;
+    sections.push('## Extension Points Analysis');
+    sections.push(`- Total extension points: ${summary.totalExtensionPoints}`);
+    sections.push(`- Files analyzed: ${summary.filesAnalyzed}`);
+    
+    // By kind breakdown
+    if (summary.byKind) {
+      const kinds = Object.entries(summary.byKind)
+        .filter(([_, count]) => count > 0)
+        .map(([kind, count]) => `${kind}: ${count}`);
+      if (kinds.length > 0) {
+        sections.push(`- By type: ${kinds.join(', ')}`);
+      }
+    }
+    
+    // Top extension points (high extensibility score)
+    if (summary.topExtensionPoints && summary.topExtensionPoints.length > 0) {
+      sections.push('\n### Key Extension Points');
+      for (const ep of summary.topExtensionPoints.slice(0, 8)) {
+        sections.push(`- **${ep.name}** (score: ${ep.score}) - ${ep.file}`);
+      }
+    }
+    sections.push('');
+  }
+
+  // Phase 3: Type Semantics (if available)
+  if (facts.typeSemantics) {
+    const ts = facts.typeSemantics;
+    const hasContent = ts.unionTypes.length > 0 || ts.optionalCallbacks.length > 0 || ts.designHints.length > 0;
+    
+    if (hasContent) {
+      sections.push('## Type Semantics');
+      
+      // Union types (format support indicators)
+      if (ts.unionTypes.length > 0) {
+        sections.push(`\n### Union Types (${ts.unionTypes.length})`);
+        for (const ut of ts.unionTypes.slice(0, 5)) {
+          const purpose = ut.inferredPurpose !== 'unknown' ? ` [${ut.inferredPurpose}]` : '';
+          sections.push(`- **${ut.name}**${purpose}: ${ut.members.slice(0, 6).join(' | ')}${ut.members.length > 6 ? ' | ...' : ''}`);
+        }
+      }
+      
+      // Optional callbacks (injection points)
+      if (ts.optionalCallbacks.length > 0) {
+        sections.push(`\n### Optional Callbacks (${ts.optionalCallbacks.length})`);
+        for (const cb of ts.optionalCallbacks.slice(0, 5)) {
+          sections.push(`- **${cb.parent}.${cb.name}?**: ${cb.signature.slice(0, 60)}${cb.signature.length > 60 ? '...' : ''}`);
+        }
+      }
+      
+      // Design hints
+      if (ts.designHints.length > 0) {
+        sections.push(`\n### Design References (${ts.designHints.length})`);
+        for (const hint of ts.designHints.filter(h => h.intent === 'reference').slice(0, 3)) {
+          sections.push(`- ${hint.comment} (${hint.file}:${hint.line})`);
+        }
+      }
+      
+      sections.push('');
+    }
+  }
+
+  // Phase 4: Architecture Summary (if available)
+  if (facts.architectureSummary) {
+    const arch = facts.architectureSummary;
+    sections.push('## Architecture Overview');
+    sections.push(`- Modules analyzed: ${arch.stats.totalModules}`);
+    sections.push(`- Internal dependencies: ${arch.stats.totalInternalDeps}`);
+    sections.push(`- External packages: ${arch.stats.totalExternalDeps}`);
+    sections.push(`- Core types: ${arch.stats.totalCoreTypes}`);
+    sections.push(`- Public APIs: ${arch.stats.totalPublicAPIs}`);
+    
+    // Hub modules (most connected)
+    if (arch.moduleDependencies.hubModules.length > 0) {
+      sections.push('\n### Hub Modules (High Connectivity)');
+      for (const hub of arch.moduleDependencies.hubModules.slice(0, 5)) {
+        sections.push(`- **${hub.module}** (in: ${hub.inDegree}, out: ${hub.outDegree})`);
+      }
+    }
+    
+    // Core types (most used)
+    if (arch.coreTypes.length > 0) {
+      sections.push('\n### Core Types (Most Referenced)');
+      for (const t of arch.coreTypes.slice(0, 8)) {
+        sections.push(`- **${t.name}** (${t.kind}) - ${t.file}:${t.line} [${t.usageCount} refs]`);
+      }
+    }
+    
+    // Interface implementations
+    if (arch.implementations.length > 0) {
+      const withImpls = arch.implementations.filter(i => i.implementations.length > 0);
+      if (withImpls.length > 0) {
+        sections.push('\n### Interface Implementations');
+        for (const iface of withImpls.slice(0, 5)) {
+          const implNames = iface.implementations.map(i => i.name).join(', ');
+          sections.push(`- **${iface.interfaceName}** → ${implNames}`);
+        }
+      }
+    }
+    
+    // Entry points
+    if (arch.entryPoints.length > 0) {
+      sections.push('\n### Entry Points');
+      for (const ep of arch.entryPoints.slice(0, 5)) {
+        sections.push(`- [${ep.kind}] ${ep.file}`);
+      }
+    }
+    
+    // External dependencies (top packages)
+    if (arch.moduleDependencies.externalDeps.length > 0) {
+      sections.push('\n### External Dependencies');
+      sections.push(arch.moduleDependencies.externalDeps.slice(0, 15).join(', '));
+      if (arch.moduleDependencies.externalDeps.length > 15) {
+        sections.push(`... and ${arch.moduleDependencies.externalDeps.length - 15} more`);
+      }
+    }
+    
     sections.push('');
   }
 

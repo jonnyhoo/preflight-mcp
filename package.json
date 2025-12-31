@@ -1,6 +1,6 @@
 {
   "name": "preflight-mcp",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "MCP server that creates evidence-based preflight bundles for GitHub repositories and library docs.",
   "type": "module",
   "license": "AGPL-3.0",
@@ -55,8 +55,8 @@
     "node-cron": "^4.2.1",
     "officeparser": "^5.2.2",
     "pdf-parse": "^2.4.5",
-    "preflight-mcp": "file:",
     "scribe.js-ocr": "^0.9.3",
+    "ts-morph": "^27.0.2",
     "unpdf": "^1.4.0",
     "web-tree-sitter": "^0.26.3",
     "zod": "^4.2.1"

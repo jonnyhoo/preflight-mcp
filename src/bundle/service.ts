@@ -1396,10 +1396,17 @@ async function createBundleInternal(
   await writeManifest(tmpPaths.manifestPath, manifest);
 
   // Guides.
-  await writeAgentsMd(tmpPaths.agentsPath);
+  await writeAgentsMd({
+    targetPath: tmpPaths.agentsPath,
+    bundleId,
+    bundleRootDir: tmpPaths.rootDir,
+    repos: reposSummary.map((r) => ({ id: r.id, headSha: r.headSha })),
+    libraries: librariesSummary,
+  });
   await writeStartHereMd({
     targetPath: tmpPaths.startHerePath,
     bundleId,
+    bundleRootDir: tmpPaths.rootDir,
     repos: reposSummary.map((r) => ({ id: r.id, headSha: r.headSha })),
     libraries: librariesSummary,
   });
@@ -1787,7 +1794,13 @@ export async function repairBundle(cfg: PreflightConfig, bundleId: string, optio
   }
 
   if (rebuildGuidesOpt && needsAgents) {
-    await writeAgentsMd(paths.agentsPath);
+    await writeAgentsMd({
+      targetPath: paths.agentsPath,
+      bundleId,
+      bundleRootDir: paths.rootDir,
+      repos: (manifest.repos ?? []).map((r) => ({ id: r.id, headSha: r.headSha })),
+      libraries: manifest.libraries as Context7LibrarySummary[] | undefined,
+    });
     actionsTaken.push('writeAgentsMd');
   }
 
@@ -1795,6 +1808,7 @@ export async function repairBundle(cfg: PreflightConfig, bundleId: string, optio
     await writeStartHereMd({
       targetPath: paths.startHerePath,
       bundleId,
+      bundleRootDir: paths.rootDir,
       repos: (manifest.repos ?? []).map((r) => ({ id: r.id, headSha: r.headSha })),
       libraries: manifest.libraries as Context7LibrarySummary[] | undefined,
     });
@@ -2007,10 +2021,17 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
 
   // Regenerate guides + overview.
   reportProgress('generating', 90, 'Regenerating guides and overview...');
-  await writeAgentsMd(paths.agentsPath);
+  await writeAgentsMd({
+    targetPath: paths.agentsPath,
+    bundleId,
+    bundleRootDir: paths.rootDir,
+    repos: reposSummary.map((r) => ({ id: r.id, headSha: r.headSha })),
+    libraries: librariesSummary,
+  });
   await writeStartHereMd({
     targetPath: paths.startHerePath,
     bundleId,
+    bundleRootDir: paths.rootDir,
     repos: reposSummary.map((r) => ({ id: r.id, headSha: r.headSha })),
     libraries: librariesSummary,
   });

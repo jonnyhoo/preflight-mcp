@@ -1387,3 +1387,404 @@ export async function extractOutlineWasm(
     parser.delete();
   }
 }
+
+// ============================================================================
+// Extension Point Extraction (for Python, Go, Rust)
+// ============================================================================
+
+export type ExtensionPointKind = 
+  | 'abstract-class'
+  | 'protocol'
+  | 'abstract-method'
+  | 'interface'
+  | 'func-type'
+  | 'type-constraint'
+  | 'trait'
+  | 'enum'
+  | 'macro';
+
+export type ExtensionPoint = {
+  kind: ExtensionPointKind;
+  name: string;
+  line: number;
+  endLine: number;
+  isPublic: boolean;
+  methods?: Array<{
+    name: string;
+    line: number;
+    signature?: string;
+    isAbstract?: boolean;
+    isDefault?: boolean;
+  }>;
+  bases?: string[];        // For Python classes
+  decorators?: string[];   // For Python
+  supertraits?: string[];  // For Rust traits
+  variants?: string[];     // For Rust enums
+  embedded?: string[];     // For Go interfaces
+  generics?: string;       // Generic parameters
+};
+
+/**
+ * Extract Python classes that are ABCs or Protocols.
+ */
+function extractExtensionPointsPython(root: Node): ExtensionPoint[] {
+  const points: ExtensionPoint[] = [];
+  
+  for (const node of root.namedChildren) {
+    // Handle decorated definitions
+    let classNode: Node | null = null;
+    let decorators: string[] = [];
+    
+    if (node.type === 'decorated_definition') {
+      // Collect decorators
+      for (const child of node.namedChildren) {
+        if (child.type === 'decorator') {
+          const decoratorName = child.descendantsOfType('identifier')[0]?.text ||
+                               child.descendantsOfType('attribute')[0]?.text || '';
+          if (decoratorName) decorators.push(decoratorName);
+        } else if (child.type === 'class_definition') {
+          classNode = child;
+        }
+      }
+    } else if (node.type === 'class_definition') {
+      classNode = node;
+    }
+    
+    if (!classNode) continue;
+    
+    const className = classNode.childForFieldName('name')?.text;
+    if (!className) continue;
+    
+    // Extract base classes
+    const bases: string[] = [];
+    const superclassNode = classNode.childForFieldName('superclasses');
+    if (superclassNode) {
+      for (const arg of superclassNode.namedChildren) {
+        if (arg.type === 'identifier' || arg.type === 'attribute') {
+          bases.push(arg.text);
+        }
+      }
+    }
+    
+    // Check if it's an ABC or Protocol
+    const isABC = bases.some(b => ['ABC', 'abc.ABC'].includes(b));
+    const isProtocol = bases.some(b => ['Protocol', 'typing.Protocol', 'typing_extensions.Protocol'].includes(b));
+    
+    if (!isABC && !isProtocol) continue;
+    
+    // Extract methods
+    const methods: ExtensionPoint['methods'] = [];
+    const body = classNode.childForFieldName('body');
+    if (body) {
+      for (const child of body.namedChildren) {
+        let funcNode: Node | null = null;
+        let methodDecorators: string[] = [];
+        
+        if (child.type === 'decorated_definition') {
+          for (const sub of child.namedChildren) {
+            if (sub.type === 'decorator') {
+              const name = sub.descendantsOfType('identifier')[0]?.text ||
+                          sub.descendantsOfType('attribute')[0]?.text || '';
+              if (name) methodDecorators.push(name);
+            } else if (sub.type === 'function_definition') {
+              funcNode = sub;
+            }
+          }
+        } else if (child.type === 'function_definition') {
+          funcNode = child;
+        }
+        
+        if (!funcNode) continue;
+        
+        const methodName = funcNode.childForFieldName('name')?.text;
+        if (!methodName) continue;
+        
+        const isAbstract = methodDecorators.some(d => 
+          ['abstractmethod', 'abc.abstractmethod'].includes(d)
+        );
+        
+        // Build signature
+        const params = funcNode.childForFieldName('parameters')?.text || '()';
+        const returnType = funcNode.childForFieldName('return_type')?.text;
+        let signature = params;
+        if (returnType) signature += ` -> ${returnType}`;
+        
+        methods.push({
+          name: methodName,
+          line: funcNode.startPosition.row + 1,
+          signature,
+          isAbstract,
+        });
+      }
+    }
+    
+    points.push({
+      kind: isProtocol ? 'protocol' : 'abstract-class',
+      name: className,
+      line: classNode.startPosition.row + 1,
+      endLine: classNode.endPosition.row + 1,
+      isPublic: !className.startsWith('_'),
+      methods: methods.length > 0 ? methods : undefined,
+      bases,
+      decorators: decorators.length > 0 ? decorators : undefined,
+    });
+  }
+  
+  return points;
+}
+
+/**
+ * Extract Go interfaces and func types.
+ */
+function extractExtensionPointsGo(root: Node): ExtensionPoint[] {
+  const points: ExtensionPoint[] = [];
+  
+  for (const node of root.namedChildren) {
+    if (node.type !== 'type_declaration') continue;
+    
+    for (const spec of node.descendantsOfType('type_spec')) {
+      const nameNode = spec.childForFieldName('name');
+      const typeNode = spec.childForFieldName('type');
+      if (!nameNode || !typeNode) continue;
+      
+      const name = nameNode.text;
+      const isPublic = /^[A-Z]/.test(name);
+      
+      if (typeNode.type === 'interface_type') {
+        // Extract interface methods and embedded interfaces
+        const methods: ExtensionPoint['methods'] = [];
+        const embedded: string[] = [];
+        
+        for (const child of typeNode.namedChildren) {
+          if (child.type === 'method_spec') {
+            const methodName = child.childForFieldName('name')?.text;
+            if (!methodName) continue;
+            
+            const params = child.childForFieldName('parameters')?.text || '()';
+            const result = child.childForFieldName('result')?.text || '';
+            
+            methods.push({
+              name: methodName,
+              line: child.startPosition.row + 1,
+              signature: `${params} ${result}`.trim(),
+            });
+          } else if (child.type === 'type_identifier' || child.type === 'qualified_type') {
+            // Embedded interface
+            embedded.push(child.text);
+          }
+        }
+        
+        // Check for type constraints (Go 1.18+)
+        const bodyText = typeNode.text;
+        const isConstraint = bodyText.includes('|');
+        
+        if (isConstraint) {
+          // Parse type constraint members
+          const constraintBody = bodyText.replace(/^interface\s*\{/, '').replace(/\}$/, '').trim();
+          const variants = constraintBody.split('|').map(s => s.trim()).filter(Boolean);
+          
+          points.push({
+            kind: 'type-constraint',
+            name,
+            line: spec.startPosition.row + 1,
+            endLine: spec.endPosition.row + 1,
+            isPublic,
+            variants,
+          });
+        } else {
+          points.push({
+            kind: 'interface',
+            name,
+            line: spec.startPosition.row + 1,
+            endLine: spec.endPosition.row + 1,
+            isPublic,
+            methods: methods.length > 0 ? methods : undefined,
+            embedded: embedded.length > 0 ? embedded : undefined,
+          });
+        }
+      } else if (typeNode.type === 'function_type') {
+        // func type (callback pattern)
+        const params = typeNode.childForFieldName('parameters')?.text || '()';
+        const result = typeNode.childForFieldName('result')?.text || '';
+        
+        points.push({
+          kind: 'func-type',
+          name,
+          line: spec.startPosition.row + 1,
+          endLine: spec.endPosition.row + 1,
+          isPublic,
+          methods: [{
+            name: 'call',
+            line: spec.startPosition.row + 1,
+            signature: `${params} ${result}`.trim(),
+          }],
+        });
+      }
+    }
+  }
+  
+  return points;
+}
+
+/**
+ * Extract Rust traits and enums.
+ */
+function extractExtensionPointsRust(root: Node): ExtensionPoint[] {
+  const points: ExtensionPoint[] = [];
+  
+  for (const node of root.namedChildren) {
+    if (node.type === 'trait_item') {
+      const name = node.childForFieldName('name')?.text;
+      if (!name) continue;
+      
+      const isPublic = hasRustPubVisibility(node);
+      
+      // Extract type parameters
+      const typeParams = node.childForFieldName('type_parameters')?.text;
+      
+      // Extract supertraits
+      const supertraits: string[] = [];
+      const boundsNode = node.childForFieldName('bounds');
+      if (boundsNode) {
+        for (const child of boundsNode.namedChildren) {
+          if (child.type === 'type_identifier' || child.type === 'scoped_type_identifier') {
+            supertraits.push(child.text);
+          }
+        }
+      }
+      
+      // Extract methods from trait body
+      const methods: ExtensionPoint['methods'] = [];
+      const body = node.childForFieldName('body');
+      if (body) {
+        for (const item of body.namedChildren) {
+          if (item.type === 'function_signature_item' || item.type === 'function_item') {
+            const methodName = item.childForFieldName('name')?.text;
+            if (!methodName) continue;
+            
+            const params = item.childForFieldName('parameters')?.text || '()';
+            const returnType = item.childForFieldName('return_type')?.text;
+            let signature = `fn ${methodName}${params}`;
+            if (returnType) signature += ` -> ${returnType}`;
+            
+            // function_signature_item = no default impl, function_item = has default impl
+            const isDefault = item.type === 'function_item';
+            
+            methods.push({
+              name: methodName,
+              line: item.startPosition.row + 1,
+              signature,
+              isDefault,
+            });
+          }
+        }
+      }
+      
+      points.push({
+        kind: 'trait',
+        name,
+        line: node.startPosition.row + 1,
+        endLine: node.endPosition.row + 1,
+        isPublic,
+        methods: methods.length > 0 ? methods : undefined,
+        supertraits: supertraits.length > 0 ? supertraits : undefined,
+        generics: typeParams,
+      });
+    } else if (node.type === 'enum_item') {
+      const name = node.childForFieldName('name')?.text;
+      if (!name) continue;
+      
+      const isPublic = hasRustPubVisibility(node);
+      
+      // Extract type parameters
+      const typeParams = node.childForFieldName('type_parameters')?.text;
+      
+      // Extract variants
+      const variants: string[] = [];
+      const body = node.childForFieldName('body');
+      if (body) {
+        for (const item of body.namedChildren) {
+          if (item.type === 'enum_variant') {
+            const variantName = item.childForFieldName('name')?.text;
+            if (variantName) variants.push(variantName);
+          }
+        }
+      }
+      
+      points.push({
+        kind: 'enum',
+        name,
+        line: node.startPosition.row + 1,
+        endLine: node.endPosition.row + 1,
+        isPublic,
+        variants: variants.length > 0 ? variants : undefined,
+        generics: typeParams,
+      });
+    } else if (node.type === 'macro_definition') {
+      const name = node.childForFieldName('name')?.text;
+      if (!name) continue;
+      
+      points.push({
+        kind: 'macro',
+        name,
+        line: node.startPosition.row + 1,
+        endLine: node.endPosition.row + 1,
+        isPublic: true, // macro_rules! are always usable where visible
+      });
+    }
+  }
+  
+  return points;
+}
+
+/**
+ * Extract extension points from a source file using tree-sitter.
+ * Returns null if the file type is not supported.
+ */
+export async function extractExtensionPointsWasm(
+  filePath: string,
+  normalizedContent: string
+): Promise<{ language: TreeSitterLanguageId; extensionPoints: ExtensionPoint[] } | null> {
+  const lang = languageForFile(filePath);
+  if (!lang) return null;
+  
+  // Only supported for Python, Go, Rust
+  if (!['python', 'go', 'rust'].includes(lang)) {
+    return null;
+  }
+  
+  const language = await loadLanguage(lang);
+  
+  const parser = new Parser();
+  try {
+    parser.setLanguage(language);
+    
+    const tree = parser.parse(normalizedContent);
+    if (!tree) return { language: lang, extensionPoints: [] };
+    
+    try {
+      const root = tree.rootNode;
+      let extensionPoints: ExtensionPoint[];
+      
+      switch (lang) {
+        case 'python':
+          extensionPoints = extractExtensionPointsPython(root);
+          break;
+        case 'go':
+          extensionPoints = extractExtensionPointsGo(root);
+          break;
+        case 'rust':
+          extensionPoints = extractExtensionPointsRust(root);
+          break;
+        default:
+          extensionPoints = [];
+      }
+      
+      return { language: lang, extensionPoints };
+    } finally {
+      tree.delete();
+    }
+  } finally {
+    parser.delete();
+  }
+}

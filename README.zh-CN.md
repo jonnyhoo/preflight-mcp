@@ -1,6 +1,6 @@
-# preflight-mcp
+﻿# preflight-mcp
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://opensource.org/licenses/AGPL-3.0)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org/)
 [![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-blue)](https://modelcontextprotocol.io/)
 [![npm version](https://img.shields.io/npm/v/preflight-mcp)](https://www.npmjs.com/package/preflight-mcp)
@@ -20,6 +20,32 @@ Preflight-MCP 为 GitHub 仓库创建可搜索的知识库，让 Claude/GPT/Curs
 | 🔍 AI 找不到相关文件 | 全文搜索 + 依赖图 |
 | 🧩 大项目里迷失方向 | 自动生成 `START_HERE.md` 和 `OVERVIEW.md` |
 | 🔗 不知道哪些测试覆盖哪些代码 | 追溯链接：代码↔测试↔文档 |
+
+|| 📄 不能读取 PDF/Word 文档 | **新** 文档解析与多模态提取 |
+|| 🖼️ 图片/表格被忽略 | **新** 多模态内容搜索 |
+
+## v0.7.0 新特性
+
+### 📄 文档解析
+解析复杂文档并提取结构化内容：
+- **PDF** — 文本、图片、表格、公式（支持 OCR）
+- **Word (.docx)** — 完整内容提取，保留格式
+- **Excel (.xlsx)** — 工作表数据转结构化表格
+- **PowerPoint (.pptx)** — 幻灯片内容和嵌入媒体
+- **HTML** — 干净的文本提取，保留结构
+
+### 🖼️ 多模态内容处理
+从文档中提取和索引视觉内容：
+- **图片** — 描述、alt 文本、提取文字（OCR）
+- **表格** — 结构化数据，含表头和单元格
+- **公式** — LaTeX/MathML 提取
+- **图表** — 流程图、架构图
+
+### 🧠 智能工具路由
+对 LLM 友好的工具选择器，支持中英文关键词：
+- 根据任务描述自动推荐工具
+- 复杂任务的工作流建议
+- 中文/英文关键词支持
 
 ## 效果演示
 
@@ -51,7 +77,7 @@ Preflight：🔗 追溯链接：
 - 🔗 **追溯链接** — 追踪代码↔测试↔文档关系
 - 📖 **自动生成指南** — `START_HERE.md`、`AGENTS.md`、`OVERVIEW.md`
 - ☁️ **云端同步** — 多路径镜像备份
-- ⚡ **15 个 MCP 工具 + 5 个 prompts** — 完整的代码探索工具集
+- ⚡ **21 个 MCP 工具 + 6 个 prompts** — 完整的代码探索工具集
 
 <details>
 <summary><b>全部功能（点击展开）</b></summary>
@@ -72,11 +98,12 @@ Preflight：🔗 追溯链接：
 ## 目录
 
 - [为什么需要 Preflight](#为什么需要-preflight)
+- [v0.7.0 新特性](#v070-新特性)
 - [效果演示](#效果演示)
 - [核心功能](#核心功能)
 - [快速开始](#quick-start)
-- [工具](#tools-15-total)
-- [Prompts](#prompts-5-total)
+- [工具](#tools-21-active)
+- [Prompts](#prompts-6-total)
 - [环境变量](#environment-variables)
 - [贡献指南](#contributing)
 
@@ -181,7 +208,7 @@ npm run smoke
 - 列表与清理逻辑只接受 UUID v4 作为 bundleId
 - 会自动过滤 `#recycle`、`tmp`、`.deleting` 等非 bundle 目录
 
-## Tools (15 total)
+## Tools (19 active)
 
 ### `preflight_list_bundles`
 列出所有 bundle。
@@ -207,7 +234,7 @@ npm run smoke
 - `topics`: `["routing", "api"]`（Context7 主题过滤；可选）
 - `ifExists`: `"error" | "returnExisting" | "updateExisting" | "createNew"`
 
-**💡 提示**：对于代码仓库，创建 bundle 后可进一步使用 `preflight_evidence_dependency_graph` 获取依赖图，或使用 `preflight_trace_upsert` 记录代码←→需求/测试的追溯链接。
+**💡 提示**：对于代码仓库，创建 bundle 后可进一步使用 `preflight_dependency_graph` 获取依赖图，或使用 `preflight_trace_upsert` 记录代码←→需求/测试的追溯链接。
 
 ### `preflight_read_file`
 从 bundle 读取文件。多种模式：
@@ -259,20 +286,6 @@ npm run smoke
 - 重建 `indexes/search.sqlite3`、`START_HERE.md`、`AGENTS.md`、`OVERVIEW.md`（当缺失/为空时）
 - 适用场景：搜索因索引损坏失败、bundle 文件被部分删除等
 
-### `preflight_search_bundle`
-跨已抓取的文档/代码进行全文搜索（基于行的 SQLite FTS5）。
-- 触发词：「搜索bundle」「在仓库中查找」「搜代码」
-
-重要：**此工具是严格只读的**。
-- 更新：先调用 `preflight_update_bundle`，再搜索
-- 修复：先调用 `preflight_repair_bundle`，再搜索
-
-**新过滤选项**（v0.3.1+）：
-- `excludePatterns`：排除匹配模式的路径（如 `["**/tests/**", "**/__pycache__/**"]`）
-- `maxSnippetLength`：限制每个结果的代码片段长度（50-500 字符），减少 token 消耗
-
-**已弃用参数**：`ensureFresh`、`autoRepairIndex`、`maxAgeHours` 已弃用，使用时会返回警告。
-
 ### `preflight_search_by_tags`
 跨多个 bundle 按标签过滤搜索（基于行的 SQLite FTS5）。
 - 触发词：「search in MCP bundles」「search in all bundles」「在MCP项目中搜索」「搜索所有agent」
@@ -286,24 +299,6 @@ npm run smoke
 - `scope`：搜索范围（`docs`、`code` 或 `all`）
 - `limit`：跨所有 bundle 的最大命中数
 
-### `preflight_evidence_dependency_graph`
-生成目标文件/符号的「基于证据」的依赖图（imports + references）。
-- 输出确定性（best-effort），并为每条边提供可追溯 source range
-- `PREFLIGHT_AST_ENGINE=wasm` 时使用 Tree-sitter；否则回退到正则抽取
-
-**边类型**（v0.2.7+）：
-- `edgeTypes: "imports"`（默认）：仅返回基于 AST 的 import 边（高置信度，推荐）
-- `edgeTypes: "all"`：包含基于 FTS 的 reference 边（名称匹配，可能有误报）
-
-**缓存透明化**（v0.2.7+）：
-- 响应包含 `meta.cacheInfo`：`fromCache`、`generatedAt`、`cacheAgeMs`
-- 使用 `force: true` 可重新生成缓存的全局图
-
-**大文件处理**：
-- `options.maxFileSizeBytes`（默认：1MB）：跳过超过此大小的文件
-- `options.largeFileStrategy`：`"skip"`（默认）或 `"truncate"`
-- `options.excludeExtensions`：从 reference 搜索中排除非代码文件（默认：`.json`、`.md`、`.txt`、`.yml` 等）
-
 ### `preflight_trace_upsert`
 写入/更新 bundle 级 traceability links（commit↔ticket、symbol↔test、code↔doc 等）。
 
@@ -311,11 +306,6 @@ npm run smoke
 查询 traceability links。
 - 无匹配边时返回 `reason` 和 `nextSteps`（帮助 LLM 决定下一步）
 - 提供 `bundleId` 时更快；省略时可跨 bundle 扫描
-
-### `preflight_trace_export`
-导出 trace links 到 `trace/trace.json`。
-- 注意：每次 `trace_upsert` 后会自动导出，此工具仅用于手动刷新
-- 触发词：「导出trace」「刷新trace.json」
 
 ### `preflight_cleanup_orphans`
 删除不完整或损坏的 bundle（缺少有效 manifest.json）。
@@ -332,9 +322,65 @@ npm run smoke
 - 通过 `taskId`、`fingerprint` 或 `repos` 查询
 - 显示：阶段、进度百分比、消息、已用时间
 
-## Prompts（5 个）
+### 文档与多模态工具 (v0.7.0 新增)
+
+#### `preflight_parse_document`
+解析 PDF、Word、Excel、PowerPoint 或 HTML 文档。
+- 提取文本、图片、表格、公式
+- 支持扫描文档 OCR
+- 输出格式：markdown、json、text
+- 触发词：「解析文档」「parse document」「read PDF」
+
+#### `preflight_search_modal`
+搜索 bundle 中的多模态内容（图片、表格、公式）。
+- 全文搜索描述
+- 按内容类型过滤
+- 基于关键词过滤
+- 触发词：「search images」「找图片」「search tables」
+
+#### `preflight_analyze_modal`
+分析和处理 bundle 中的多模态内容。
+- 图片描述和 OCR
+- 表格结构提取
+- 公式解析
+- 触发词：「analyze images」「分析表格」
+
+### 核心 Bundle 工具
+
+#### `preflight_get_overview`
+⭐ **从这里开始** - 一次调用获取项目概览。
+- 返回：OVERVIEW.md + START_HERE.md + AGENTS.md
+- 探索任何 bundle 的最简入口
+- 触发词：「了解项目」「项目概览」「what is this project」
+
+#### `preflight_dependency_graph`
+获取或生成 bundle 的依赖图。
+- 如未缓存则自动生成，如有缓存则返回缓存版本
+- 触发词：「show dependencies」「看依赖图」「import graph」
+
+#### `preflight_search_and_read`
+搜索 + 读取合一 - **主要搜索工具**。
+- RFC v2 统一响应格式：`ok`, `meta`, `data`, `evidence[]`
+- 触发词：「search and show code」「搜索并读取」
+
+#### `preflight_deep_analyze_bundle`
+一次调用的深度分析，带测试检测。
+- 返回统一证据包
+- 自动生成声明及证据
+- 触发词：「deep analyze」「深度分析」
+
+#### `preflight_validate_report`
+验证声明和证据链的可审计性。
+
+## Prompts（6 个）
 
 MCP prompts 提供交互式引导。调用这些 prompt 获取使用说明和示例。
+
+### `preflight_router` (v0.7.0 新增)
+智能工具选择器。
+- 根据任务描述自动推荐工具
+- 工作流建议
+- 触发词：「用哪个工具」「which tool should I use」「推荐工具」
 
 ### `preflight_menu`
 主菜单，显示所有 Preflight 功能。
@@ -522,15 +568,7 @@ export PREFLIGHT_STORAGE_DIRS="$HOME/OneDrive/preflight;$HOME/Dropbox/preflight"
 
 ## License
 
-本项目基于 MIT License 发布，详见 [LICENSE](./LICENSE)。
-
-MIT License 允许你：
-- 商用
-- 修改
-- 分发
-- 私用
-
-唯一要求是保留原始版权与许可证声明。
+本项目基于 AGPL-3.0 License 发布，详见 [LICENSE](./LICENSE)。
 
 ## Acknowledgments
 
