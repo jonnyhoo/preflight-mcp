@@ -43,6 +43,14 @@ import { extractOutlineWasm, type SymbolOutline } from './ast/treeSitter.js';
 // RFC v2: New aggregation tools
 import { ReadFilesInputSchema, createReadFilesHandler, readFilesToolDescription } from './tools/readFiles.js';
 import { SearchAndReadInputSchema, createSearchAndReadHandler, searchAndReadToolDescription } from './tools/searchAndRead.js';
+// Modal content analysis
+import { AnalyzeModalInputSchema, createAnalyzeModalHandler, analyzeModalToolDescription, type AnalyzeModalInput } from './tools/analyzeModal.js';
+// Document parsing
+import { ParseDocumentInputSchema, createParseDocumentHandler, parseDocumentToolDescription, type ParseDocumentInput } from './tools/parseDocument.js';
+// Multimodal search
+import { SearchModalInputSchema, createSearchModalHandler, searchModalToolDescription, type SearchModalInput } from './tools/searchModal.js';
+// Tool router
+import { generateRoutingPrompt, routeQuery, suggestWorkflow } from './prompts/toolRouter.js';
 
 const CreateRepoInputSchema = z.union([
   z.object({
@@ -3707,8 +3715,150 @@ export async function startServer(): Promise<void> {
   );
 
   // ============================================================
+  // MODAL CONTENT ANALYSIS
+  // ============================================================
+
+  server.registerTool(
+    'preflight_analyze_modal',
+    {
+      title: analyzeModalToolDescription.title,
+      description: analyzeModalToolDescription.description,
+      inputSchema: AnalyzeModalInputSchema,
+      outputSchema: {
+        bundleId: z.string(),
+        scope: z.enum(['images', 'tables', 'equations', 'all']),
+        totalItems: z.number(),
+        processedItems: z.number(),
+        successCount: z.number(),
+        errorCount: z.number(),
+        items: z.array(z.object({
+          type: z.string(),
+          path: z.string().optional(),
+          success: z.boolean(),
+          error: z.string().optional(),
+          description: z.string().optional(),
+          extractedText: z.string().optional(),
+          entityInfo: z.object({
+            entityName: z.string().optional(),
+            entityType: z.string().optional(),
+            summary: z.string().optional(),
+            keywords: z.array(z.string()).optional(),
+          }).optional(),
+          processingTimeMs: z.number(),
+        })),
+      },
+      annotations: {
+        readOnlyHint: true,
+      },
+    },
+    async (args: AnalyzeModalInput) => {
+      const handler = createAnalyzeModalHandler({
+        findBundleStorageDir: (dirs, id) => findBundleStorageDir(dirs, id),
+        getBundlePathsForId,
+        assertBundleComplete: (id) => assertBundleComplete(cfg, id),
+        storageDirs: cfg.storageDirs,
+      });
+      const result = await handler(args);
+      // Convert to MCP tool response format
+      return {
+        content: [{ type: 'text', text: result.text }],
+        structuredContent: result.structuredContent,
+      };
+    }
+  );
+
+  // ============================================================
+  // DOCUMENT PARSING
+  // ============================================================
+
+  server.registerTool(
+    'preflight_parse_document',
+    {
+      title: parseDocumentToolDescription.title,
+      description: parseDocumentToolDescription.description,
+      inputSchema: ParseDocumentInputSchema,
+      annotations: {
+        readOnlyHint: true,
+      },
+    },
+    async (args: ParseDocumentInput) => {
+      const handler = createParseDocumentHandler();
+      const result = await handler(args);
+      return {
+        content: [{ type: 'text', text: result.text }],
+      };
+    }
+  );
+
+  // ============================================================
+  // MULTIMODAL SEARCH
+  // ============================================================
+
+  server.registerTool(
+    'preflight_search_modal',
+    {
+      title: searchModalToolDescription.title,
+      description: searchModalToolDescription.description,
+      inputSchema: SearchModalInputSchema,
+      annotations: {
+        readOnlyHint: true,
+      },
+    },
+    async (args: SearchModalInput) => {
+      const handler = createSearchModalHandler({
+        findBundleStorageDir: (dirs, id) => findBundleStorageDir(dirs, id),
+        getBundlePathsForId,
+        storageDirs: cfg.storageDirs,
+      });
+      const result = await handler(args);
+      return {
+        content: [{ type: 'text', text: result.text }],
+      };
+    }
+  );
+
+  // ============================================================
   // PROMPTS - Interactive guidance for users
   // ============================================================
+
+  // Tool Router prompt - intelligent tool selection
+  server.registerPrompt(
+    'preflight_router',
+    {
+      title: 'Tool Router',
+      description: 'Intelligent tool selection guide. Use when: "which tool should I use", "help me choose", "what tool for X", "推荐工具", "用哪个工具".',
+      argsSchema: {
+        task: z.string().optional().describe('Description of what you want to accomplish'),
+      },
+    },
+    async (args) => {
+      let content = generateRoutingPrompt();
+      
+      if (args.task) {
+        const suggestedTools = routeQuery(args.task);
+        const workflow = suggestWorkflow(args.task);
+        
+        content += `\n\n---\n## Task Analysis: "${args.task}"\n\n`;
+        content += `**Recommended tools:**\n`;
+        for (const tool of suggestedTools) {
+          content += `- \`${tool.name}\` - ${tool.description}\n`;
+        }
+        content += `\n**Suggested workflow:**\n`;
+        for (const step of workflow) {
+          content += `${step}\n`;
+        }
+      }
+      
+      return {
+        messages: [
+          {
+            role: 'user',
+            content: { type: 'text', text: content },
+          },
+        ],
+      };
+    }
+  );
 
   // Main menu prompt - shows all available features
   server.registerPrompt(
@@ -3734,14 +3884,21 @@ export async function startServer(): Promise<void> {
 **2. 🔍 搜索代码/文档**
 在已索引的项目中全文搜索代码和文档
 
-**3. 📋 管理 bundles**
+**3. 📄 解析文档**
+解析 PDF、Word、Excel 等文档，提取文本和多模态内容
+
+**4. 🖼️ 多模态搜索**
+搜索图片、表格、公式等视觉内容
+
+**5. 📋 管理 bundles**
 列出、更新、修复、删除已有的 bundle
 
-**4. 🔗 追溯链接**
+**6. 🔗 追溯链接**
 查询/创建代码-测试-文档之间的关联关系
 
 ---
-请输入功能编号 (1-4) 或直接描述您的需求。`,
+💡 输入功能编号 (1-6) 或直接描述您的需求
+💡 不确定用哪个工具？使用 preflight_router 获取智能推荐`,
             },
           },
         ],
