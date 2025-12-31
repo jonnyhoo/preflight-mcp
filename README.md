@@ -1,6 +1,6 @@
 # preflight-mcp
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://opensource.org/licenses/AGPL-3.0)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org/)
 [![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-blue)](https://modelcontextprotocol.io/)
 [![npm version](https://img.shields.io/npm/v/preflight-mcp)](https://www.npmjs.com/package/preflight-mcp)
@@ -14,12 +14,37 @@ Preflight-MCP creates searchable, indexed knowledge bundles from GitHub repos, s
 ## Why Preflight?
 
 | Problem | Preflight Solution |
-|---------|--------------------|
+|---------|-------------------|
 | 🤯 AI forgets your codebase context | Persistent, searchable bundles |
 | 📋 Copy-pasting code into chat | One command: `"index this repo"` |
 | 🔍 AI can't find related files | Full-text search + dependency graph |
 | 🧩 Lost in large projects | Auto-generated `START_HERE.md` & `OVERVIEW.md` |
 | 🔗 No idea what tests cover what | Trace links: code↔test↔doc |
+| 📄 Can't read PDF/Word docs | **NEW** Document parsing with multimodal extraction |
+| 🖼️ Images/tables ignored | **NEW** Multimodal content search |
+
+## What's New in v0.7.0
+
+### 📄 Document Parsing
+Parse complex documents and extract structured content:
+- **PDF** — Text, images, tables, equations (OCR supported)
+- **Word (.docx)** — Full content extraction with formatting
+- **Excel (.xlsx)** — Sheet data as structured tables
+- **PowerPoint (.pptx)** — Slide content and embedded media
+- **HTML** — Clean text extraction with structure preservation
+
+### 🖼️ Multimodal Content Processing
+Extract and index visual content from documents:
+- **Images** — Captions, alt-text, extracted text (OCR)
+- **Tables** — Structured data with headers and cells
+- **Equations** — LaTeX/MathML extraction
+- **Diagrams** — Flowcharts, architecture diagrams
+
+### 🧠 Intelligent Tool Router
+LLM-friendly tool selection with bilingual keywords:
+- Automatic tool recommendation based on task description
+- Workflow suggestions for complex tasks
+- Chinese/English keyword support
 
 ## Demo
 
@@ -35,26 +60,27 @@ Preflight: 📍 Found 23 matches:
   → packages/react-reconciler/src/ReactFiberHooks.js:1042
   ...
 
-You: "Show me what tests cover useState"
+You: "Parse the design spec PDF and find all architecture diagrams"
 
-Preflight: 🔗 Trace links:
-  → ReactHooks.js tested_by ReactHooksTest.js
-  ...
+Preflight: 📄 Parsed design-spec.pdf (45 pages)
+  → Found 8 diagrams: system architecture, data flow, ...
+  → Extracted 12 tables with specifications
 ```
 
 ## Core Features
 
 - 🚀 **One-command indexing** — `"index owner/repo"` creates a complete knowledge bundle
 - 🔍 **Full-text search** — SQLite FTS5 search across all code and docs
-- 🧠 **Semantic search** *(optional)* — Vector-based similarity search via Ollama (local) or OpenAI
+- 📄 **Document parsing** — PDF, Word, Excel, PowerPoint, HTML support
+- 🖼️ **Multimodal search** — Search images, tables, equations by description
+- 🧠 **Semantic search** *(optional)* — Vector-based similarity search via Ollama/OpenAI
 - 🗺️ **Dependency graph** — Visualize imports and file relationships
 - 🔗 **Trace links** — Track code↔test↔doc relationships
 - 📖 **Auto-generated guides** — `START_HERE.md`, `AGENTS.md`, `OVERVIEW.md`
 - ☁️ **Cloud sync** — Multi-path mirror backup for redundancy
 - 🧠 **EDDA (Evidence-Driven Deep Analysis)** — Auto-generate auditable claims with evidence
-- ⚡ **17 MCP tools + 5 prompts** — Streamlined toolkit optimized for LLM use
-- 📄 **Cursor pagination** — Handle large result sets efficiently (RFC v2)
-- 🧠 **LLM-friendly** — Auto-compressed outputs, unified interfaces (v0.6.0)
+- ⚡ **19 MCP tools + 6 prompts** — Streamlined toolkit optimized for LLM use
+- 🧠 **Intelligent routing** — Auto-suggest tools based on task (v0.7.0)
 
 <details>
 <summary><b>All Features (click to expand)</b></summary>
@@ -75,11 +101,14 @@ Preflight: 🔗 Trace links:
 ## Table of Contents
 
 - [Why Preflight?](#why-preflight)
+- [What's New in v0.7.0](#whats-new-in-v070)
 - [Demo](#demo)
 - [Core Features](#core-features)
 - [Quick Start](#quick-start)
-- [Tools](#tools-21-total)
-- [Prompts](#prompts-5-total)
+- [Tools](#tools-19-active)
+- [Prompts](#prompts-6-total)
+- [Document Parsing](#document-parsing)
+- [Multimodal Search](#multimodal-search)
 - [Environment Variables](#environment-variables)
 - [Contributing](#contributing)
 
@@ -90,7 +119,7 @@ Preflight: 🔗 Trace links:
 
 ## Installation
 
-### From npm (after published)
+### From npm
 
 ```bash
 npm install -g preflight-mcp
@@ -149,311 +178,193 @@ This will:
 - Generate searchable SQLite FTS5 index
 - Create `START_HERE.md`, `AGENTS.md`, and `OVERVIEW.md`
 
-### 3. Search the Bundle
+### 3. Parse Documents
 
 ```
-"Search for 'GitHub' in the bundle"
+"Parse the design document at /path/to/spec.pdf"
 ```
 
-### 4. Test Locally (Optional)
+### 4. Search Multimodal Content
 
-Run end-to-end smoke test:
-
-```bash
-npm run smoke
+```
+"Search for architecture diagrams in the bundle"
 ```
 
-## Tools (17 active + 5 deprecated)
+## Tools (19 active)
 
-### `preflight_list_bundles`
+### Document & Multimodal Tools (NEW v0.7.0)
+
+#### `preflight_parse_document`
+Parse PDF, Word, Excel, PowerPoint, or HTML documents.
+- Extracts text, images, tables, equations
+- Supports OCR for scanned documents
+- Output formats: markdown, json, text
+- Triggers: "parse document", "解析文档", "read PDF"
+
+#### `preflight_search_modal`
+Search multimodal content (images, tables, equations) in bundles.
+- Full-text search on descriptions
+- Filter by content type
+- Keyword-based filtering
+- Triggers: "search images", "找图片", "search tables"
+
+#### `preflight_analyze_modal`
+Analyze and process multimodal content in a bundle.
+- Image captioning and OCR
+- Table structure extraction
+- Equation parsing
+- Triggers: "analyze images", "分析表格"
+
+### Core Bundle Tools
+
+#### `preflight_list_bundles`
 List bundle IDs in storage.
-- **Markdown output** (v0.6.0): LLM-friendly structured format
-- **Cursor pagination** (v0.5.0): Use `cursor` parameter for large bundle lists
+- **Markdown output**: LLM-friendly structured format
+- **Cursor pagination**: Use `cursor` parameter for large bundle lists
 - Triggers: "show bundles", "查看bundle", "有哪些bundle"
 
-### `preflight_get_overview` *(NEW v0.6.0)*
+#### `preflight_get_overview`
 ⭐ **START HERE** - Get project overview in one call.
 - Returns: OVERVIEW.md + START_HERE.md + AGENTS.md
 - Simplest entry point for exploring any bundle
-- Triggers: "了解项目", "项目概览", "what is this project", "show overview"
+- Triggers: "了解项目", "项目概览", "what is this project"
 
-### `preflight_create_bundle`
+#### `preflight_create_bundle`
 Create a new bundle from GitHub repos or local directories.
+- De-dup by default with `ifExists` control
+- Git clone with archive fallback
 - Triggers: "index this repo", "学习这个项目", "创建bundle"
 
-Key semantics:
-- **De-dup by default**: if a bundle already exists for the same normalized inputs, creation is rejected.
-- Use `ifExists` to control behavior:
-  - `error` (default): reject duplicate
-  - `returnExisting`: return the existing bundle without fetching
-  - `updateExisting`: update the existing bundle then return it
-  - `createNew`: bypass de-duplication
-- GitHub ingest uses **shallow clone**; if `git clone` fails, it will fall back to **GitHub archive (zipball)**.
-- Supports `repos.kind: "local"` to ingest from a local directory.
+#### `preflight_read_file`
+Read file(s) from bundle with symbol outline support.
+- Batch mode: Returns all key files in one call
+- Symbol outline: 90%+ token savings for file structure
+- Triggers: "查看bundle", "读取文件"
 
-Input (example):
-- `repos`: `[{ kind: "github", repo: "owner/repo" }, { kind: "local", repo: "owner/repo", path: "/path/to/dir" }]`
-- `libraries`: `["nextjs", "react"]` (Context7; optional)
-- `topics`: `["routing", "api"]` (Context7 topic filter; optional)
-- `ifExists`: `"error" | "returnExisting" | "updateExisting" | "createNew"`
+#### `preflight_repo_tree`
+Get repository structure overview.
+- ASCII directory tree
+- File count by extension
+- Entry point candidates
+- Triggers: "project structure", "项目结构"
 
-**Note**: If the bundle contains code files, consider using `preflight_evidence_dependency_graph` for dependency analysis or `preflight_trace_upsert` for trace links.
-
-### `preflight_read_file`
-Read file(s) from bundle. Multiple modes:
-- **Batch mode** (omit `file`): Returns ALL key files (OVERVIEW.md, START_HERE.md, AGENTS.md, manifest.json, deps/dependency-graph.json, repo READMEs) in one call
-- **Single file mode** (provide `file`): Returns that specific file
-- **Evidence citation**: Use `withLineNumbers: true` to get `N|line` format; use `ranges: ["20-80"]` to read specific lines
-- Triggers: "查看bundle", "bundle概览", "项目信息", "show bundle", "读取依赖图"
-
-**NEW in v0.5.3 - Symbol outline & reading:**
-- `outline: true`: Returns symbol structure (function/class/method/interface/type/enum) with line ranges
-  - Supports: `.ts`, `.tsx`, `.js`, `.jsx`, `.py`, `.go`, `.rs`
-  - 90%+ token savings for understanding file structure
-- `symbol: "name"`: Read a specific symbol by name
-  - Format: `"functionName"` or `"ClassName.methodName"`
-  - Auto-includes context lines and returns with line numbers
-
-**Example - Outline mode:**
-```
-[src/server.ts] Outline (15 top-level symbols, typescript):
-├── ⚡function startServer(): Promise<void> :174-200
-├── ⚡class McpServer :205-400
-│   ├── method registerTool :210-250
-│   └── method start :380-400
-└── ⚡interface Config :45-71
-```
-(`⚡` = exported)
-
-### `preflight_repo_tree`
-Get repository structure overview without wasting tokens on search.
-- Returns: ASCII directory tree, file count by extension/directory, entry point candidates
-- Default depth: 6 (v0.3.1+, was 4) - shows 2-3 levels under `norm/` directory
-- Use BEFORE deep analysis to understand project layout
-- Triggers: "show project structure", "what files are in this repo", "项目结构", "文件分布"
-
-### `preflight_delete_bundle`
-Delete/remove a bundle permanently.
-- Triggers: "删除bundle", "移除仓库"
-
-### `preflight_update_bundle`
-Refresh/sync a bundle with latest repo changes.
-- Triggers: "更新bundle", "同步仓库", "刷新索引"
-
-Optional parameters:
-- `checkOnly`: If true, only check for updates without applying.
-- `force`: If true, force rebuild even if no changes detected.
-
-### `preflight_repair_bundle`
-Offline repair for a bundle (no fetching): rebuild missing/empty derived artifacts.
-- Rebuilds `indexes/search.sqlite3`, `START_HERE.md`, `AGENTS.md`, `OVERVIEW.md` when missing/empty.
-- Use when: search fails due to index corruption, bundle files were partially deleted, etc.
-
-### `preflight_search_bundle` *(DEPRECATED)*
-⚠️ **Use `preflight_search_and_read` instead** with `readContent: false` for index-only searches.
-
-Full-text search across ingested docs/code (line-based SQLite FTS5).
-
-### `preflight_search_by_tags`
-Search across multiple bundles filtered by tags (line-based SQLite FTS5).
-- **Cursor pagination** (v0.5.0): Use `cursor` parameter for large result sets
-- Triggers: "search in MCP bundles", "在MCP项目中搜索", "搜索所有agent"
-
-Notes:
-- This tool is read-only and **does not auto-repair**.
-- If some bundles fail to search (e.g. missing/corrupt index), they will be reported in `warnings`.
-
-Optional parameters:
-- `tags`: Filter bundles by tags (e.g., `["mcp", "agents"]`)
-- `scope`: Search scope (`docs`, `code`, or `all`)
-- `limit`: Max total hits across all bundles
-- `cursor`: Pagination cursor for fetching next page
-
-### `preflight_dependency_graph` *(UNIFIED v0.6.0)*
-Get or generate dependency graph for a bundle.
-- **Auto-generates** if not cached, returns cached version if available
-- `scope: "global"` (default): Project-wide dependency graph
-- `scope: "target"` with `targetFile`: Dependencies for a specific file
-- `format: "summary"` (default): Top nodes, aggregated by directory
-- `format: "full"`: Complete graph data with coverage report
-- Triggers: "show dependencies", "看依赖图", "import graph"
-
-### `preflight_evidence_dependency_graph` *(DEPRECATED)*
-⚠️ **Use `preflight_dependency_graph` instead** - simpler interface with same functionality.
-
-### `preflight_trace_upsert`
-Create or update traceability links (code↔test, code↔doc, file↔requirement).
-- **Proactive use**: LLM automatically records discovered relationships during code analysis
-- Common link types: `tested_by`, `implements`, `documents`, `relates_to`, `depends_on`
-- **Auto-exports** to `trace/trace.json` after each upsert for direct LLM reading
-
-### `preflight_trace_query`
-Query traceability links (code↔test, code↔doc, commit↔ticket).
-- **Proactive use**: LLM automatically queries trace links when analyzing specific files
-- **Cursor pagination** (v0.5.0): Use `cursor` parameter for large result sets
-- Returns `reason` and `nextSteps` when no edges found (helps LLM decide next action)
-- Fast when `bundleId` is provided; can scan across bundles when omitted.
-
-### `preflight_trace_export` *(DEPRECATED)*
-⚠️ trace.json is auto-exported after each `trace_upsert`. Use `preflight_read_file` with `file: "trace/trace.json"` to read.
-
-### `preflight_suggest_traces` *(DEPRECATED)*
-⚠️ Use `preflight_deep_analyze_bundle` for test detection, then `preflight_trace_upsert` manually.
-
-### `preflight_deep_analyze_bundle` *(Enhanced v0.6.0)*
-One-call deep analysis aggregating tree, search, deps, traces, **overview content**, and **test detection**.
-- Returns unified evidence pack with LLM-friendly summary
-- **Summary now includes OVERVIEW.md excerpt** (v0.6.0) - one call for complete context
-- **Now includes OVERVIEW.md, START_HERE.md, AGENTS.md, README content** (v0.5.1)
-- **Auto-detects test frameworks** (jest, vitest, pytest, go, mocha) (v0.5.1)
-- **Generates copyable `nextCommands`** for follow-up actions (v0.5.1)
-- Auto-generates **claims** with evidence references
-- Tracks analysis progress via **checklistStatus**
-- Reports unanswered questions as **openQuestions**
-- Triggers: "deep analyze", "comprehensive analysis", "深度分析", "快速了解项目"
-
-**New in v0.5.1 - Aggregated content (reduces round-trips):**
-- `includeOverview` (default: true): Include OVERVIEW.md, START_HERE.md, AGENTS.md
-- `includeReadme` (default: true): Include repo README.md
-- `includeTests` (default: true): Detect test directories and frameworks
-
-Output includes:
-- `overviewContent`: `{overview, startHere, agents, readme}` - bundle documentation content
-- `testInfo`: `{detected, framework, testDirs, testFileCount, configFiles, hint}` - test detection result
-- `nextCommands[]`: Copyable tool calls for next steps (can be directly used as arguments)
-- `claims[]`: Auto-generated findings with evidence
-- `checklistStatus`: Analysis progress (repo_tree, deps, entrypoints, etc.)
-- `openQuestions[]`: Questions with `nextEvidenceToFetch` hints
-- `summary`: Markdown summary with checklist and key findings
-
-**Example `nextCommands` output:**
-```json
-[
-  { "tool": "preflight_search_bundle", "description": "Search for specific code", "args": { "bundleId": "...", "query": "<填入关键词>" } },
-  { "tool": "preflight_read_file", "description": "Read core module", "args": { "bundleId": "...", "file": "src/server.ts" } }
-]
-```
-
-### `preflight_validate_report` *(NEW v0.4.0)*
-Validate claims and evidence chains for auditability.
-- Checks: missing evidence, invalid file references, broken snippet hashes
-- Returns `passed: boolean` and detailed `issues[]`
-- Triggers: "validate claims", "audit report", "验证报告"
-
-Parameters:
-- `claims[]`: Claims to validate (with evidence)
-- `verifySnippets`: Check SHA256 hashes (default: true)
-- `verifyFileExists`: Check evidence files exist (default: true)
-- `strictMode`: Treat warnings as errors (default: false)
-
-### `preflight_read_files` *(DEPRECATED)*
-⚠️ Use multiple `preflight_read_file` calls, or use `preflight_search_and_read`.
-
-### `preflight_search_and_read` *(Enhanced v0.6.0)*
+#### `preflight_search_and_read`
 Search + excerpt in one call - the **primary search tool**.
-- Combines search with automatic context extraction
-- **`readContent: false`** (v0.6.0): Index-only search (replaces `preflight_search_bundle`)
-- **RFC v2 unified envelope**: Returns `ok`, `meta`, `data`, `evidence[]`
-- Triggers: "search and show code", "find and read", "搜索并读取"
+- RFC v2 unified envelope: `ok`, `meta`, `data`, `evidence[]`
+- Triggers: "search and show code", "搜索并读取"
 
-Parameters:
-- `bundleId`: Bundle ID
-- `query`: Search query
-- `contextLines`: Lines of context around matches (default: 30)
-- `readContent`: If false, return metadata only without reading files (default: true)
-- `format`: `"json"` (default) or `"text"`
+#### `preflight_search_by_tags`
+Search across multiple bundles filtered by tags.
+- Cursor pagination for large result sets
+- Triggers: "search in MCP bundles", "搜索所有agent"
 
+#### `preflight_dependency_graph`
+Get or generate dependency graph for a bundle.
+- Global or target-file scope
+- Summary or full format
+- Triggers: "show dependencies", "看依赖图"
 
-### `preflight_cleanup_orphans`
-Remove incomplete or corrupted bundles (bundles without valid manifest.json).
-- Triggers: "clean up broken bundles", "remove orphans", "清理孤儿bundle"
+#### `preflight_deep_analyze_bundle`
+One-call deep analysis with test detection.
+- Returns unified evidence pack
+- Auto-generates claims with evidence
+- Triggers: "deep analyze", "深度分析"
 
-Parameters:
-- `dryRun` (default: true): Only report orphans without deleting
-- `minAgeHours` (default: 1): Only clean bundles older than N hours
+#### `preflight_trace_upsert` / `preflight_trace_query`
+Create and query traceability links (code↔test↔doc).
+- Auto-exports to `trace/trace.json`
+- Triggers: "trace links", "追溯链接"
 
-Note: This is also automatically executed on server startup (background, non-blocking).
+#### `preflight_update_bundle` / `preflight_repair_bundle` / `preflight_delete_bundle`
+Bundle lifecycle management tools.
 
-### `preflight_get_task_status`
-Check status of bundle creation/update tasks (progress tracking).
-- Triggers: "check progress", "what is the status", "查看任务状态", "下载进度"
-- Query by `taskId` (from error), `fingerprint`, or `repos`
-- Shows: phase, progress percentage, message, elapsed time
+#### `preflight_validate_report`
+Validate claims and evidence chains for auditability.
 
-## Prompts (5 total)
+#### `preflight_cleanup_orphans`
+Remove incomplete or corrupted bundles.
 
-MCP prompts provide interactive guidance for users. Call these to get usage instructions and example prompts.
+#### `preflight_get_task_status`
+Check status of bundle creation/update tasks.
+
+## Prompts (6 total)
+
+### `preflight_router` (NEW v0.7.0)
+Intelligent tool selection guide.
+- Auto-recommend tools based on task description
+- Workflow suggestions
+- Triggers: "which tool should I use", "推荐工具"
 
 ### `preflight_menu`
 Main menu showing all Preflight features.
-- Triggers: "preflight有什么功能", "有什么工具", "what can preflight do", "show menu"
+- Triggers: "preflight有什么功能", "what can preflight do"
 
 ### `preflight_analyze_guide`
-Deep analysis guide with step-by-step workflow and copyable prompts.
-- Shows: Bundle file structure, recommended analysis flow, example prompts
-- Args: `projectPath` (optional)
+Deep analysis guide with step-by-step workflow.
 
 ### `preflight_search_guide`
-Search functionality guide.
-- Shows: Single bundle search, cross-bundle search by tags, FTS5 syntax tips
-- Args: `bundleId` (optional)
+Search functionality guide with FTS5 syntax tips.
 
 ### `preflight_manage_guide`
 Bundle management operations guide.
-- Shows: List, view, update, repair, delete bundle operations
 
 ### `preflight_trace_guide`
 Traceability links guide.
-- Shows: Query and create code↔test, code↔doc relationships
-- Args: `bundleId` (optional)
 
-## Resources
+## Document Parsing
 
-### `preflight://bundles`
-Static JSON listing of bundles and their main entry files.
+### Supported Formats
 
-### `preflight://bundle/{bundleId}/file/{encodedPath}`
-Read a specific file inside a bundle.
+| Format | Extension | Features |
+|--------|-----------|----------|
+| PDF | `.pdf` | Text, images, tables, equations, OCR |
+| Word | `.docx` | Full text, formatting, embedded media |
+| Excel | `.xlsx` | All sheets as structured tables |
+| PowerPoint | `.pptx` | Slides, speaker notes, media |
+| HTML | `.html` | Clean text, structure preservation |
+| Markdown | `.md` | Native support |
+| Text | `.txt` | Plain text |
 
-Examples:
-- `preflight://bundle/<id>/file/START_HERE.md`
-- `preflight://bundle/<id>/file/repos%2Fowner%2Frepo%2Fnorm%2FREADME.md`
+### Usage
 
-## Error semantics (stable, UI-friendly)
+```
+"Parse /path/to/document.pdf and extract all tables"
+```
 
-Most tool errors are wrapped with a stable, machine-parseable prefix:
-- `[preflight_error kind=<kind>] <message>`
+Response includes:
+- Full text content in markdown format
+- Extracted images with metadata
+- Tables as structured data
+- Equations in LaTeX format
 
-Common kinds:
-- `bundle_not_found`
-- `file_not_found`
-- `invalid_path` (unsafe path traversal attempt)
-- `permission_denied`
-- `index_missing_or_corrupt`
-- `cursor_invalid` *(v0.5.0)*
-- `cursor_expired` *(v0.5.0)*
-- `rate_limited` *(v0.5.0)*
-- `timeout` *(v0.5.0)*
-- `pagination_required` *(v0.5.0)*
-- `unknown`
+## Multimodal Search
 
-This is designed so UIs/agents can reliably decide whether to:
-- call `preflight_update_bundle`
-- call `preflight_repair_bundle`
-- prompt the user for a different bundleId/path
+### Search by Content Type
 
-## Environment variables
+```
+"Search for all architecture diagrams in bundle xyz"
+"Find tables containing 'API endpoints'"
+"Search equations related to 'gradient descent'"
+```
+
+### Filter Options
+
+- `scope`: `all`, `image`, `table`, `equation`, `diagram`
+- `keywords`: Filter by specific keywords
+- `limit`: Max results (default: 20)
+
+## Environment Variables
 
 ### Storage
 - `PREFLIGHT_STORAGE_DIR`: bundle storage dir (default: `~/.preflight-mcp/bundles`)
-- `PREFLIGHT_STORAGE_DIRS`: **multi-path mirror backup** (semicolon-separated, e.g., `D:\cloud1\preflight;E:\cloud2\preflight`)
-- `PREFLIGHT_TMP_DIR`: temp checkout dir (default: OS temp `preflight-mcp/`)
+- `PREFLIGHT_STORAGE_DIRS`: multi-path mirror backup (semicolon-separated)
+- `PREFLIGHT_TMP_DIR`: temp checkout dir
 - `PREFLIGHT_MAX_FILE_BYTES`: max bytes per file (default: 512 KiB)
 - `PREFLIGHT_MAX_TOTAL_BYTES`: max bytes per repo ingest (default: 50 MiB)
 
-### Analysis & evidence
-- `PREFLIGHT_ANALYSIS_MODE`: Static analysis mode - `none` | `quick` | `full` (default: `full`). Controls generation of `analysis/FACTS.json`.
-- `PREFLIGHT_AST_ENGINE`: AST engine used by some evidence tools - `wasm` (default) or `native`.
+### Analysis & Evidence
+- `PREFLIGHT_ANALYSIS_MODE`: `none` | `quick` | `full` (default: `full`)
+- `PREFLIGHT_AST_ENGINE`: `wasm` (default) or `native`
 
 ### Built-in HTTP API
 - `PREFLIGHT_HTTP_ENABLED`: enable/disable REST API (default: true)
@@ -461,121 +372,55 @@ This is designed so UIs/agents can reliably decide whether to:
 - `PREFLIGHT_HTTP_PORT`: REST listen port (default: 37123)
 
 ### GitHub & Context7
-- `GITHUB_TOKEN`: optional; used for GitHub API/auth patterns and GitHub archive fallback (public repos usually work without it)
-- `PREFLIGHT_GIT_CLONE_TIMEOUT_MS`: optional; max time to allow `git clone` before failing over to archive (default: 5 minutes)
-- `CONTEXT7_API_KEY`: optional; enables higher Context7 limits (runs without a key but may be rate-limited)
-- `CONTEXT7_MCP_URL`: optional; defaults to Context7 MCP endpoint
+- `GITHUB_TOKEN`: optional; used for GitHub API/auth
+- `PREFLIGHT_GIT_CLONE_TIMEOUT_MS`: max git clone time (default: 5 minutes)
+- `CONTEXT7_API_KEY`: optional; enables higher Context7 limits
 
 ### Semantic Search (Optional)
-Semantic search provides vector-based similarity search using embeddings. **Disabled by default** to maintain zero-dependency design.
-
 - `PREFLIGHT_SEMANTIC_SEARCH`: enable semantic search (default: `false`)
-- `PREFLIGHT_EMBEDDING_PROVIDER`: `ollama` (local, default) or `openai` (cloud)
+- `PREFLIGHT_EMBEDDING_PROVIDER`: `ollama` (local) or `openai` (cloud)
 - `PREFLIGHT_OLLAMA_HOST`: Ollama server (default: `http://localhost:11434`)
 - `PREFLIGHT_OLLAMA_MODEL`: embedding model (default: `nomic-embed-text`)
 - `OPENAI_API_KEY`: required if using OpenAI provider
-- `PREFLIGHT_OPENAI_MODEL`: OpenAI model (default: `text-embedding-3-small`)
 
-**Quick start (local, zero cloud dependency):**
-```bash
-# 1. Install Ollama and pull an embedding model
-ollama pull nomic-embed-text
-
-# 2. Enable semantic search
-export PREFLIGHT_SEMANTIC_SEARCH=true
-```
-
-> **TODO:** Integrate `sqlite-vec` for ANN (Approximate Nearest Neighbor) indexing to improve search performance on large codebases.
-
-## Bundle layout (on disk)
+## Bundle Layout
 
 Inside a bundle directory:
-- `manifest.json` (includes `fingerprint`, `displayName`, `tags`, and per-repo `source`)
-- `START_HERE.md`
-- `AGENTS.md`
-- `OVERVIEW.md`
-- `indexes/search.sqlite3`
-- `indexes/semantic.sqlite3` *(optional, when semantic search enabled)*
-- `analysis/FACTS.json` (static analysis)
-- `deps/dependency-graph.json` (global import graph; generated on demand)
-- `trace/trace.sqlite3` (traceability links; created on demand)
-- `trace/trace.json` (**NEW**: auto-exported JSON for direct LLM reading)
-- `repos/<owner>/<repo>/raw/...`
-- `repos/<owner>/<repo>/norm/...` (GitHub/local snapshots)
-- `libraries/context7/<...>/meta.json`
-- `libraries/context7/<...>/docs-page-1.md`
+- `manifest.json` — Bundle metadata and fingerprint
+- `START_HERE.md` — Quick start guide
+- `AGENTS.md` — Agent-specific instructions
+- `OVERVIEW.md` — Project overview
+- `indexes/search.sqlite3` — Full-text search index
+- `indexes/modal.sqlite3` — Multimodal content index (v0.7.0)
+- `analysis/FACTS.json` — Static analysis results
+- `deps/dependency-graph.json` — Import graph
+- `trace/trace.sqlite3` — Traceability links
+- `repos/<owner>/<repo>/norm/...` — Normalized source files
 
-## Multi-device sync & mirror backup
+## Multi-device Sync
 
-If you work from multiple computers or want redundant cloud backups:
-
-### Single path (simple)
-```powershell
-# Windows
-$env:PREFLIGHT_STORAGE_DIR = "D:\OneDrive\preflight-bundles"
-```
+### Single Path
 ```bash
-# macOS/Linux
 export PREFLIGHT_STORAGE_DIR="$HOME/Dropbox/preflight-bundles"
 ```
 
-### Multi-path mirror (redundancy)
-Writes to all paths, reads from first available:
-```powershell
-# Windows - semicolon separated
-$env:PREFLIGHT_STORAGE_DIRS = "D:\OneDrive\preflight;E:\GoogleDrive\preflight"
-```
+### Multi-path Mirror
 ```bash
-# macOS/Linux
 export PREFLIGHT_STORAGE_DIRS="$HOME/OneDrive/preflight;$HOME/Dropbox/preflight"
 ```
 
-### MCP host config (Claude Desktop)
-```json
-{
-  "mcpServers": {
-    "preflight": {
-      "command": "node",
-      "args": ["path/to/preflight-mcp/dist/index.js"],
-      "env": {
-        "PREFLIGHT_STORAGE_DIRS": "D:\\cloud1\\preflight;E:\\cloud2\\preflight"
-      }
-    }
-  }
-}
-```
-
-### Resilient storage features
-- **Auto-failover**: If primary path is unavailable, automatically uses first available backup
-- **Mirror sync**: All writes are mirrored to available backup paths
-- **Mount recovery**: When a path comes back online, it syncs automatically on next write
-- **Non-blocking**: Unavailable paths are skipped without errors
-
-### Important notes
-- **Avoid concurrent access**: Only use on one machine at a time (SQLite conflicts)
-- **Wait for sync**: After updates, wait for cloud sync before switching machines
-
 ## Contributing
 
-We welcome contributions! Please see our [Contributing Guide](./CONTRIBUTING.md) for details on:
-
-- Development setup
-- Code style guidelines
-- Testing requirements
-- Pull request process
-
-Please also read our [Code of Conduct](./CODE_OF_CONDUCT.md) before contributing.
+We welcome contributions! Please see our [Contributing Guide](./CONTRIBUTING.md) for details.
 
 ## Support
-
-If you encounter any issues or have questions:
 
 - **Issues**: [GitHub Issues](https://github.com/jonnyhoo/preflight-mcp/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/jonnyhoo/preflight-mcp/discussions)
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](./LICENSE) file for details.
+This project is licensed under the AGPL-3.0 License - see the [LICENSE](./LICENSE) file for details.
 
 ---
 
