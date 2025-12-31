@@ -5,6 +5,8 @@ export type AnalysisMode = 'none' | 'quick' | 'full'; // 'full' enables Phase 2 
 
 export type AstEngine = 'wasm' | 'native';
 
+export type EmbeddingProviderType = 'ollama' | 'openai';
+
 export type PreflightConfig = {
   /** Primary storage directory (first in storageDirs, used for reading). */
   storageDir: string;
@@ -49,6 +51,23 @@ export type PreflightConfig = {
   defaultSearchLimit: number;
   /** In-progress lock timeout in ms (default: 30 minutes). */
   inProgressLockTimeoutMs: number;
+
+  // --- Semantic Search (Optional Feature) ---
+
+  /** Enable semantic search (default: false). Requires embedding provider. */
+  semanticSearchEnabled: boolean;
+  /** Embedding provider: 'ollama' (local) or 'openai' (cloud). */
+  embeddingProvider: EmbeddingProviderType;
+  /** Ollama server host (default: http://localhost:11434). */
+  ollamaHost: string;
+  /** Ollama embedding model (default: nomic-embed-text). */
+  ollamaModel: string;
+  /** OpenAI API key (required if provider is 'openai'). */
+  openaiApiKey?: string;
+  /** OpenAI embedding model (default: text-embedding-3-small). */
+  openaiModel: string;
+  /** OpenAI API base URL (optional, for compatible endpoints). */
+  openaiBaseUrl?: string;
 };
 
 function envNumber(name: string, fallback: number): number {
@@ -81,6 +100,12 @@ function parseAnalysisMode(raw: string | undefined): AnalysisMode {
   // Back-compat: deep used to exist; treat it as full (for better analysis).
   if (v === 'deep') return 'full';
   return 'full'; // Default to full for better analysis
+}
+
+function parseEmbeddingProvider(raw: string | undefined): EmbeddingProviderType {
+  const v = (raw ?? '').trim().toLowerCase();
+  if (v === 'openai') return 'openai';
+  return 'ollama'; // Default to local Ollama
 }
 
 /**
@@ -145,5 +170,14 @@ export function getConfig(): PreflightConfig {
     maxSearchLimit: envNumber('PREFLIGHT_MAX_SEARCH_LIMIT', 200),
     defaultSearchLimit: envNumber('PREFLIGHT_DEFAULT_SEARCH_LIMIT', 30),
     inProgressLockTimeoutMs: envNumber('PREFLIGHT_IN_PROGRESS_LOCK_TIMEOUT_MS', 30 * 60_000),
+
+    // Semantic search (optional, disabled by default)
+    semanticSearchEnabled: envBoolean('PREFLIGHT_SEMANTIC_SEARCH', false),
+    embeddingProvider: parseEmbeddingProvider(process.env.PREFLIGHT_EMBEDDING_PROVIDER),
+    ollamaHost: (process.env.PREFLIGHT_OLLAMA_HOST ?? 'http://localhost:11434').trim(),
+    ollamaModel: (process.env.PREFLIGHT_OLLAMA_MODEL ?? 'nomic-embed-text').trim(),
+    openaiApiKey: process.env.OPENAI_API_KEY,
+    openaiModel: (process.env.PREFLIGHT_OPENAI_MODEL ?? 'text-embedding-3-small').trim(),
+    openaiBaseUrl: process.env.OPENAI_BASE_URL,
   };
 }

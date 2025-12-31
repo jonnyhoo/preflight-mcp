@@ -46,6 +46,7 @@ Preflight：🔗 追溯链接：
 
 - 🚀 **一句话索引** — 「索引 owner/repo」即可创建完整知识包
 - 🔍 **全文搜索** — SQLite FTS5 搜索全部代码和文档
+- 🧠 **语义搜索** *（可选）* — 基于向量的相似度搜索，支持 Ollama（本地）或 OpenAI
 - 🗺️ **依赖图** — 可视化 import 关系和文件依赖
 - 🔗 **追溯链接** — 追踪代码↔测试↔文档关系
 - 📖 **自动生成指南** — `START_HERE.md`、`AGENTS.md`、`OVERVIEW.md`
@@ -408,10 +409,29 @@ Bundle 管理操作指南。
 - `PREFLIGHT_HTTP_PORT`：REST 监听端口（默认：37123）
 
 ### GitHub & Context7
-- `GITHUB_TOKEN`：可选；用于 GitHub API/auth 模式和 GitHub archive 兜底（公开仓库通常不需要）
+- `GITHUB_TOKEN`：可选；用于 GitHub API/auth 模式和 GitHub archive 兑底（公开仓库通常不需要）
 - `PREFLIGHT_GIT_CLONE_TIMEOUT_MS`：可选；`git clone` 最大等待时间，超时后切换到 archive（默认：5 分钟）
 - `CONTEXT7_API_KEY`：可选；启用更高的 Context7 限制（无 key 也能运行但可能被限流）
 - `CONTEXT7_MCP_URL`：可选；默认为 Context7 MCP 端点
+
+### 语义搜索（可选功能）
+语义搜索提供基于向量的相似度搜索。**默认禁用**，保持零依赖设计。
+
+- `PREFLIGHT_SEMANTIC_SEARCH`：启用语义搜索（默认：`false`）
+- `PREFLIGHT_EMBEDDING_PROVIDER`：`ollama`（本地，默认）或 `openai`（云服务）
+- `PREFLIGHT_OLLAMA_HOST`：Ollama 服务器（默认：`http://localhost:11434`）
+- `PREFLIGHT_OLLAMA_MODEL`：embedding 模型（默认：`nomic-embed-text`）
+- `OPENAI_API_KEY`：使用 OpenAI 时必填
+- `PREFLIGHT_OPENAI_MODEL`：OpenAI 模型（默认：`text-embedding-3-small`）
+
+**快速开始（本地，零云依赖）：**
+```bash
+# 1. 安装 Ollama 并拉取 embedding 模型
+ollama pull nomic-embed-text
+
+# 2. 启用语义搜索
+export PREFLIGHT_SEMANTIC_SEARCH=true
+```
 
 ## Bundle layout (on disk)
 
@@ -421,6 +441,7 @@ bundle 目录内部：
 - `AGENTS.md`
 - `OVERVIEW.md`
 - `indexes/search.sqlite3`
+- `indexes/semantic.sqlite3`（可选，启用语义搜索时生成）
 - **`analysis/FACTS.json`**（静态分析）
 - **`deps/dependency-graph.json`**（全局依赖图；按需生成）
 - `trace/trace.sqlite3`（traceability links；按需创建）

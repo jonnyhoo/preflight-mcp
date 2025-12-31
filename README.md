@@ -46,6 +46,7 @@ Preflight: 🔗 Trace links:
 
 - 🚀 **One-command indexing** — `"index owner/repo"` creates a complete knowledge bundle
 - 🔍 **Full-text search** — SQLite FTS5 search across all code and docs
+- 🧠 **Semantic search** *(optional)* — Vector-based similarity search via Ollama (local) or OpenAI
 - 🗺️ **Dependency graph** — Visualize imports and file relationships
 - 🔗 **Trace links** — Track code↔test↔doc relationships
 - 📖 **Auto-generated guides** — `START_HERE.md`, `AGENTS.md`, `OVERVIEW.md`
@@ -465,6 +466,25 @@ This is designed so UIs/agents can reliably decide whether to:
 - `CONTEXT7_API_KEY`: optional; enables higher Context7 limits (runs without a key but may be rate-limited)
 - `CONTEXT7_MCP_URL`: optional; defaults to Context7 MCP endpoint
 
+### Semantic Search (Optional)
+Semantic search provides vector-based similarity search using embeddings. **Disabled by default** to maintain zero-dependency design.
+
+- `PREFLIGHT_SEMANTIC_SEARCH`: enable semantic search (default: `false`)
+- `PREFLIGHT_EMBEDDING_PROVIDER`: `ollama` (local, default) or `openai` (cloud)
+- `PREFLIGHT_OLLAMA_HOST`: Ollama server (default: `http://localhost:11434`)
+- `PREFLIGHT_OLLAMA_MODEL`: embedding model (default: `nomic-embed-text`)
+- `OPENAI_API_KEY`: required if using OpenAI provider
+- `PREFLIGHT_OPENAI_MODEL`: OpenAI model (default: `text-embedding-3-small`)
+
+**Quick start (local, zero cloud dependency):**
+```bash
+# 1. Install Ollama and pull an embedding model
+ollama pull nomic-embed-text
+
+# 2. Enable semantic search
+export PREFLIGHT_SEMANTIC_SEARCH=true
+```
+
 ## Bundle layout (on disk)
 
 Inside a bundle directory:
@@ -473,6 +493,7 @@ Inside a bundle directory:
 - `AGENTS.md`
 - `OVERVIEW.md`
 - `indexes/search.sqlite3`
+- `indexes/semantic.sqlite3` *(optional, when semantic search enabled)*
 - `analysis/FACTS.json` (static analysis)
 - `deps/dependency-graph.json` (global import graph; generated on demand)
 - `trace/trace.sqlite3` (traceability links; created on demand)
