@@ -485,6 +485,8 @@ ollama pull nomic-embed-text
 export PREFLIGHT_SEMANTIC_SEARCH=true
 ```
 
+> **TODO:** Integrate `sqlite-vec` for ANN (Approximate Nearest Neighbor) indexing to improve search performance on large codebases.
+
 ## Bundle layout (on disk)
 
 Inside a bundle directory:

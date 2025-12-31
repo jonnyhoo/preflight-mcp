@@ -433,6 +433,8 @@ ollama pull nomic-embed-text
 export PREFLIGHT_SEMANTIC_SEARCH=true
 ```
 
+> **TODO:** 集成 `sqlite-vec` 实现 ANN（近似最近邻）索引，提升大型代码库的搜索性能。
+
 ## Bundle layout (on disk)
 
 bundle 目录内部：
