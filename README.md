@@ -23,7 +23,14 @@ Preflight-MCP creates searchable, indexed knowledge bundles from GitHub repos, s
 | 📄 Can't read PDF/Word docs | **NEW** Document parsing with multimodal extraction |
 | 🖼️ Images/tables ignored | **NEW** Multimodal content search |
 
-## What's New in v0.7.0
+## What's New in v0.7.2
+
+### 🔗 Function-Level Call Graph Analysis
+Build and query call graphs for deep code understanding:
+- **Multi-language support** — TypeScript, Python, Go, Rust
+- **Call hierarchy** — Who calls this function? What does it call?
+- **Code extraction** — Extract function with all dependencies
+- **Interface summary** — Generate API documentation automatically
 
 ### 📄 Document Parsing
 Parse complex documents and extract structured content:
@@ -80,7 +87,8 @@ Preflight: 📄 Parsed design-spec.pdf (45 pages)
 - ☁️ **Cloud sync** — Multi-path mirror backup for redundancy
 - 🧠 **EDDA (Evidence-Driven Deep Analysis)** — Auto-generate auditable claims with evidence
 - ⚡ **21 MCP tools + 6 prompts** — Streamlined toolkit optimized for LLM use
-- 🧠 **Intelligent routing** — Auto-suggest tools based on task (v0.7.0)
+- 🧠 **Intelligent routing** — Auto-suggest tools based on task
+- 🔗 **Call graph analysis** — Function-level dependency tracking (v0.7.2)
 
 <details>
 <summary><b>All Features (click to expand)</b></summary>
@@ -101,12 +109,13 @@ Preflight: 📄 Parsed design-spec.pdf (45 pages)
 ## Table of Contents
 
 - [Why Preflight?](#why-preflight)
-- [What's New in v0.7.0](#whats-new-in-v070)
+- [What's New in v0.7.2](#whats-new-in-v072)
 - [Demo](#demo)
 - [Core Features](#core-features)
 - [Quick Start](#quick-start)
-- [Tools](#tools-19-active)
+- [Tools](#tools-25-active)
 - [Prompts](#prompts-6-total)
+- [Call Graph Analysis](#call-graph-analysis)
 - [Document Parsing](#document-parsing)
 - [Multimodal Search](#multimodal-search)
 - [Environment Variables](#environment-variables)
@@ -190,9 +199,35 @@ This will:
 "Search for architecture diagrams in the bundle"
 ```
 
-## Tools (21 active)
+## Tools (25 active)
 
-### Document & Multimodal Tools (NEW v0.7.0)
+### Call Graph Tools (NEW v0.7.2)
+
+#### `preflight_build_call_graph`
+Build a function-level call graph for multi-language projects.
+- **Languages**: TypeScript, JavaScript, Python, Go, Rust
+- Auto-detects project languages
+- Triggers: "build call graph", "构建调用图"
+
+#### `preflight_query_call_graph`
+Query call relationships for a specific function or method.
+- **Directions**: callers, callees, or both
+- Find who calls this function and what it calls
+- Triggers: "who calls", "查询调用关系"
+
+#### `preflight_extract_code`
+Extract a function and its dependencies as self-contained code.
+- **Formats**: minimal (signatures), full (code), markdown (documented)
+- Include transitive dependencies
+- Triggers: "extract function", "提取代码"
+
+#### `preflight_interface_summary`
+Generate interface summary for a file or project.
+- Lists all exported functions/classes
+- Includes signatures and documentation
+- Triggers: "interface summary", "接口文档"
+
+### Document & Multimodal Tools
 
 #### `preflight_parse_document`
 Parse PDF, Word, Excel, PowerPoint, or HTML documents.
@@ -310,6 +345,32 @@ Bundle management operations guide.
 
 ### `preflight_trace_guide`
 Traceability links guide.
+
+## Call Graph Analysis
+
+### Supported Languages
+
+| Language | Adapter | Features |
+|----------|---------|----------|
+| TypeScript/JS | TS Language Service | Full type info, references, definitions |
+| Python | tree-sitter | Functions, classes, decorators, docstrings |
+| Go | tree-sitter | Functions, interfaces, methods, Go doc |
+| Rust | tree-sitter | fn, impl, traits, structs, enums, macros |
+
+### Usage Examples
+
+```
+"Build a call graph for /path/to/project"
+"Who calls the processData function?"
+"Extract the handleRequest function with all dependencies"
+"Generate interface summary for src/api/"
+```
+
+### Output Formats
+
+- **Query results**: Caller/callee relationships with file locations
+- **Code extraction**: Self-contained code with dependencies
+- **Interface summary**: API documentation in markdown
 
 ## Document Parsing
 

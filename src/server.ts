@@ -50,6 +50,21 @@ import { ParseDocumentInputSchema, createParseDocumentHandler, parseDocumentTool
 import { SearchModalInputSchema, createSearchModalHandler, searchModalToolDescription, type SearchModalInput } from './tools/searchModal.js';
 // Tool router
 import { generateRoutingPrompt, routeQuery, suggestWorkflow } from './prompts/toolRouter.js';
+// Call graph tools
+import {
+  BuildCallGraphInputSchema,
+  QueryCallGraphInputSchema,
+  ExtractCodeInputSchema,
+  InterfaceSummaryInputSchema,
+  buildCallGraphToolDescription,
+  queryCallGraphToolDescription,
+  extractCodeToolDescription,
+  interfaceSummaryToolDescription,
+  createBuildCallGraphHandler,
+  createQueryCallGraphHandler,
+  createExtractCodeHandler,
+  createInterfaceSummaryHandler,
+} from './tools/callGraph.js';
 
 const CreateRepoInputSchema = z.union([
   z.object({
@@ -2392,6 +2407,180 @@ export async function startServer(): Promise<void> {
     }
   );
 
+  // ==========================================================================
+  // Call Graph Tools - Function-level analysis for code extraction & migration
+  // ==========================================================================
+
+  const buildCallGraphHandler = createBuildCallGraphHandler();
+  const queryCallGraphHandler = createQueryCallGraphHandler();
+  const extractCodeHandler = createExtractCodeHandler();
+  const interfaceSummaryHandler = createInterfaceSummaryHandler();
+
+  server.registerTool(
+    'preflight_build_call_graph',
+    {
+      title: 'Build call graph',
+      description: buildCallGraphToolDescription,
+      inputSchema: BuildCallGraphInputSchema,
+      outputSchema: {
+        success: z.boolean(),
+        summary: z.object({
+          totalFunctions: z.number(),
+          totalCalls: z.number(),
+          filesAnalyzed: z.number(),
+          buildTimeMs: z.number(),
+          exportedSymbols: z.array(z.string()),
+          hasMore: z.boolean(),
+        }).optional(),
+        hint: z.string().optional(),
+        error: z.string().optional(),
+      },
+      annotations: {
+        readOnlyHint: true,
+      },
+    },
+    async (args) => {
+      const result = await buildCallGraphHandler(args);
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        structuredContent: result,
+      };
+    }
+  );
+
+  server.registerTool(
+    'preflight_query_call_graph',
+    {
+      title: 'Query call graph',
+      description: queryCallGraphToolDescription,
+      inputSchema: QueryCallGraphInputSchema,
+      outputSchema: {
+        success: z.boolean(),
+        symbol: z.object({
+          name: z.string(),
+          kind: z.string(),
+          file: z.string(),
+          line: z.number(),
+          signature: z.string().optional(),
+          documentation: z.string().optional(),
+          isExported: z.boolean().optional(),
+          isAsync: z.boolean().optional(),
+        }).optional(),
+        callers: z.array(z.object({
+          name: z.string(),
+          file: z.string(),
+          line: z.number(),
+        })).optional(),
+        callees: z.array(z.object({
+          name: z.string(),
+          file: z.string(),
+          line: z.number(),
+        })).optional(),
+        totalRelated: z.number().optional(),
+        queryTimeMs: z.number().optional(),
+        error: z.string().optional(),
+        availableSymbols: z.array(z.string()).optional(),
+        hint: z.string().optional(),
+      },
+      annotations: {
+        readOnlyHint: true,
+      },
+    },
+    async (args) => {
+      const result = await queryCallGraphHandler(args);
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        structuredContent: result,
+      };
+    }
+  );
+
+  server.registerTool(
+    'preflight_extract_code',
+    {
+      title: 'Extract code with dependencies',
+      description: extractCodeToolDescription,
+      inputSchema: ExtractCodeInputSchema,
+      outputSchema: {
+        success: z.boolean(),
+        format: z.enum(['minimal', 'full', 'markdown']).optional(),
+        content: z.string().optional(),
+        mainSymbol: z.object({
+          name: z.string(),
+          kind: z.string(),
+          file: z.string(),
+          line: z.number(),
+        }).optional(),
+        dependencies: z.array(z.object({
+          name: z.string(),
+          kind: z.string(),
+          file: z.string(),
+          signature: z.string().optional(),
+          documentation: z.string().optional(),
+          code: z.string().optional(),
+        })).optional(),
+        files: z.array(z.string()).optional(),
+        summary: z.object({
+          mainSymbol: z.string(),
+          dependencyCount: z.number(),
+          fileCount: z.number(),
+        }).optional(),
+        error: z.string().optional(),
+      },
+      annotations: {
+        readOnlyHint: true,
+      },
+    },
+    async (args) => {
+      const result = await extractCodeHandler(args);
+      if (result.format === 'markdown' && result.content) {
+        return {
+          content: [{ type: 'text', text: result.content }],
+          structuredContent: result,
+        };
+      }
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        structuredContent: result,
+      };
+    }
+  );
+
+  server.registerTool(
+    'preflight_interface_summary',
+    {
+      title: 'Generate interface summary',
+      description: interfaceSummaryToolDescription,
+      inputSchema: InterfaceSummaryInputSchema,
+      outputSchema: {
+        success: z.boolean(),
+        summary: z.string().optional(),
+        stats: z.object({
+          totalFunctions: z.number(),
+          exportedFunctions: z.number(),
+          files: z.number(),
+        }).optional(),
+        error: z.string().optional(),
+      },
+      annotations: {
+        readOnlyHint: true,
+      },
+    },
+    async (args) => {
+      const result = await interfaceSummaryHandler(args);
+      if (result.success && result.summary) {
+        return {
+          content: [{ type: 'text', text: result.summary }],
+          structuredContent: result,
+        };
+      }
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        structuredContent: result,
+      };
+    }
+  );
+
   server.registerTool(
     'preflight_deep_analyze_bundle',
     {
@@ -3239,27 +3428,39 @@ export async function startServer(): Promise<void> {
 
 请选择您需要的功能：
 
-**1. 📂 深入分析项目**
-创建 bundle 并生成全局依赖图，理解代码架构
+**1. 📂 深入分析项目** ⭐推荐
+创建 bundle → 查看概览 → 构建调用图 → 查询函数关系
+工具链: preflight_create_bundle → preflight_get_overview → preflight_build_call_graph
 
-**2. 🔍 搜索代码/文档**
+**2. 🔗 函数调用分析** (v0.7.2 新增)
+查询“谁调用了X”、“X调用了什么”、提取函数及依赖
+支持: TypeScript, Python, Go, Rust
+工具: preflight_build_call_graph, preflight_query_call_graph, preflight_extract_code
+
+**3. 🔍 搜索代码/文档**
 在已索引的项目中全文搜索代码和文档
+工具: preflight_search_and_read
 
-**3. 📄 解析文档**
+**4. 📄 解析文档**
 解析 PDF、Word、Excel 等文档，提取文本和多模态内容
-
-**4. 🖼️ 多模态搜索**
-搜索图片、表格、公式等视觉内容
+工具: preflight_parse_document
 
 **5. 📋 管理 bundles**
 列出、更新、修复、删除已有的 bundle
+工具: preflight_list_bundles, preflight_update_bundle
 
 **6. 🔗 追溯链接**
 查询/创建代码-测试-文档之间的关联关系
+工具: preflight_trace_query, preflight_trace_upsert
 
 ---
-💡 输入功能编号 (1-6) 或直接描述您的需求
-💡 不确定用哪个工具？使用 preflight_router 获取智能推荐`,
+🎯 **标准工作流（分析新项目）:**
+1. preflight_create_bundle → 索引项目
+2. preflight_get_overview → 了解项目概览
+3. preflight_build_call_graph → 构建函数调用关系
+4. preflight_query_call_graph → 查询具体函数
+
+💡 直接说“分析项目 X”即可自动执行上述流程`,
             },
           },
         ],
@@ -3287,40 +3488,43 @@ export async function startServer(): Promise<void> {
               type: 'text',
               text: `📊 **深入分析项目指南**
 
-**第一步：提供项目路径**
-- 本地路径：\`E:\\coding\\my-project\`
-- GitHub：\`owner/repo\` 或完整 URL
-
-**第二步：复制以下完美 prompt（送给工作 LLM）**
+**⭐ 标准分析流程（直接执行）:**
 
 \`\`\`
-请执行以下分析流程：
+请对 ${pathExample} 进行深度分析：
 
-1. 使用 preflight_create_bundle 创建 ${pathExample} 的 bundle
-2. 使用 preflight_evidence_dependency_graph 生成全局依赖图
-3. 使用 preflight_read_file 读取 bundle 内容，分析：
-   - OVERVIEW.md 了解项目概览
-   - deps/dependency-graph.json 查看依赖关系
-   - START_HERE.md 了解入口点
-
-然后总结：
-1. 项目核心功能是什么
-2. 主要模块及其关系（基于依赖图）
-3. 代码架构特点
+1. preflight_create_bundle - 创建 bundle 索引项目
+2. preflight_get_overview - 读取项目概览
+3. preflight_build_call_graph - 构建函数调用关系图
+4. 分析总结：
+   - 项目核心功能
+   - 主要模块及调用关系
+   - 入口函数和关键路径
 \`\`\`
 
-**Bundle 文件结构说明：**
+**🔗 函数调用分析 (v0.7.2 新增):**
+
+| 工具 | 用途 |
+|------|------|
+| \`preflight_build_call_graph\` | 构建函数级调用图 |
+| \`preflight_query_call_graph\` | 查询“谁调用了X”/“X调用什么” |
+| \`preflight_extract_code\` | 提取函数+所有依赖 |
+| \`preflight_interface_summary\` | 生成 API 文档 |
+
+支持语言: TypeScript, JavaScript, Python, Go, Rust
+
+**📚 Bundle 文件结构:**
 | 文件 | 内容 |
 |------|------|
 | \`OVERVIEW.md\` | 项目概览和结构总结 |
 | \`START_HERE.md\` | 入口文件和关键路径 |
 | \`AGENTS.md\` | AI Agent 使用指南 |
-| \`deps/dependency-graph.json\` | 依赖关系图（节点+边） |
-| \`manifest.json\` | bundle 元数据 |
-| \`repos/{owner}/{repo}/norm/\` | 规范化源代码 |
+| \`deps/dependency-graph.json\` | 模块依赖图 |
 
 ---
-💡 提示：搜索功能只能查找代码文件内容，不能搜索依赖图。要查看依赖图，请用 preflight_read_file 读取 deps/dependency-graph.json。`,
+💡 **示例查询:**
+- "谁调用了 handleRequest 函数？" → preflight_query_call_graph(symbol="handleRequest", direction="callers")
+- "提取 processData 函数及其依赖" → preflight_extract_code(symbol="processData")`,
             },
           },
         ],

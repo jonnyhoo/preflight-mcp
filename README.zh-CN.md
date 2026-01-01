@@ -24,7 +24,14 @@ Preflight-MCP 为 GitHub 仓库创建可搜索的知识库，让 Claude/GPT/Curs
 || 📄 不能读取 PDF/Word 文档 | **新** 文档解析与多模态提取 |
 || 🖼️ 图片/表格被忽略 | **新** 多模态内容搜索 |
 
-## v0.7.0 新特性
+## v0.7.2 新特性
+
+### 🔗 函数级调用图分析
+构建和查询调用图，深入理解代码：
+- **多语言支持** — TypeScript、Python、Go、Rust
+- **调用层级** — 谁调用了这个函数？它调用了什么？
+- **代码提取** — 提取函数及其所有依赖
+- **接口摘要** — 自动生成 API 文档
 
 ### 📄 文档解析
 解析复杂文档并提取结构化内容：
@@ -77,7 +84,8 @@ Preflight：🔗 追溯链接：
 - 🔗 **追溯链接** — 追踪代码↔测试↔文档关系
 - 📖 **自动生成指南** — `START_HERE.md`、`AGENTS.md`、`OVERVIEW.md`
 - ☁️ **云端同步** — 多路径镜像备份
-- ⚡ **21 个 MCP 工具 + 6 个 prompts** — 完整的代码探索工具集
+- ⚡ **25 个 MCP 工具 + 6 个 prompts** — 完整的代码探索工具集
+- 🔗 **调用图分析** — 函数级依赖追踪（v0.7.2）
 
 <details>
 <summary><b>全部功能（点击展开）</b></summary>
@@ -98,12 +106,13 @@ Preflight：🔗 追溯链接：
 ## 目录
 
 - [为什么需要 Preflight](#为什么需要-preflight)
-- [v0.7.0 新特性](#v070-新特性)
+- [v0.7.2 新特性](#v072-新特性)
 - [效果演示](#效果演示)
 - [核心功能](#核心功能)
 - [快速开始](#quick-start)
-- [工具](#tools-21-active)
+- [工具](#tools-25-active)
 - [Prompts](#prompts-6-total)
+- [调用图分析](#调用图分析)
 - [环境变量](#environment-variables)
 - [贡献指南](#contributing)
 
@@ -208,7 +217,33 @@ npm run smoke
 - 列表与清理逻辑只接受 UUID v4 作为 bundleId
 - 会自动过滤 `#recycle`、`tmp`、`.deleting` 等非 bundle 目录
 
-## Tools (19 active)
+## Tools (25 active)
+
+### 调用图工具 (v0.7.2 新增)
+
+#### `preflight_build_call_graph`
+为多语言项目构建函数级调用图。
+- **语言支持**：TypeScript、JavaScript、Python、Go、Rust
+- 自动检测项目语言
+- 触发词：「build call graph」「构建调用图」
+
+#### `preflight_query_call_graph`
+查询特定函数或方法的调用关系。
+- **方向**：callers（调用者）、callees（被调用）、both（双向）
+- 找出谁调用了这个函数，以及它调用了什么
+- 触发词：「who calls」「查询调用关系」「谁调用了」
+
+#### `preflight_extract_code`
+提取函数及其依赖，生成自包含代码。
+- **格式**：minimal（仅签名）、full（完整代码）、markdown（带文档）
+- 包含传递依赖
+- 触发词：「extract function」「提取代码」「提取函数」
+
+#### `preflight_interface_summary`
+为文件或项目生成接口摘要。
+- 列出所有导出的函数/类
+- 包含签名和文档
+- 触发词：「interface summary」「接口文档」「API 文档」
 
 ### `preflight_list_bundles`
 列出所有 bundle。
@@ -322,7 +357,7 @@ npm run smoke
 - 通过 `taskId`、`fingerprint` 或 `repos` 查询
 - 显示：阶段、进度百分比、消息、已用时间
 
-### 文档与多模态工具 (v0.7.0 新增)
+### 文档与多模态工具
 
 #### `preflight_parse_document`
 解析 PDF、Word、Excel、PowerPoint 或 HTML 文档。
@@ -404,6 +439,32 @@ Bundle 管理操作指南。
 追溯链接指南。
 - 显示：查询和创建代码↔测试、代码↔文档关系
 - 参数：`bundleId`（可选）
+
+## 调用图分析
+
+### 支持的语言
+
+| 语言 | 适配器 | 特性 |
+|------|--------|------|
+| TypeScript/JS | TS Language Service | 完整类型信息、引用查找、定义跳转 |
+| Python | tree-sitter | 函数、类、装饰器、docstring |
+| Go | tree-sitter | 函数、接口、方法、Go doc |
+| Rust | tree-sitter | fn、impl、trait、struct、enum、宏调用 |
+
+### 使用示例
+
+```
+"为 /path/to/project 构建调用图"
+"谁调用了 processData 函数？"
+"提取 handleRequest 函数及其所有依赖"
+"为 src/api/ 生成接口文档"
+```
+
+### 输出格式
+
+- **查询结果**：调用者/被调用者关系，带文件位置
+- **代码提取**：自包含代码，带依赖
+- **接口摘要**：Markdown 格式的 API 文档
 
 ## Resources
 
