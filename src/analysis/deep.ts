@@ -144,9 +144,14 @@ export function buildDeepAnalysis(
     focusPath?: string;
     focusQuery?: string;
     errors?: string[];
+  },
+  options?: {
+    /** Max characters for overview summary (default: 800) */
+    maxOverviewChars?: number;
   }
 ): DeepAnalysisResult {
   const { tree, search, deps, traces, overviewContent, testInfo, focusPath, focusQuery, errors = [] } = components;
+  const maxOverviewChars = options?.maxOverviewChars ?? 800;
   
   // Build coverage report
   const coverageReport = createEmptyCoverageReport();
@@ -172,9 +177,8 @@ export function buildDeepAnalysis(
     const lines = overviewContent.overview.split('\n');
     const contentLines: string[] = [];
     let charCount = 0;
-    const MAX_CHARS = 800; // Limit to ~200 tokens
     for (const line of lines) {
-      if (charCount >= MAX_CHARS) break;
+      if (charCount >= maxOverviewChars) break;
       // Skip empty lines at start and title lines
       if (contentLines.length === 0 && (line.trim() === '' || line.startsWith('#'))) continue;
       contentLines.push(line);
@@ -182,7 +186,7 @@ export function buildDeepAnalysis(
     }
     if (contentLines.length > 0) {
       summaryParts.push(contentLines.join('\n'));
-      if (charCount >= MAX_CHARS) {
+      if (charCount >= maxOverviewChars) {
         summaryParts.push('...(truncated, see OVERVIEW.md for full content)');
       }
     }

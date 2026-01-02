@@ -15,6 +15,7 @@ import { logger } from '../logging/logger.js';
 import { type PreflightConfig } from '../config.js';
 import { getBundlePaths, repoRootDir } from './paths.js';
 import { rmIfExists, isPathAvailable } from './utils.js';
+import { invalidateManifestCache } from './manifest.js';
 
 /**
  * Check if a string is a valid UUID (v4 format)
@@ -267,6 +268,9 @@ export async function clearBundleMulti(storageDirs: string[], bundleId: string):
         await fs.rename(paths.rootDir, deletingPath);
         deleted = true;
 
+        // Invalidate manifest cache for this bundle
+        invalidateManifestCache(paths.manifestPath);
+
         // Background deletion (fire-and-forget)
         // The renamed directory is invisible to listBundles (not a valid UUID)
         rmIfExists(deletingPath).catch((err) => {
@@ -277,6 +281,8 @@ export async function clearBundleMulti(storageDirs: string[], bundleId: string):
         logger.warn(`Rename failed for ${bundleId}, falling back to direct delete`);
         await clearBundle(dir, bundleId);
         deleted = true;
+        // Invalidate manifest cache for this bundle
+        invalidateManifestCache(paths.manifestPath);
       }
     } catch (err) {
       // Skip unavailable paths

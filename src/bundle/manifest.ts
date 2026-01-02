@@ -1,6 +1,131 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+// =============================================================================
+// Manifest Cache - LRU cache to avoid repeated disk reads during listBundles
+// =============================================================================
+
+interface ManifestCacheEntry {
+  manifest: BundleManifestV1;
+  cachedAt: number;
+  mtime: number; // File modification time for invalidation
+}
+
+class ManifestCache {
+  private cache = new Map<string, ManifestCacheEntry>();
+  private ttlMs: number;
+  private maxSize: number;
+
+  constructor(ttlMs = 5 * 60_000, maxSize = 100) {
+    this.ttlMs = ttlMs;
+    this.maxSize = maxSize;
+  }
+
+  /**
+   * Get a cached manifest if valid, otherwise return undefined.
+   */
+  get(manifestPath: string, currentMtime: number): BundleManifestV1 | undefined {
+    const entry = this.cache.get(manifestPath);
+    if (!entry) return undefined;
+
+    const now = Date.now();
+    // Invalidate if TTL expired or file was modified
+    if (now - entry.cachedAt > this.ttlMs || entry.mtime !== currentMtime) {
+      this.cache.delete(manifestPath);
+      return undefined;
+    }
+
+    return entry.manifest;
+  }
+
+  /**
+   * Store a manifest in cache.
+   */
+  set(manifestPath: string, manifest: BundleManifestV1, mtime: number): void {
+    // Evict oldest entries if at capacity
+    if (this.cache.size >= this.maxSize) {
+      const oldestKey = this.cache.keys().next().value;
+      if (oldestKey) {
+        this.cache.delete(oldestKey);
+      }
+    }
+
+    this.cache.set(manifestPath, {
+      manifest,
+      cachedAt: Date.now(),
+      mtime,
+    });
+  }
+
+  /**
+   * Invalidate a specific cache entry.
+   */
+  invalidate(manifestPath: string): void {
+    this.cache.delete(manifestPath);
+  }
+
+  /**
+   * Clear all cache entries.
+   */
+  clear(): void {
+    this.cache.clear();
+  }
+
+  /**
+   * Update cache configuration.
+   */
+  configure(ttlMs: number, maxSize: number): void {
+    this.ttlMs = ttlMs;
+    this.maxSize = maxSize;
+  }
+
+  /**
+   * Get cache statistics.
+   */
+  stats(): { size: number; ttlMs: number; maxSize: number } {
+    return {
+      size: this.cache.size,
+      ttlMs: this.ttlMs,
+      maxSize: this.maxSize,
+    };
+  }
+}
+
+// Global manifest cache singleton
+const manifestCache = new ManifestCache();
+
+/**
+ * Configure the manifest cache (call from config initialization).
+ */
+export function configureManifestCache(ttlMs: number, maxSize: number): void {
+  manifestCache.configure(ttlMs, maxSize);
+}
+
+/**
+ * Clear the manifest cache (useful for testing or after bundle updates).
+ */
+export function clearManifestCache(): void {
+  manifestCache.clear();
+}
+
+/**
+ * Invalidate a specific manifest cache entry.
+ */
+export function invalidateManifestCache(manifestPath: string): void {
+  manifestCache.invalidate(manifestPath);
+}
+
+/**
+ * Get manifest cache statistics.
+ */
+export function getManifestCacheStats(): { size: number; ttlMs: number; maxSize: number } {
+  return manifestCache.stats();
+}
+
+// =============================================================================
+// Types
+// =============================================================================
+
 export type RepoInput =
   | {
       kind: 'github';
@@ -90,7 +215,44 @@ export type BundleManifestV1 = {
   skippedFiles?: SkippedFileEntry[];
 };
 
+/**
+ * Read manifest with caching support.
+ * Uses LRU cache to avoid repeated disk reads during listBundles.
+ */
 export async function readManifest(manifestPath: string): Promise<BundleManifestV1> {
+  // Get file stats for cache invalidation
+  let mtime: number;
+  try {
+    const stats = await fs.stat(manifestPath);
+    mtime = stats.mtimeMs;
+  } catch {
+    // File doesn't exist or can't be read - will throw below
+    mtime = 0;
+  }
+
+  // Check cache first
+  const cached = manifestCache.get(manifestPath, mtime);
+  if (cached) {
+    return cached;
+  }
+
+  // Read from disk
+  const raw = await fs.readFile(manifestPath, 'utf8');
+  const parsed = JSON.parse(raw) as BundleManifestV1;
+  if (parsed.schemaVersion !== 1) {
+    throw new Error(`Unsupported manifest schemaVersion: ${String((parsed as any).schemaVersion)}`);
+  }
+
+  // Store in cache
+  manifestCache.set(manifestPath, parsed, mtime);
+
+  return parsed;
+}
+
+/**
+ * Read manifest without caching (use when you need fresh data).
+ */
+export async function readManifestUncached(manifestPath: string): Promise<BundleManifestV1> {
   const raw = await fs.readFile(manifestPath, 'utf8');
   const parsed = JSON.parse(raw) as BundleManifestV1;
   if (parsed.schemaVersion !== 1) {

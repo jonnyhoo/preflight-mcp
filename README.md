@@ -426,6 +426,13 @@ Response includes:
 ### Analysis & Evidence
 - `PREFLIGHT_ANALYSIS_MODE`: `none` | `quick` | `full` (default: `full`)
 - `PREFLIGHT_AST_ENGINE`: `wasm` (default) or `native`
+- `PREFLIGHT_DEEP_ANALYSIS_MAX_OVERVIEW_CHARS`: max chars for overview summary (default: 800)
+- `PREFLIGHT_DEFAULT_SEARCH_CONTEXT_LINES`: context lines for search excerpts (default: 30)
+
+### Performance Tuning
+- `PREFLIGHT_MANIFEST_CACHE_TTL_MS`: manifest cache TTL in ms (default: 300000 = 5 min)
+- `PREFLIGHT_MANIFEST_CACHE_MAX_SIZE`: max manifest cache entries (default: 100)
+- `PREFLIGHT_TASK_CLEANUP_DELAY_MS`: task cleanup delay after completion (default: 60000 = 1 min)
 
 ### Built-in HTTP API
 - `PREFLIGHT_HTTP_ENABLED`: enable/disable REST API (default: true)

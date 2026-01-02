@@ -61,6 +61,19 @@ export type PreflightConfig = {
    */
   strictMode: boolean;
 
+  // --- Analysis & Deep Analyze ---
+
+  /** Max characters for overview summary in deep analysis (default: 800). */
+  deepAnalysisMaxOverviewChars: number;
+  /** Default context lines for search excerpts (default: 30). */
+  defaultSearchContextLines: number;
+  /** Task cleanup delay in ms after completion (default: 60000 = 1 minute). */
+  taskCleanupDelayMs: number;
+  /** Manifest cache TTL in ms (default: 300000 = 5 minutes). */
+  manifestCacheTtlMs: number;
+  /** Max manifest cache entries (default: 100). */
+  manifestCacheMaxSize: number;
+
   // --- Semantic Search (Optional Feature) ---
 
   /** Enable semantic search (default: false). Requires embedding provider. */
@@ -182,6 +195,13 @@ export function getConfig(): PreflightConfig {
 
     // Error handling
     strictMode: envBoolean('PREFLIGHT_STRICT_MODE', false),
+
+    // Analysis & Deep Analyze
+    deepAnalysisMaxOverviewChars: envNumber('PREFLIGHT_DEEP_ANALYSIS_MAX_OVERVIEW_CHARS', 800),
+    defaultSearchContextLines: envNumber('PREFLIGHT_DEFAULT_SEARCH_CONTEXT_LINES', 30),
+    taskCleanupDelayMs: envNumber('PREFLIGHT_TASK_CLEANUP_DELAY_MS', 60_000),
+    manifestCacheTtlMs: envNumber('PREFLIGHT_MANIFEST_CACHE_TTL_MS', 5 * 60_000),
+    manifestCacheMaxSize: envNumber('PREFLIGHT_MANIFEST_CACHE_MAX_SIZE', 100),
 
     // Semantic search (optional, disabled by default)
     semanticSearchEnabled: envBoolean('PREFLIGHT_SEMANTIC_SEARCH', false),

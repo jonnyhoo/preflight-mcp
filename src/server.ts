@@ -7,6 +7,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import * as z from 'zod';
 
 import { getConfig } from './config.js';
+import { configureManifestCache } from './bundle/manifest.js';
 import {
   assertBundleComplete,
   bundleExists,
@@ -209,6 +210,9 @@ try {
 
 export async function startServer(): Promise<void> {
   const cfg = getConfig();
+
+  // Configure manifest cache with settings from config
+  configureManifestCache(cfg.manifestCacheTtlMs, cfg.manifestCacheMaxSize);
 
   // Run orphan bundle cleanup on startup (non-blocking, best-effort)
   cleanupOnStartup(cfg).catch((err) => {
@@ -3048,6 +3052,8 @@ export async function startServer(): Promise<void> {
           focusPath: focus.path,
           focusQuery: focus.query,
           errors,
+        }, {
+          maxOverviewChars: cfg.deepAnalysisMaxOverviewChars,
         });
 
         // RFC v2: Aggregate evidence from all claims into top-level array

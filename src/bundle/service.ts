@@ -10,7 +10,7 @@ import {
   toCloneUrl,
 } from './github.js';
 import { type IngestedFile, classifyIngestedFileKind } from './ingest.js';
-import { type RepoInput, type BundleManifestV1, type SkippedFileEntry, writeManifest, readManifest } from './manifest.js';
+import { type RepoInput, type BundleManifestV1, type SkippedFileEntry, writeManifest, readManifest, invalidateManifestCache } from './manifest.js';
 import { getBundlePaths } from './paths.js';
 import { writeAgentsMd, writeStartHereMd } from './guides.js';
 import { generateOverviewMarkdown, writeOverviewFile } from './overview.js';
@@ -998,6 +998,9 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
   };
 
   await writeManifest(paths.manifestPath, newManifest);
+
+  // Invalidate manifest cache after updating
+  invalidateManifestCache(paths.manifestPath);
 
   // Regenerate guides + overview.
   reportProgress('generating', 90, 'Regenerating guides and overview...');
