@@ -3,6 +3,7 @@ import fsSync from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { type IngestedFile } from '../bundle/ingest.js';
+import { getSearchCache, type SearchCacheEntry } from './cache.js';
 
 export type IndexBuildOptions = {
   includeDocs: boolean;
@@ -553,8 +554,18 @@ export function searchIndex(
   query: string,
   scope: SearchScope,
   limit: number,
-  bundleRoot?: string
+  bundleRoot?: string,
+  options?: { skipCache?: boolean }
 ): SearchHit[] {
+  // Check cache first (unless skipCache is set)
+  if (!options?.skipCache) {
+    const cache = getSearchCache();
+    const cached = cache.get({ dbPath, query, scope, limit });
+    if (cached) {
+      return cached.hits;
+    }
+  }
+
   const db = new Database(dbPath, { readonly: true });
   try {
     const ftsQuery = buildFtsQuery(query);
@@ -588,7 +599,7 @@ export function searchIndex(
     // Cache for file contents to avoid re-reading same files
     const fileCache = new Map<string, string>();
 
-    return rows.map((r) => {
+    const results = rows.map((r) => {
       const hit: SearchHit = {
         path: r.path,
         repo: r.repo,
@@ -624,6 +635,17 @@ export function searchIndex(
 
       return hit;
     });
+
+    // Cache the results (unless skipCache is set)
+    if (!options?.skipCache) {
+      const cache = getSearchCache();
+      cache.set(
+        { dbPath, query, scope, limit },
+        { hits: results, meta: {} }
+      );
+    }
+
+    return results;
   } finally {
     db.close();
   }
@@ -636,8 +658,17 @@ export function searchIndex(
 export function searchIndexAdvanced(
   dbPath: string,
   query: string,
-  options: SearchOptions
+  options: SearchOptions & { skipCache?: boolean }
 ): { hits: SearchHit[]; grouped?: GroupedSearchHit[]; meta: { tokenBudgetHint?: string } } {
+  // Check cache first (unless skipCache is set)
+  if (!options.skipCache) {
+    const cache = getSearchCache();
+    const cached = cache.get({ dbPath, query, scope: options.scope, limit: options.limit, options });
+    if (cached) {
+      return cached;
+    }
+  }
+
   const db = new Database(dbPath, { readonly: true });
   try {
     const ftsQuery = buildFtsQuery(query);
@@ -775,11 +806,22 @@ export function searchIndexAdvanced(
       }
     }
 
-    return {
+    const result = {
       hits: groupByFile ? [] : hits, // Return empty hits when grouped
       grouped,
       meta: { tokenBudgetHint },
     };
+
+    // Cache the results (unless skipCache is set)
+    if (!options.skipCache) {
+      const cache = getSearchCache();
+      cache.set(
+        { dbPath, query, scope: options.scope, limit: options.limit, options },
+        result
+      );
+    }
+
+    return result;
   } finally {
     db.close();
   }
@@ -1209,6 +1251,11 @@ export function searchModalContent(
 ): ModalSearchHit[] {
   const { scope = 'all', limit = 20, includeScore = false } = options;
   
+  // Check if database file exists before opening in readonly mode
+  if (!fsSync.existsSync(dbPath)) {
+    return [];
+  }
+  
   const db = new Database(dbPath, { readonly: true });
   try {
     // Check if modal_content table exists
@@ -1279,6 +1326,11 @@ export function searchModalByKeywords(
     return [];
   }
   
+  // Check if database file exists before opening in readonly mode
+  if (!fsSync.existsSync(dbPath)) {
+    return [];
+  }
+  
   const db = new Database(dbPath, { readonly: true });
   try {
     // Check if tables exist
@@ -1338,6 +1390,15 @@ export function getModalContentStats(dbPath: string): {
   byKind: Record<ModalContentKind, number>;
   uniqueDocuments: number;
 } {
+  // Check if database file exists before opening in readonly mode
+  if (!fsSync.existsSync(dbPath)) {
+    return {
+      totalItems: 0,
+      byKind: { image: 0, table: 0, equation: 0, diagram: 0 },
+      uniqueDocuments: 0,
+    };
+  }
+  
   const db = new Database(dbPath, { readonly: true });
   try {
     const tableExists = db.prepare(

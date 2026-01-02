@@ -115,6 +115,9 @@ export interface ModalProcessResult {
   
   /** Raw LLM response if applicable (for debugging) */
   rawResponse?: string;
+  
+  /** Processing time in milliseconds */
+  processingTimeMs?: number;
 }
 
 // ============================================================================

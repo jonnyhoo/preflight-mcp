@@ -217,7 +217,7 @@ npm run smoke
 - 列表与清理逻辑只接受 UUID v4 作为 bundleId
 - 会自动过滤 `#recycle`、`tmp`、`.deleting` 等非 bundle 目录
 
-## Tools (25 active)
+## Tools (22 active)
 
 ### 调用图工具 (v0.7.2 新增)
 

@@ -226,6 +226,7 @@ export abstract class BaseModalProcessor {
       rawResponse: this.config.includeRawResponse
         ? result.extractedContent
         : undefined,
+      processingTimeMs: result.processingTimeMs,
     };
   }
 
@@ -315,6 +316,7 @@ export abstract class BaseModalProcessor {
       confidence: 0,
       method: 'heuristic',
       warnings: [error],
+      processingTimeMs,
     };
   }
 

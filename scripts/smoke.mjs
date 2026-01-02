@@ -68,12 +68,12 @@ try {
   console.log('read START_HERE ok:', startHere.contents?.[0]?.uri);
 
   const searchRes = await client.callTool({
-    name: 'preflight_search_bundle',
+    name: 'preflight_search_and_read',
     arguments: { bundleId, query: 'Hello', scope: 'docs', limit: 5 },
   });
 
-  console.log('search_bundle:', searchRes.structuredContent);
-  if (!Array.isArray(searchRes.structuredContent?.hits) || searchRes.structuredContent.hits.length === 0) {
+  console.log('search_and_read:', searchRes.structuredContent);
+  if (!Array.isArray(searchRes.structuredContent?.data?.hits) || searchRes.structuredContent.data.hits.length === 0) {
     throw new Error('Expected at least one search hit');
   }
 

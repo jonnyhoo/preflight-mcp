@@ -2,23 +2,16 @@
  * Unit tests for PDF parser.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { PdfParser, createPdfParser } from '../../src/parser/pdf-parser.js';
 
-// Mock unpdf module
-vi.mock('unpdf', () => ({
-  getDocumentProxy: vi.fn(),
-  extractText: vi.fn(),
-  extractImages: vi.fn(),
-}));
-
-import { getDocumentProxy, extractText, extractImages } from 'unpdf';
+// Note: Module mocking not needed for basic tests - these tests don't execute parsing
 
 describe('PdfParser', () => {
   let parser: PdfParser;
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    jest.clearAllMocks();
     parser = new PdfParser();
   });
 

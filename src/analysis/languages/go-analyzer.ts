@@ -79,6 +79,21 @@ export class GoAnalyzer {
     const treeSitterResult = await extractExtensionPointsWasm(filePath, content);
     
     if (treeSitterResult && treeSitterResult.extensionPoints.length > 0) {
+      // Check if tree-sitter found methods in interfaces
+      const hasMethodsInInterfaces = treeSitterResult.extensionPoints.some(
+        p => p.kind === 'interface' && p.methods && p.methods.length > 0
+      );
+      
+      // If tree-sitter found interfaces but no methods, fall back to regex
+      // as tree-sitter might have failed to parse the methods
+      if (!hasMethodsInInterfaces) {
+        const hasInterfaces = treeSitterResult.extensionPoints.some(p => p.kind === 'interface');
+        if (hasInterfaces) {
+          logger.debug('Tree-sitter found interfaces without methods, falling back to regex');
+          return this.analyzeContentWithRegex(content, filePath);
+        }
+      }
+      
       return this.convertTreeSitterResult(treeSitterResult.extensionPoints, filePath);
     }
     

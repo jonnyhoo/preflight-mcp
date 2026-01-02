@@ -256,7 +256,7 @@ export function createAnalyzeModalHandler(deps: {
       if (result.successCount > 0) {
         addNextAction(
           ctx,
-          'preflight_search_bundle',
+          'preflight_search_and_read',
           { bundleId: args.bundleId, query: 'extracted entity keywords' },
           'Search for related content using extracted information'
         );

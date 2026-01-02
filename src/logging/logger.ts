@@ -1,44 +1,18 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-export enum LogLevel {
-	DEBUG = 0,
-	INFO = 1,
-	WARN = 2,
-	ERROR = 3,
-	FATAL = 4
-}
+import {
+	LogLevel,
+	type LogEntry,
+	type LoggerConfig,
+	type ILogger,
+} from './types.js';
+import { setGlobalLogger } from './context.js';
 
-export interface LogEntry {
-	timestamp: string;
-	level: LogLevel;
-	levelName: string;
-	message: string;
-	module?: string;
-	function?: string;
-	line?: number;
-	metadata?: Record<string, any>;
-	error?: {
-		name: string;
-		message: string;
-		stack?: string;
-	};
-}
+// Re-export types for backward compatibility
+export { LogLevel, type LogEntry, type LoggerConfig, type ILogger } from './types.js';
 
-export interface LoggerConfig {
-	level: LogLevel;
-	output: 'console' | 'file' | 'both';
-	filePath?: string;
-	maxFileSize?: number; // MB
-	maxFiles?: number;
-	enableColors?: boolean;
-	enableTimestamp?: boolean;
-	enableMetadata?: boolean;
-	enableStackTrace?: boolean;
-	format: 'json' | 'text';
-}
-
-export class StructuredLogger {
+export class StructuredLogger implements ILogger {
 	private config: LoggerConfig;
 	private logBuffer: LogEntry[] = [];
 	private bufferSize = 1000;
@@ -64,7 +38,7 @@ export class StructuredLogger {
 
 	private startFlushTimer(): void {
 		this.flushTimer = setInterval(() => {
-			this.flush().catch(error => {
+			this.flushInternal().catch(error => {
 				console.error('Failed to flush logs:', error);
 			});
 		}, this.flushInterval);
@@ -73,7 +47,7 @@ export class StructuredLogger {
 		this.flushTimer.unref?.();
 	}
 
-	private async flush(): Promise<void> {
+	private async flushInternal(): Promise<void> {
 		if (this.logBuffer.length === 0) {
 			return;
 		}
@@ -306,7 +280,7 @@ export class StructuredLogger {
 			this.logBuffer.push(entry);
 			
 			if (this.logBuffer.length >= this.bufferSize) {
-				this.flush().catch(error => {
+				this.flushInternal().catch(error => {
 					console.error('Failed to flush logs:', error);
 				});
 			}
@@ -333,9 +307,9 @@ export class StructuredLogger {
 		this.log(LogLevel.FATAL, message, metadata, error);
 	}
 
-	// Flush buffer immediately
-	async flushNow(): Promise<void> {
-		await this.flush();
+	// Flush buffer immediately (implements ILogger.flush)
+	async flush(): Promise<void> {
+		await this.flushInternal();
 	}
 
 	// Update configuration
@@ -353,7 +327,7 @@ export class StructuredLogger {
 		if (this.flushTimer) {
 			clearInterval(this.flushTimer);
 		}
-		await this.flush();
+		await this.flushInternal();
 	}
 }
 
@@ -365,21 +339,42 @@ export const defaultLogger = new StructuredLogger({
 	format: 'text'
 });
 
-// Convenience functions
-export const logger = {
-	debug: (message: string, metadata?: Record<string, any>) => defaultLogger.debug(message, metadata),
-	info: (message: string, metadata?: Record<string, any>) => defaultLogger.info(message, metadata),
-	warn: (message: string, metadata?: Record<string, any>) => defaultLogger.warn(message, metadata),
-	error: (message: string, error?: Error, metadata?: Record<string, any>) => defaultLogger.error(message, error, metadata),
-	fatal: (message: string, error?: Error, metadata?: Record<string, any>) => defaultLogger.fatal(message, error, metadata),
-	flush: () => defaultLogger.flushNow(),
+// Register the default logger in the global context
+setGlobalLogger(defaultLogger);
+
+// Convenience functions (backward-compatible API)
+export const logger: ILogger = {
+	debug: (message: string, metadata?: Record<string, unknown> | Error) => {
+		if (metadata instanceof Error) {
+			defaultLogger.debug(message, { error: metadata.message, stack: metadata.stack });
+		} else {
+			defaultLogger.debug(message, metadata);
+		}
+	},
+	info: (message: string, metadata?: Record<string, unknown> | Error) => {
+		if (metadata instanceof Error) {
+			defaultLogger.info(message, { error: metadata.message, stack: metadata.stack });
+		} else {
+			defaultLogger.info(message, metadata);
+		}
+	},
+	warn: (message: string, metadata?: Record<string, unknown> | Error) => {
+		if (metadata instanceof Error) {
+			defaultLogger.warn(message, { error: metadata.message, stack: metadata.stack });
+		} else {
+			defaultLogger.warn(message, metadata);
+		}
+	},
+	error: (message: string, error?: Error, metadata?: Record<string, unknown>) => defaultLogger.error(message, error, metadata),
+	fatal: (message: string, error?: Error, metadata?: Record<string, unknown>) => defaultLogger.fatal(message, error, metadata),
+	flush: () => defaultLogger.flush(),
 	updateConfig: (config: Partial<LoggerConfig>) => defaultLogger.updateConfig(config),
 	getConfig: () => defaultLogger.getConfig(),
 	close: () => defaultLogger.close()
 };
 
 // Create a module-specific logger
-export function createModuleLogger(moduleName: string, config?: Partial<LoggerConfig>) {
+export function createModuleLogger(moduleName: string, config?: Partial<LoggerConfig>): ILogger {
 	const moduleConfig = {
 		...config,
 		// Module-specific configuration can be added here
@@ -388,17 +383,34 @@ export function createModuleLogger(moduleName: string, config?: Partial<LoggerCo
 	const moduleLogger = new StructuredLogger(moduleConfig);
 	
 	return {
-		debug: (message: string, metadata?: Record<string, any>) => 
-			moduleLogger.debug(message, { module: moduleName, ...metadata }),
-		info: (message: string, metadata?: Record<string, any>) => 
-			moduleLogger.info(message, { module: moduleName, ...metadata }),
-		warn: (message: string, metadata?: Record<string, any>) => 
-			moduleLogger.warn(message, { module: moduleName, ...metadata }),
-		error: (message: string, error?: Error, metadata?: Record<string, any>) => 
+		debug: (message: string, metadata?: Record<string, unknown> | Error) => {
+			if (metadata instanceof Error) {
+				moduleLogger.debug(message, { module: moduleName, error: metadata.message, stack: metadata.stack });
+			} else {
+				moduleLogger.debug(message, { module: moduleName, ...metadata });
+			}
+		},
+		info: (message: string, metadata?: Record<string, unknown> | Error) => {
+			if (metadata instanceof Error) {
+				moduleLogger.info(message, { module: moduleName, error: metadata.message, stack: metadata.stack });
+			} else {
+				moduleLogger.info(message, { module: moduleName, ...metadata });
+			}
+		},
+		warn: (message: string, metadata?: Record<string, unknown> | Error) => {
+			if (metadata instanceof Error) {
+				moduleLogger.warn(message, { module: moduleName, error: metadata.message, stack: metadata.stack });
+			} else {
+				moduleLogger.warn(message, { module: moduleName, ...metadata });
+			}
+		},
+		error: (message: string, error?: Error, metadata?: Record<string, unknown>) => 
 			moduleLogger.error(message, error, { module: moduleName, ...metadata }),
-		fatal: (message: string, error?: Error, metadata?: Record<string, any>) => 
+		fatal: (message: string, error?: Error, metadata?: Record<string, unknown>) => 
 			moduleLogger.fatal(message, error, { module: moduleName, ...metadata }),
-		flush: () => moduleLogger.flushNow(),
+		flush: () => moduleLogger.flush(),
+		updateConfig: (cfg: Partial<LoggerConfig>) => moduleLogger.updateConfig(cfg),
+		getConfig: () => moduleLogger.getConfig(),
 		close: () => moduleLogger.close()
 	};
 }

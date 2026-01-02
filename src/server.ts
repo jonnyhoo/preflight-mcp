@@ -34,6 +34,7 @@ import { cleanupOnStartup, cleanupOrphanBundles } from './bundle/cleanup.js';
 import { startHttpServer } from './http/server.js';
 import { DependencyGraphInputSchema, generateDependencyGraph } from './evidence/dependencyGraph.js';
 import { TraceQueryInputSchema, TraceUpsertInputSchema, traceQuery, traceUpsert } from './trace/service.js';
+import { SuggestTracesInputSchema, suggestTraces, suggestTracesToolDescription, type SuggestTracesResult } from './trace/suggest.js';
 import { generateRepoTree, formatTreeResult } from './bundle/tree.js';
 import { buildDeepAnalysis, detectTestInfo, type TreeSummary, type SearchSummary, type DepsSummary, type TraceSummary, type OverviewContent, type TestInfo, type NextCommand } from './analysis/deep.js';
 import { validateReport } from './analysis/validate.js';
@@ -600,14 +601,14 @@ export async function startServer(): Promise<void> {
         '├── analysis/FACTS.json    # Static analysis facts\n' +
         '├── deps/dependency-graph.json  # Import graph (generated on demand)\n' +
         '├── trace/trace.json       # Trace links export (auto-generated after trace_upsert)\n' +
-        '├── indexes/search.sqlite3 # FTS5 index (use preflight_search_bundle)\n' +
+        '├── indexes/search.sqlite3 # FTS5 index (use preflight_search_and_read)\n' +
         '└── repos/{owner}/{repo}/norm/  # Source code & original README\n' +
         '```\n\n' +
         '**File Access:**\n' +
         '- Omit `file` param → returns OVERVIEW + START_HERE + AGENTS + manifest (recommended)\n' +
         '- Original README: `file: "repos/{owner}/{repo}/norm/README.md"`\n' +
         '- Source code: `file: "repos/{owner}/{repo}/norm/{path}"`\n' +
-        '- Search code: use preflight_search_bundle instead',
+        '- Search code: use preflight_search_and_read instead',
       inputSchema: {
         bundleId: z.string().describe('Bundle ID to read.'),
         file: z.string().optional().describe('Specific file to read (e.g., "deps/dependency-graph.json"). If omitted, uses mode-based batch reading.'),
@@ -1231,7 +1232,7 @@ export async function startServer(): Promise<void> {
         '**Recommended workflow:**\n' +
         '1. Call preflight_repo_tree to understand structure\n' +
         '2. Read OVERVIEW.md for AI-generated summary\n' +
-        '3. Use preflight_search_bundle to find specific code\n' +
+        '3. Use preflight_search_and_read to find specific code\n' +
         '4. Use preflight_read_file with ranges for evidence gathering',
       inputSchema: {
         bundleId: z.string().describe('Bundle ID to analyze.'),
@@ -2400,6 +2401,87 @@ export async function startServer(): Promise<void> {
         return {
           content: [{ type: 'text', text: textOutput }],
           structuredContent: out,
+        };
+      } catch (err) {
+        throw wrapPreflightError(err);
+      }
+    }
+  );
+
+  // ==========================================================================
+  // Trace Discovery - Auto-suggest trace relationships
+  // ==========================================================================
+
+  server.registerTool(
+    'preflight_suggest_traces',
+    {
+      title: suggestTracesToolDescription.title,
+      description: suggestTracesToolDescription.description,
+      inputSchema: SuggestTracesInputSchema,
+      outputSchema: {
+        bundleId: z.string(),
+        edge_type: z.string(),
+        scope: z.string(),
+        suggestions: z.array(z.object({
+          source: z.object({ type: z.string(), id: z.string() }),
+          target: z.object({ type: z.string(), id: z.string() }),
+          type: z.string(),
+          confidence: z.number().optional(),
+          method: z.enum(['exact', 'heuristic']).optional(),
+          sources: z.array(z.any()).optional(),
+          reason: z.string(),
+          matchType: z.enum(['naming', 'import', 'directory', 'heuristic']),
+        })),
+        stats: z.object({
+          totalTestFiles: z.number(),
+          totalSourceFiles: z.number(),
+          matchedPairs: z.number(),
+          avgConfidence: z.number(),
+        }),
+        hint: z.string(),
+        nextSteps: z.array(z.string()),
+      },
+      annotations: {
+        readOnlyHint: true,
+      },
+    },
+    async (args) => {
+      try {
+        await assertBundleComplete(cfg, args.bundleId);
+        const result = await suggestTraces(cfg, args);
+        
+        // Build human-readable summary
+        const lines: string[] = [
+          `## Trace Suggestions for ${args.bundleId}`,
+          '',
+          `**Stats:** ${result.stats.totalTestFiles} test files, ${result.stats.totalSourceFiles} source files`,
+          `**Found:** ${result.suggestions.length} potential relationships (avg confidence: ${(result.stats.avgConfidence * 100).toFixed(0)}%)`,
+          '',
+          `💡 ${result.hint}`,
+          '',
+        ];
+        
+        if (result.suggestions.length > 0) {
+          lines.push('### Suggestions (top 10)');
+          for (const s of result.suggestions.slice(0, 10)) {
+            lines.push(`- \`${s.source.id}\` → \`${s.target.id}\` (${(s.confidence ?? 0) * 100}% ${s.matchType})`);
+          }
+          if (result.suggestions.length > 10) {
+            lines.push(`... and ${result.suggestions.length - 10} more`);
+          }
+          lines.push('');
+        }
+        
+        if (result.nextSteps.length > 0) {
+          lines.push('### Next Steps');
+          for (const step of result.nextSteps) {
+            lines.push(`- ${step}`);
+          }
+        }
+        
+        return {
+          content: [{ type: 'text', text: lines.join('\n') }],
+          structuredContent: result,
         };
       } catch (err) {
         throw wrapPreflightError(err);
@@ -3715,4 +3797,39 @@ src/parser.ts 被 tests/parser.test.ts 测试
   // Connect via stdio.
   const transport = new StdioServerTransport();
   await server.connect(transport);
+
+  // Graceful shutdown: flush and close logger on process exit signals
+  const gracefulShutdown = async (signal: string) => {
+    logger.info(`Received ${signal}, shutting down gracefully...`);
+    try {
+      await logger.close();
+    } catch {
+      // Ignore close errors during shutdown
+    }
+    process.exit(0);
+  };
+
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
+  // Handle uncaught exceptions - log and exit
+  process.on('uncaughtException', async (err) => {
+    logger.fatal('Uncaught exception', err);
+    try {
+      await logger.close();
+    } catch {
+      // Ignore
+    }
+    process.exit(1);
+  });
+
+  process.on('unhandledRejection', async (reason) => {
+    logger.fatal('Unhandled rejection', reason instanceof Error ? reason : new Error(String(reason)));
+    try {
+      await logger.close();
+    } catch {
+      // Ignore
+    }
+    process.exit(1);
+  });
 }

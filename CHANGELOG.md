@@ -29,9 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `preflight_search_bundle` — Use `preflight_search_and_read` instead
   - `preflight_evidence_dependency_graph` — Use `preflight_dependency_graph` instead
   - `preflight_trace_export` — trace.json is auto-exported after each trace_upsert
-  - `preflight_suggest_traces` — Use `preflight_deep_analyze_bundle` for test detection
-- Deleted `src/trace/suggest.ts` (only used by preflight_suggest_traces)
-- **Tool count**: Now 21 active tools (was 25 total with 4 deprecated)
+- **Tool count**: Now 22 active tools (was 25 total with 3 deprecated)
+
+### Re-added
+- `preflight_suggest_traces` — Auto-discover test↔code relationships using naming conventions and directory structure (re-implemented with improved matching)
 
 ## [0.7.0] - 2025-12-31
 
@@ -59,7 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `preflight_dependency_graph` — Unified dependency graph tool (replaces evidence_dependency_graph)
 
 ### Changed
-- **Tool count**: 21 active tools + 6 prompts (after v0.7.1 cleanup; originally 25 with 4 deprecated)
+- **Tool count**: 22 active tools + 6 prompts (after v0.7.1 cleanup; originally 25 with 3 deprecated; `preflight_suggest_traces` re-added)
 - **Bundle layout**: Added `indexes/modal.sqlite3` for multimodal content index
 - **README.zh-CN.md**: Synchronized with English README for v0.7.0 features
 

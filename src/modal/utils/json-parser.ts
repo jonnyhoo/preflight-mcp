@@ -317,7 +317,7 @@ export function extractFieldsWithRegex(
   }
 
   // Return null if no useful content was extracted
-  if (!description && !entityName && entityName === 'unknown_entity') {
+  if (!description && entityName === 'unknown_entity') {
     return null;
   }
 

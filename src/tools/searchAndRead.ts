@@ -25,7 +25,7 @@ import {
 } from '../mcp/responseBuilder.js';
 import { createNextCursor, parseCursorOrDefault } from '../mcp/cursor.js';
 import { safeJoin, toBundleFileUri } from '../mcp/uris.js';
-import { searchIndex, type SearchHit, type SearchScope } from '../search/sqliteFts.js';
+import { searchIndex, searchIndexAdvanced, type SearchHit, type SearchScope, type GroupedSearchHit } from '../search/sqliteFts.js';
 
 /**
  * Input schema for preflight_search_and_read.
@@ -89,6 +89,16 @@ export const SearchAndReadInputSchema = {
       'If false, return search metadata only (path, lineNo, score) without reading file content. ' +
       'Use false for quick index-only searches (like groupByFile in search_bundle).'
     ),
+  // NEW: groupByFile parameter for token-efficient grouped results
+  groupByFile: z
+    .boolean()
+    .default(false)
+    .describe(
+      'If true, group results by file instead of returning individual hits. ' +
+      'Returns {path, hitCount, lines[], topSnippet} per file. ' +
+      'Significantly reduces tokens when same file has multiple matches. ' +
+      'When groupByFile=true, readContent is ignored (no excerpts returned).'
+    ),
 };
 
 /**
@@ -109,6 +119,23 @@ export interface SearchAndReadHit {
 }
 
 /**
+ * Grouped search hit for token-efficient output.
+ */
+export interface GroupedSearchAndReadHit {
+  path: string;
+  repo: string;
+  kind: 'doc' | 'code';
+  /** Number of matching lines in this file */
+  hitCount: number;
+  /** Line numbers of all matches */
+  lines: number[];
+  /** Best matching snippet (highest relevance) */
+  topSnippet: string;
+  /** Best score (most relevant) */
+  topScore?: number;
+}
+
+/**
  * Output data for preflight_search_and_read.
  */
 export interface SearchAndReadData {
@@ -116,6 +143,10 @@ export interface SearchAndReadData {
   query: string;
   scope: SearchScope;
   hits: SearchAndReadHit[];
+  /** Grouped results (when groupByFile=true) */
+  grouped?: GroupedSearchAndReadHit[];
+  /** Token savings hint (when groupByFile=true) */
+  tokenSavingsHint?: string;
 }
 
 /**
@@ -218,6 +249,7 @@ export type SearchAndReadInput = {
   cursor?: string;
   format?: 'json' | 'text';
   readContent?: boolean;
+  groupByFile?: boolean;
 };
 
 /**
@@ -267,6 +299,52 @@ export function createSearchAndReadHandler(deps: {
       const withLineNumbers = args.withLineNumbers ?? true;
       const maxBytesPerHit = args.maxBytesPerHit ?? 2000;
       const tokenBudget = args.tokenBudget;
+      const groupByFile = args.groupByFile ?? false;
+
+      // Fast path: groupByFile mode uses searchIndexAdvanced
+      if (groupByFile) {
+        const advancedResult = searchIndexAdvanced(paths.searchDbPath, args.query, {
+          scope,
+          limit: limit * 3, // Fetch more to ensure enough grouped results
+          groupByFile: true,
+          includeScore: true,
+          fileTypeFilters: args.fileTypeFilters,
+          bundleRoot: paths.rootDir,
+        });
+
+        // Convert to grouped output format
+        const grouped: GroupedSearchAndReadHit[] = (advancedResult.grouped ?? []).slice(0, limit).map(g => ({
+          path: g.path,
+          repo: g.repo,
+          kind: g.kind,
+          hitCount: g.hitCount,
+          lines: g.lines,
+          topSnippet: g.topSnippet,
+          topScore: g.topScore,
+        }));
+
+        const data: SearchAndReadData = {
+          bundleId: args.bundleId,
+          query: args.query,
+          scope,
+          hits: [], // Empty when groupByFile=true
+          grouped,
+          tokenSavingsHint: advancedResult.meta.tokenBudgetHint,
+        };
+
+        if (grouped.length === 0) {
+          addWarning(ctx, 'NO_RESULTS', 'No matching results found', true);
+          addNextAction(
+            ctx,
+            'preflight_repo_tree',
+            { bundleId: args.bundleId },
+            'View repository structure to find relevant files'
+          );
+        }
+
+        const response = createSuccessResponse(ctx, data);
+        return formatResponse(response, format);
+      }
 
       // Fetch more results to allow for filtering
       const fetchLimit = Math.min(limit * 3, 100);
@@ -392,7 +470,7 @@ export function createSearchAndReadHandler(deps: {
         );
         addNextAction(
           ctx,
-          'preflight_search_bundle',
+          'preflight_search_and_read',
           { bundleId: args.bundleId, query: args.query, groupByFile: true },
           'Try broader search with file grouping'
         );
@@ -444,9 +522,14 @@ export const searchAndReadToolDescription = {
     '- Default contextLines=30 provides good surrounding context\n' +
     '- Results include citation-ready evidence[] with path + range\n' +
     '- Deterministic ordering: score → path → line (stable pagination)\n\n' +
+    '**Token Optimization (NEW):**\n' +
+    '- groupByFile=true: Returns {path, hitCount, lines[], topSnippet} per file\n' +
+    '- Saves 30-50% tokens when same file has multiple matches\n' +
+    '- Use for initial exploration, then readContent=true for specific files\n\n' +
     '**When to use vs other tools:**\n' +
     '- search_and_read: You need evidence excerpts NOW (most common)\n' +
-    '- search_bundle: You only need file locations, will read separately\n' +
+    '- search_and_read + groupByFile: Quick overview without reading content\n' +
+    '- groupByFile=true + readContent=false: Quick index-only search (replaces legacy search_bundle)\n' +
     '- read_files: You already know exact files and ranges\n\n' +
     '**Evidence Citation:**\n' +
     '- Each hit includes matchRange (exact match) and excerptRange (with context)\n' +

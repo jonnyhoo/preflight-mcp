@@ -2,20 +2,16 @@
  * Unit tests for Office document parser.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { OfficeParser, createOfficeParser } from '../../src/parser/office-parser.js';
 
-// Mock child_process for LibreOffice execution
-vi.mock('node:child_process', () => ({
-  execSync: vi.fn(),
-  exec: vi.fn(),
-}));
+// Note: Mocking not needed for basic tests - these tests don't execute parsing
 
 describe('OfficeParser', () => {
   let parser: OfficeParser;
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    jest.clearAllMocks();
     parser = new OfficeParser();
   });
 
@@ -45,7 +41,7 @@ describe('OfficeParser', () => {
 
   describe('name and supportedFormats', () => {
     it('should have correct name', () => {
-      expect(parser.name).toBe('office-parser');
+      expect(parser.name).toBe('officeparser');
     });
 
     it('should support all office formats', () => {

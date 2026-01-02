@@ -154,7 +154,7 @@ export const DependencyGraphInputSchema = {
       .describe(
         'Bundle-relative file path (NOT absolute path). Format: repos/{owner}/{repo}/norm/{path}. ' +
         'Example: repos/owner/repo/norm/src/index.ts or repos/jonnyhoo/langextract/norm/langextract/__init__.py. ' +
-        'Use preflight_search_bundle to discover the correct path if unsure.'
+        'Use preflight_search_and_read to discover the correct path if unsure.'
       ),
     symbol: z
       .string()
@@ -1165,7 +1165,7 @@ export async function generateDependencyGraph(cfg: PreflightConfig, rawArgs: unk
           `ERROR: You provided an absolute filesystem path, but file paths must be bundle-relative.\n` +
           `Correct format: repos/{owner}/{repo}/norm/{path/to/file}\n` +
           `Example: repos/owner/myrepo/norm/src/main.py\n\n` +
-          `Use preflight_search_bundle to find the correct file path.`
+          `Use preflight_search_and_read to find the correct file path.`
         );
       } else if (looksLikeBundleRelative) {
         throw new Error(
@@ -1175,7 +1175,7 @@ export async function generateDependencyGraph(cfg: PreflightConfig, rawArgs: unk
           `1. The bundle may be incomplete (download timed out or failed)\n` +
           `2. The file path may have a typo\n\n` +
           `Suggested actions:\n` +
-          `- Use preflight_search_bundle to verify available files\n` +
+          `- Use preflight_search_and_read to verify available files\n` +
           `- Use preflight_update_bundle with updateExisting:true to re-download\n` +
           `- Check if repair shows "indexed 0 file(s)" which indicates incomplete bundle`
         );
@@ -1185,7 +1185,7 @@ export async function generateDependencyGraph(cfg: PreflightConfig, rawArgs: unk
           `File paths must be bundle-relative, NOT absolute filesystem paths.\n` +
           `Correct format: repos/{owner}/{repo}/norm/{path/to/file}\n` +
           `Example: repos/owner/myrepo/norm/src/main.py\n\n` +
-          `Use preflight_search_bundle to find the correct file path.`
+          `Use preflight_search_and_read to find the correct file path.`
         );
       }
     }

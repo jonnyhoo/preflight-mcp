@@ -86,7 +86,7 @@ Preflight: 📄 Parsed design-spec.pdf (45 pages)
 - 📖 **Auto-generated guides** — `START_HERE.md`, `AGENTS.md`, `OVERVIEW.md`
 - ☁️ **Cloud sync** — Multi-path mirror backup for redundancy
 - 🧠 **EDDA (Evidence-Driven Deep Analysis)** — Auto-generate auditable claims with evidence
-- ⚡ **21 MCP tools + 6 prompts** — Streamlined toolkit optimized for LLM use
+- ⚡ **22 MCP tools + 6 prompts** — Streamlined toolkit optimized for LLM use
 - 🧠 **Intelligent routing** — Auto-suggest tools based on task
 - 🔗 **Call graph analysis** — Function-level dependency tracking (v0.7.2)
 
@@ -199,7 +199,7 @@ This will:
 "Search for architecture diagrams in the bundle"
 ```
 
-## Tools (25 active)
+## Tools (22 active)
 
 ### Call Graph Tools (NEW v0.7.2)
 

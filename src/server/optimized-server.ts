@@ -80,8 +80,8 @@ export class OptimizedPreflightServer {
 			// 停止调度器
 			await PreflightScheduler.stop();
 
-			// 刷新日志
-			await logger.flush();
+			// 刷新并关闭日志
+			await logger.close();
 
 			this.isRunning = false;
 			moduleLogger.info('Optimized preflight server stopped successfully');
@@ -286,12 +286,14 @@ export async function bootstrapOptimizedServer(): Promise<void> {
 		process.on('SIGINT', async () => {
 			logger.info('Received SIGINT, shutting down gracefully...');
 			await server.stop();
+			try { await logger.close(); } catch { /* ignore */ }
 			process.exit(0);
 		});
 		
 		process.on('SIGTERM', async () => {
 			logger.info('Received SIGTERM, shutting down gracefully...');
 			await server.stop();
+			try { await logger.close(); } catch { /* ignore */ }
 			process.exit(0);
 		});
 		
@@ -299,12 +301,14 @@ export async function bootstrapOptimizedServer(): Promise<void> {
 		process.on('uncaughtException', async (error) => {
 			logger.fatal('Uncaught exception', error);
 			await server.stop();
+			try { await logger.close(); } catch { /* ignore */ }
 			process.exit(1);
 		});
 		
 		process.on('unhandledRejection', async (reason, promise) => {
 			logger.fatal('Unhandled rejection', new Error(String(reason)), { promise });
 			await server.stop();
+			try { await logger.close(); } catch { /* ignore */ }
 			process.exit(1);
 		});
 		

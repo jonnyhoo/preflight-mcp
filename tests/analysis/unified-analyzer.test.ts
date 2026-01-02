@@ -276,7 +276,7 @@ OutputMode = "text" | "binary" | "stream"
     // Create a temp file path for testing (we'll analyze content directly)
     const { createPythonAnalyzer } = await import('../../src/analysis/languages/index.js');
     const pyAnalyzer = createPythonAnalyzer();
-    const result = pyAnalyzer.analyzeContent(pythonContent, 'parser.py');
+    const result = await pyAnalyzer.analyzeContent(pythonContent, 'parser.py');
     
     // Should find Protocol class
     const protocolPoint = result.extensionPoints.find(p => 
@@ -310,7 +310,7 @@ OutputMode: TypeAlias = Literal["text", "json", "xml"]
 ContentKind = "image" | "table" | "text" | "code"
     `;
     
-    const result = analyzer.analyzeContent(pythonContent, 'types.py');
+    const result = await analyzer.analyzeContent(pythonContent, 'types.py');
     
     // Should find union types
     expect(result.typeSemantics.unionTypes.length).toBeGreaterThan(0);
@@ -352,7 +352,7 @@ type Number interface {
 }
     `;
     
-    const result = analyzer.analyzeContent(goContent, 'handler.go');
+    const result = await analyzer.analyzeContent(goContent, 'handler.go');
     
     // Should find Handler interface
     const handlerInterface = result.extensionPoints.find(p => 
@@ -396,7 +396,7 @@ type Plugin interface {
 }
     `;
     
-    const result = analyzer.analyzeContent(goContent, 'plugin.go');
+    const result = await analyzer.analyzeContent(goContent, 'plugin.go');
     
     // Should have optional callbacks for each method
     const initCallback = result.typeSemantics.optionalCallbacks.find(c => c.name === 'Init');
@@ -448,7 +448,7 @@ pub enum Status {
 }
     `;
     
-    const result = analyzer.analyzeContent(rustContent, 'lib.rs');
+    const result = await analyzer.analyzeContent(rustContent, 'lib.rs');
     
     // Should find Handler trait
     const handlerTrait = result.extensionPoints.find(p => 
@@ -490,7 +490,7 @@ pub trait Processor {
 }
     `;
     
-    const result = analyzer.analyzeContent(rustContent, 'processor.rs');
+    const result = await analyzer.analyzeContent(rustContent, 'processor.rs');
     
     // Should find trait methods as callbacks
     const processMethod = result.typeSemantics.optionalCallbacks.find(c => c.name === 'process');

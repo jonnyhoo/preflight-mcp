@@ -17,7 +17,7 @@ import { type RepoInput, type BundleManifestV1, type SkippedFileEntry, writeMani
 import { getBundlePaths, repoMetaPath, repoNormDir, repoRawDir, repoRootDir } from './paths.js';
 import { writeAgentsMd, writeStartHereMd } from './guides.js';
 import { generateOverviewMarkdown, writeOverviewFile } from './overview.js';
-import { rebuildIndex } from '../search/sqliteFts.js';
+import { rebuildIndex, incrementalIndexUpdate, supportsIncrementalIndex } from '../search/sqliteFts.js';
 import { ingestContext7Libraries, type Context7LibrarySummary } from './context7.js';
 import { analyzeBundleStatic, type AnalysisMode } from './analysis.js';
 import { autoDetectTags, generateDisplayName, generateDescription } from './tagging.js';
@@ -1989,12 +1989,23 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
     librariesSummary = libIngest.libraries;
   }
 
-  // Rebuild index.
-  reportProgress('indexing', 85, `Rebuilding search index (${allIngestedFiles.length} files)...`);
-  await rebuildIndex(paths.searchDbPath, allIngestedFiles, {
+  // Rebuild or incrementally update index.
+  reportProgress('indexing', 85, `Updating search index (${allIngestedFiles.length} files)...`);
+  
+  // Try incremental update for better performance on large bundles
+  const indexOpts = {
     includeDocs: manifest.index.includeDocs,
     includeCode: manifest.index.includeCode,
-  });
+  };
+  
+  if (supportsIncrementalIndex(paths.searchDbPath)) {
+    const incrementalResult = await incrementalIndexUpdate(paths.searchDbPath, allIngestedFiles, indexOpts);
+    logger.info(`Incremental index update: ${incrementalResult.added} added, ${incrementalResult.updated} updated, ${incrementalResult.removed} removed, ${incrementalResult.unchanged} unchanged`);
+  } else {
+    // Fall back to full rebuild if incremental update not supported
+    await rebuildIndex(paths.searchDbPath, allIngestedFiles, indexOpts);
+    logger.info(`Full index rebuild: ${allIngestedFiles.length} files indexed`);
+  }
 
   const fingerprint = computeCreateInputFingerprint({
     repos: manifest.inputs.repos,
