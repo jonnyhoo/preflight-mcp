@@ -52,6 +52,15 @@ export type PreflightConfig = {
   /** In-progress lock timeout in ms (default: 30 minutes). */
   inProgressLockTimeoutMs: number;
 
+  // --- Error Handling ---
+
+  /**
+   * Enable strict error mode (default: false).
+   * When true, analysis errors are thrown instead of being silently logged.
+   * Useful for debugging and CI environments.
+   */
+  strictMode: boolean;
+
   // --- Semantic Search (Optional Feature) ---
 
   /** Enable semantic search (default: false). Requires embedding provider. */
@@ -170,6 +179,9 @@ export function getConfig(): PreflightConfig {
     maxSearchLimit: envNumber('PREFLIGHT_MAX_SEARCH_LIMIT', 200),
     defaultSearchLimit: envNumber('PREFLIGHT_DEFAULT_SEARCH_LIMIT', 30),
     inProgressLockTimeoutMs: envNumber('PREFLIGHT_IN_PROGRESS_LOCK_TIMEOUT_MS', 30 * 60_000),
+
+    // Error handling
+    strictMode: envBoolean('PREFLIGHT_STRICT_MODE', false),
 
     // Semantic search (optional, disabled by default)
     semanticSearchEnabled: envBoolean('PREFLIGHT_SEMANTIC_SEARCH', false),

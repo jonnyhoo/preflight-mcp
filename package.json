@@ -44,11 +44,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "smoke": "npm run build && node scripts/smoke.mjs",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "docs:generate": "typedoc",
+    "docs:serve": "typedoc --watch"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.25.1",
-    "typescript": "^5.9.3",
     "@vscode/tree-sitter-wasm": "^0.3.0",
     "adm-zip": "^0.5.16",
     "better-sqlite3": "^12.5.0",
@@ -58,6 +59,7 @@
     "pdf-parse": "^2.4.5",
     "scribe.js-ocr": "^0.9.3",
     "ts-morph": "^27.0.2",
+    "typescript": "^5.9.3",
     "unpdf": "^1.4.0",
     "web-tree-sitter": "^0.26.3",
     "zod": "^4.2.1"
@@ -71,6 +73,7 @@
     "@types/node-cron": "^3.0.11",
     "jest": "^30.2.0",
     "ts-jest": "^29.4.6",
-    "tsx": "^4.21.0"
+    "tsx": "^4.21.0",
+    "typedoc": "^0.28.15"
   }
 }

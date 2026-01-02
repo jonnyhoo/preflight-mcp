@@ -22,6 +22,21 @@ import type {
   OptionalCallbackInfo,
   InferredPurpose,
 } from '../types.js';
+import {
+  INTERFACE_BASE_SCORE,
+  INTERFACE_METHODS_HIGH_BONUS,
+  INTERFACE_METHODS_LOW_BONUS,
+  INTERFACE_EMPTY_SCORE,
+  INTERFACE_EMBEDDING_BONUS,
+  INTERFACE_HANDLER_BONUS,
+  INTERFACE_PLUGIN_BONUS,
+  CONSTRAINT_BASE_SCORE,
+  CONSTRAINT_MEMBERS_HIGH_BONUS,
+  CONSTRAINT_MEMBERS_LOW_BONUS,
+  CONSTRAINT_HIGH_MEMBER_THRESHOLD,
+  CONSTRAINT_LOW_MEMBER_THRESHOLD,
+  MAX_SCORE,
+} from '../scoring-config.js';
 
 const logger = createModuleLogger('go-analyzer');
 
@@ -589,40 +604,48 @@ export class GoAnalyzer {
     return 'enum-options';
   }
 
+  /**
+   * Calculate extensibility score for a Go interface.
+   * See src/analysis/scoring-config.ts for scoring constant documentation.
+   */
   private scoreInterface(iface: GoInterface): number {
-    let score = 60; // Base score for exported interfaces
+    let score = INTERFACE_BASE_SCORE;
 
     // More methods = more extensible
-    if (iface.methods.length >= 3) score += 15;
-    else if (iface.methods.length >= 1) score += 10;
+    if (iface.methods.length >= 3) score += INTERFACE_METHODS_HIGH_BONUS;
+    else if (iface.methods.length >= 1) score += INTERFACE_METHODS_LOW_BONUS;
 
-    // Empty interface (any) is very extensible
+    // Empty interface (any) is very extensible but too generic
     if (iface.methods.length === 0 && iface.embedded.length === 0) {
-      score = 50; // Lower score - too generic
+      score = INTERFACE_EMPTY_SCORE;
     }
 
     // Embedding other interfaces suggests composition pattern
-    if (iface.embedded.length > 0) score += 10;
+    if (iface.embedded.length > 0) score += INTERFACE_EMBEDDING_BONUS;
 
     // Common extension patterns
     const nameLower = iface.name.toLowerCase();
     if (nameLower.includes('handler') || nameLower.includes('processor')) {
-      score += 15;
+      score += INTERFACE_HANDLER_BONUS;
     }
     if (nameLower.includes('plugin') || nameLower.includes('provider')) {
-      score += 20;
+      score += INTERFACE_PLUGIN_BONUS;
     }
 
-    return Math.min(score, 100);
+    return Math.min(score, MAX_SCORE);
   }
 
+  /**
+   * Calculate extensibility score for a Go type constraint.
+   * See src/analysis/scoring-config.ts for scoring constant documentation.
+   */
   private scoreConstraint(memberCount: number): number {
-    let score = 50;
+    let score = CONSTRAINT_BASE_SCORE;
 
-    if (memberCount >= 5) score += 20;
-    else if (memberCount >= 3) score += 10;
+    if (memberCount >= CONSTRAINT_HIGH_MEMBER_THRESHOLD) score += CONSTRAINT_MEMBERS_HIGH_BONUS;
+    else if (memberCount >= CONSTRAINT_LOW_MEMBER_THRESHOLD) score += CONSTRAINT_MEMBERS_LOW_BONUS;
 
-    return Math.min(score, 100);
+    return Math.min(score, MAX_SCORE);
   }
 }
 

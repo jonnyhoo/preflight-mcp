@@ -6,6 +6,9 @@ package-lock.json.backup
 dist/
 *.tsbuildinfo
 
+# Generated documentation
+docs/api/
+
 # Smoke test output
 .preflight-test-bundles/
 .preflight-test-bundles-c7/

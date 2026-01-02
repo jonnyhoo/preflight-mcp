@@ -1,10 +1,20 @@
 /**
- * Bundle validation utilities.
- * Ensures bundle completeness and integrity.
+ * Bundle Validation Module
+ *
+ * Validates bundle completeness and integrity.
+ *
+ * This module was extracted from service.ts to follow Single Responsibility Principle.
+ *
+ * @module bundle/validation
  */
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+
+import type { PreflightConfig } from '../config.js';
+import { BundleNotFoundError } from '../errors.js';
+import { getBundlePaths } from './paths.js';
+import { findBundleStorageDir } from './list.js';
 
 export interface ValidationResult {
   isValid: boolean;
@@ -73,7 +83,7 @@ export async function validateBundleCompleteness(bundleRoot: string): Promise<Va
  */
 export interface SkippedFileInfo {
   path: string;
-  reason: 'too_large' | 'binary' | 'non_utf8' | 'max_total_reached' | 'unknown';
+  reason: 'too_large' | 'binary' | 'non_utf8' | 'max_total_reached';
   size?: number;
 }
 
@@ -116,4 +126,39 @@ export function parseSkippedString(s: string, repoId: string): SkippedFileInfo |
   }
 
   return null;
+}
+
+/**
+ * Assert that a bundle is complete and ready for operations.
+ * Throws an error with helpful guidance if the bundle is incomplete.
+ * Should be called at the entry point of tools that require a complete bundle
+ * (e.g., dependency graph, trace links, search).
+ */
+export async function assertBundleComplete(
+  cfg: PreflightConfig,
+  bundleId: string
+): Promise<void> {
+  const storageDir = await findBundleStorageDir(cfg.storageDirs, bundleId);
+  if (!storageDir) {
+    throw new BundleNotFoundError(bundleId);
+  }
+
+  const bundleRoot = getBundlePaths(storageDir, bundleId).rootDir;
+  const { isValid, missingComponents } = await validateBundleCompleteness(bundleRoot);
+
+  if (!isValid) {
+    const issues = missingComponents.join('\n  - ');
+    throw new Error(
+      `Bundle is incomplete and cannot be used for this operation.\n\n` +
+      `Bundle ID: ${bundleId}\n` +
+      `Missing components:\n  - ${issues}\n\n` +
+      `This usually happens when:\n` +
+      `1. Bundle creation was interrupted (timeout, network error, etc.)\n` +
+      `2. Bundle download is still in progress\n\n` +
+      `Suggested actions:\n` +
+      `- Use preflight_update_bundle with force:true to re-download the repository\n` +
+      `- Or use preflight_delete_bundle and preflight_create_bundle to start fresh\n` +
+      `- Check preflight_get_task_status if creation might still be in progress`
+    );
+  }
 }

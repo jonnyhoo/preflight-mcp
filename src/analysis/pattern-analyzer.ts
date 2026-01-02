@@ -12,6 +12,7 @@
 import * as fs from 'node:fs/promises';
 import type { DesignHintInfo, ExtensionPointInfo } from './types.js';
 import { createModuleLogger } from '../logging/logger.js';
+import { getConfig } from '../config.js';
 
 const logger = createModuleLogger('pattern-analyzer');
 
@@ -93,8 +94,15 @@ const INTERFACE_EXTENSION_PATTERNS = [
  * Analyzer for design patterns and comments in source code.
  */
 export class PatternAnalyzer {
+  private strictMode: boolean;
+
+  constructor(options?: { strictMode?: boolean }) {
+    this.strictMode = options?.strictMode ?? getConfig().strictMode;
+  }
+
   /**
    * Analyze a file for design hints.
+   * In strict mode, errors are thrown instead of being logged and returning empty results.
    */
   async analyzeFile(filePath: string, content?: string): Promise<DesignHintInfo[]> {
     const results: DesignHintInfo[] = [];
@@ -128,6 +136,10 @@ export class PatternAnalyzer {
       return results;
     } catch (error) {
       logger.error(`Failed to analyze ${filePath}`, error instanceof Error ? error : undefined);
+      // In strict mode, propagate errors instead of returning empty results
+      if (this.strictMode) {
+        throw error;
+      }
       return [];
     }
   }

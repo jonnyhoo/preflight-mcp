@@ -219,6 +219,8 @@ export interface SearchCacheConfig extends CacheConfig {
 export class SearchResultCache {
   private cache: LRUCache<SearchCacheEntry>;
   private keyPrefix: string;
+  /** Maps dbPath to set of cache keys for precise invalidation */
+  private dbPathToKeys: Map<string, Set<string>> = new Map();
 
   constructor(config: SearchCacheConfig = { maxSize: 500, ttlMs: 5 * 60 * 1000 }) {
     this.cache = new LRUCache<SearchCacheEntry>(config);
@@ -277,18 +279,37 @@ export class SearchResultCache {
   ): void {
     const key = this.generateKey(params);
     this.cache.set(key, result);
+
+    // Track key by dbPath for precise invalidation
+    const dbPath = params.dbPath;
+    let keySet = this.dbPathToKeys.get(dbPath);
+    if (!keySet) {
+      keySet = new Set();
+      this.dbPathToKeys.set(dbPath, keySet);
+    }
+    keySet.add(key);
   }
 
   /**
    * Invalidate cache for a specific database (e.g., after bundle update).
+   * Now uses precise invalidation instead of clearing entire cache.
    */
   invalidateByDbPath(dbPath: string): number {
-    // Since we hash the key, we can't easily match by dbPath
-    // For now, clear all cache on bundle update
-    // Future optimization: store dbPath->keys mapping
-    const size = this.cache.size;
-    this.cache.clear();
-    return size;
+    const keySet = this.dbPathToKeys.get(dbPath);
+    if (!keySet || keySet.size === 0) {
+      return 0;
+    }
+
+    let cleared = 0;
+    for (const key of keySet) {
+      if (this.cache.delete(key)) {
+        cleared++;
+      }
+    }
+
+    // Clean up the mapping
+    this.dbPathToKeys.delete(dbPath);
+    return cleared;
   }
 
   /**
@@ -296,6 +317,7 @@ export class SearchResultCache {
    */
   clear(): void {
     this.cache.clear();
+    this.dbPathToKeys.clear();
   }
 
   /**

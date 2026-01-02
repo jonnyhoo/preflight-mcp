@@ -1,6 +1,11 @@
 /**
- * Bundle cleanup utilities for MCP architecture
- * Designed to run on-demand (startup, list, etc.) rather than as a daemon
+ * Bundle Cleanup Module
+ *
+ * Handles bundle deletion, orphan cleanup, and cleanup on startup.
+ *
+ * This module was extracted from service.ts to follow Single Responsibility Principle.
+ *
+ * @module bundle/cleanup
  */
 
 import fs from 'node:fs/promises';
@@ -8,8 +13,8 @@ import path from 'node:path';
 
 import { logger } from '../logging/logger.js';
 import { type PreflightConfig } from '../config.js';
-import { getBundlePaths } from './paths.js';
-import { rmIfExists } from '../utils/index.js';
+import { getBundlePaths, repoRootDir } from './paths.js';
+import { rmIfExists, isPathAvailable } from './utils.js';
 
 /**
  * Check if a string is a valid UUID (v4 format)
@@ -208,5 +213,110 @@ export async function cleanupOnStartup(cfg: PreflightConfig): Promise<void> {
   } catch (err) {
     // Non-critical: just log and continue
     logger.warn(`Startup cleanup failed (non-critical): ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+// ============================================================================
+// Single Directory Operations (from service.ts)
+// ============================================================================
+
+/**
+ * Clear a bundle from a single storage directory.
+ */
+export async function clearBundle(storageDir: string, bundleId: string): Promise<void> {
+  const p = getBundlePaths(storageDir, bundleId);
+  await rmIfExists(p.rootDir);
+}
+
+/**
+ * Remove a specific repo directory from a bundle.
+ */
+export async function ensureRepoDirRemoved(storageDir: string, bundleId: string, owner: string, repo: string): Promise<void> {
+  const p = getBundlePaths(storageDir, bundleId);
+  await rmIfExists(repoRootDir(p, owner, repo));
+}
+
+// ============================================================================
+// Multi-Directory Operations (from service.ts)
+// ============================================================================
+
+/**
+ * Clear bundle from ALL storage directories (mirror delete).
+ * Uses fast rename + background deletion to avoid blocking.
+ */
+export async function clearBundleMulti(storageDirs: string[], bundleId: string): Promise<boolean> {
+  let deleted = false;
+
+  for (const dir of storageDirs) {
+    try {
+      const paths = getBundlePaths(dir, bundleId);
+
+      // Check if the bundle directory exists
+      try {
+        await fs.stat(paths.rootDir);
+      } catch {
+        // Directory doesn't exist, skip
+        continue;
+      }
+
+      // Fast deletion strategy: rename first (instant), then delete in background
+      const deletingPath = `${paths.rootDir}.deleting.${Date.now()}`;
+
+      try {
+        // Rename is atomic and instant on most filesystems
+        await fs.rename(paths.rootDir, deletingPath);
+        deleted = true;
+
+        // Background deletion (fire-and-forget)
+        // The renamed directory is invisible to listBundles (not a valid UUID)
+        rmIfExists(deletingPath).catch((err) => {
+          logger.warn(`Background deletion failed for ${bundleId}: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      } catch (err) {
+        // Rename failed (maybe concurrent deletion), try direct delete as fallback
+        logger.warn(`Rename failed for ${bundleId}, falling back to direct delete`);
+        await clearBundle(dir, bundleId);
+        deleted = true;
+      }
+    } catch (err) {
+      // Skip unavailable paths
+      logger.debug(`Failed to delete bundle from ${dir}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  return deleted;
+}
+
+// ============================================================================
+// Failed Bundle Cleanup (from service.ts)
+// ============================================================================
+
+/**
+ * Clean up a failed bundle creation from all storage directories.
+ * Also cleans up associated temp directories.
+ */
+export async function cleanupFailedBundle(cfg: PreflightConfig, bundleId: string): Promise<void> {
+  logger.warn(`Cleaning up failed bundle: ${bundleId}`);
+
+  // Clean from all storage directories
+  for (const storageDir of cfg.storageDirs) {
+    const bundlePath = path.join(storageDir, bundleId);
+    try {
+      const exists = await isPathAvailable(bundlePath);
+      if (exists) {
+        await rmIfExists(bundlePath);
+        logger.info(`Removed failed bundle from: ${storageDir}`);
+      }
+    } catch (err) {
+      logger.error(`Failed to cleanup bundle from ${storageDir}`, err instanceof Error ? err : undefined);
+    }
+  }
+
+  // Also clean up temp directory
+  const tmpCheckout = path.join(cfg.tmpDir, 'checkouts', bundleId);
+  try {
+    await rmIfExists(tmpCheckout);
+  } catch {
+    // Ignore cleanup errors
   }
 }
