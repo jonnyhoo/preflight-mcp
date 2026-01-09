@@ -1,0 +1,102 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: preflight-mcp
+  labels:
+    app: preflight-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: preflight-mcp
+  template:
+    metadata:
+      labels:
+        app: preflight-mcp
+    spec:
+      containers:
+      - name: preflight-mcp
+        image: preflight-mcp:latest
+        imagePullPolicy: Always
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        env:
+        - name: PREFLIGHT_STORAGE_DIRS
+          value: "/app/bundles;/backup/preflight"
+        - name: PREFLIGHT_TMP_DIR
+          value: "/tmp/preflight-mcp"
+        - name: PREFLIGHT_ANALYSIS_MODE
+          value: "quick"
+        - name: PREFLIGHT_MAX_FILE_BYTES
+          value: "524288"
+        - name: PREFLIGHT_MAX_TOTAL_BYTES
+          value: "52428800"
+        - name: GITHUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: preflight-secrets
+              key: github-token
+        - name: CONTEXT7_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: preflight-secrets
+              key: context7-api-key
+        volumeMounts:
+        - name: preflight-storage
+          mountPath: /app/bundles
+        - name: preflight-backup
+          mountPath: /backup/preflight
+        - name: preflight-tmp
+          mountPath: /tmp/preflight-mcp
+      volumes:
+      - name: preflight-storage
+        persistentVolumeClaim:
+          claimName: preflight-storage-pvc
+      - name: preflight-backup
+        persistentVolumeClaim:
+          claimName: preflight-backup-pvc
+      - name: preflight-tmp
+        emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: preflight-mcp-service
+spec:
+  selector:
+    app: preflight-mcp
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 3000
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: preflight-storage-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: preflight-backup-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
