@@ -31,7 +31,7 @@ function resolveEmbeddingConfig(cfg: PreflightConfig, override?: EmbeddingOverri
   const provider = (override?.provider ?? cfg.embeddingProvider) as EmbeddingConfig['provider'];
 
   if (provider === 'openai') {
-    return normalizeOpenAIOverride(cfg, override as Partial<OpenAIEmbeddingConfig>);
+    return normalizeOpenAIOverride(cfg, (override ?? {}) as Partial<OpenAIEmbeddingConfig>);
   }
 
   // ollama (default)

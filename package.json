@@ -1,6 +1,6 @@
 {
   "name": "preflight-mcp",
-  "version": "0.7.5",
+  "version": "0.7.6",
   "description": "MCP server that creates evidence-based preflight bundles for GitHub repositories and library docs.",
   "type": "module",
   "license": "AGPL-3.0",
@@ -53,6 +53,7 @@
     "@vscode/tree-sitter-wasm": "^0.3.0",
     "adm-zip": "^0.5.16",
     "better-sqlite3": "^12.5.0",
+    "dotenv": "^17.2.3",
     "ignore": "^7.0.5",
     "node-cron": "^4.2.1",
     "officeparser": "^5.2.2",
