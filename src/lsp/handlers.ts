@@ -12,6 +12,7 @@ export async function getDefinition(request: LspRequest, manager?: LspManager): 
   const { filePath, line = 1, column = 1 } = request;
   const client = await mgr.getClient(filePath);
   try {
+    await client.waitForIndexing(30000); // Wait up to 30s for indexing
     await client.openFile(filePath);
     const result = await client.sendRequest<Location | Location[] | LocationLink[] | null>(
       'textDocument/definition',
@@ -30,6 +31,7 @@ export async function getReferences(request: LspRequest, manager?: LspManager): 
   const { filePath, line = 1, column = 1 } = request;
   const client = await mgr.getClient(filePath);
   try {
+    await client.waitForIndexing(30000);
     await client.openFile(filePath);
     const result = await client.sendRequest<Location[] | null>(
       'textDocument/references',
@@ -47,6 +49,7 @@ export async function getHover(request: LspRequest, manager?: LspManager): Promi
   const { filePath, line = 1, column = 1 } = request;
   const client = await mgr.getClient(filePath);
   try {
+    await client.waitForIndexing(30000);
     await client.openFile(filePath);
     const result = await client.sendRequest<Hover | null>(
       'textDocument/hover',
@@ -64,6 +67,7 @@ export async function getDocumentSymbols(request: LspRequest, manager?: LspManag
   const { filePath } = request;
   const client = await mgr.getClient(filePath);
   try {
+    await client.waitForIndexing(30000);
     await client.openFile(filePath);
     const result = await client.sendRequest<SymbolInformation[] | DocumentSymbol[] | null>(
       'textDocument/documentSymbol', { textDocument: { uri: pathToUri(filePath) } }
@@ -78,6 +82,7 @@ export async function getWorkspaceSymbols(request: LspRequest, manager?: LspMana
   const { filePath, symbol = '' } = request;
   const client = await mgr.getClient(filePath);
   try {
+    await client.waitForIndexing(30000);
     const result = await client.sendRequest<SymbolInformation[] | null>('workspace/symbol', { query: symbol });
     const symbols: LspSymbolInfo[] = (result ?? []).map((s) => ({
       name: s.name, kind: symbolKindToString(s.kind), location: fromLocation(s.location), containerName: s.containerName,
@@ -91,8 +96,9 @@ export async function getDiagnostics(request: LspRequest, manager?: LspManager):
   const { filePath } = request;
   const client = await mgr.getClient(filePath);
   try {
+    await client.waitForIndexing(30000);
     await client.openFile(filePath);
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, 500)); // Extra wait for diagnostics to be published
     const diagnostics = client.getDiagnostics(filePath).map((d) => ({
       severity: diagnosticSeverityToString(d.severity), message: d.message,
       location: { filePath, ...fromRange(d.range) }, source: d.source, code: d.code as string | number | undefined,

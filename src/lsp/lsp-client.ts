@@ -20,6 +20,10 @@ export class LspClient {
   private diagnosticsCache: Map<string, Diagnostic[]> = new Map();
   private initialized = false;
   private shuttingDown = false;
+  private indexingComplete = false;
+  private indexingPromise: Promise<void> | null = null;
+  private indexingResolve: (() => void) | null = null;
+  private activeProgressTokens: Set<string | number> = new Set();
 
   constructor(config: LspServerConfig, workspaceRoot: string) {
     this.config = config;
@@ -44,6 +48,21 @@ export class LspClient {
     this.connection.onNotification('textDocument/publishDiagnostics', (params: PublishDiagnosticsParams) => {
       this.diagnosticsCache.set(params.uri, params.diagnostics);
     });
+    // Track workspace indexing progress (pyright sends $/progress during indexing)
+    this.connection.onNotification('$/progress', (params: { token: string | number; value: { kind: string } }) => {
+      if (params.value.kind === 'begin') {
+        this.activeProgressTokens.add(params.token);
+        logger.debug(`[LSP ${this.config.language}] Progress begin: ${params.token}`);
+      } else if (params.value.kind === 'end') {
+        this.activeProgressTokens.delete(params.token);
+        logger.debug(`[LSP ${this.config.language}] Progress end: ${params.token}`);
+        if (this.activeProgressTokens.size === 0 && this.indexingResolve) {
+          this.indexingComplete = true;
+          this.indexingResolve();
+          this.indexingResolve = null;
+        }
+      }
+    });
     this.connection.listen();
 
     const initParams: InitializeParams = {
@@ -55,8 +74,31 @@ export class LspClient {
     this.capabilities = result.capabilities;
     this.connection.sendNotification('initialized', {});
     this.initialized = true;
+    // Create indexing promise that resolves when all progress tokens complete
+    this.indexingPromise = new Promise<void>((resolve) => {
+      this.indexingResolve = resolve;
+      // Auto-resolve after max wait if no progress events received
+      setTimeout(() => {
+        if (!this.indexingComplete) {
+          logger.debug(`[LSP ${this.config.language}] Indexing timeout, assuming complete`);
+          this.indexingComplete = true;
+          resolve();
+        }
+      }, 60000); // 60s max wait for indexing
+    });
     logger.debug('LSP server initialized', { language: this.config.language });
   }
+
+  /** Wait for workspace indexing to complete (max 60s) */
+  async waitForIndexing(maxWaitMs = 30000): Promise<boolean> {
+    if (this.indexingComplete) return true;
+    if (!this.indexingPromise) return false;
+    const timeout = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), maxWaitMs));
+    const indexed = this.indexingPromise.then(() => true);
+    return Promise.race([indexed, timeout]);
+  }
+
+  get isIndexingComplete(): boolean { return this.indexingComplete; }
 
   async shutdown(): Promise<void> {
     if (!this.initialized || this.shuttingDown) return;
