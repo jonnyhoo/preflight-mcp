@@ -62,6 +62,8 @@
     "ts-morph": "^27.0.2",
     "typescript": "^5.9.3",
     "unpdf": "^1.4.0",
+    "vscode-jsonrpc": "^8.2.1",
+    "vscode-languageserver-protocol": "^3.17.5",
     "web-tree-sitter": "^0.26.3",
     "zod": "^4.2.1"
   },

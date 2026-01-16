@@ -11,5 +11,6 @@ export { registerCallGraphTools } from './callGraphTools.js';
 export { registerModalTools } from './modalTools.js';
 export { registerSemanticTools } from './semanticTools.js';
 export { registerAssistantTools } from './assistantTools.js';
+export { registerLspTools } from './lspTools.js';
 
 export type { ToolDependencies, ToolResponse } from './types.js';

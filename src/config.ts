@@ -11,6 +11,19 @@ export type ToolsetMode = 'full' | 'minimal';
 
 export type OpenAIAuthMode = 'auto' | 'bearer' | 'api-key';
 
+export type LspConfig = {
+  enabled: boolean;
+  pythonCommand: string;
+  pythonArgs: string;
+  goCommand: string;
+  goArgs: string;
+  rustCommand: string;
+  rustArgs: string;
+  timeoutMs: number;
+  idleMs: number;
+  maxConcurrency: number;
+};
+
 export type PreflightConfig = {
   /** Primary storage directory (first in storageDirs, used for reading). */
   storageDir: string;
@@ -20,6 +33,9 @@ export type PreflightConfig = {
 
   /** Tool exposure mode. minimal = only expose the single natural-language assistant tool. */
   toolset: ToolsetMode;
+
+  /** LSP integration configuration. */
+  lsp: LspConfig;
 
   /** Persistent assistant working directory (for doc extraction cache, etc.). */
   assistantDir: string;
@@ -250,5 +266,19 @@ export function getConfig(): PreflightConfig {
     openaiBaseUrl: process.env.PREFLIGHT_OPENAI_BASE_URL ?? process.env.OPENAI_BASE_URL,
     openaiEmbeddingsUrl: process.env.PREFLIGHT_OPENAI_EMBEDDINGS_URL,
     openaiAuthMode: parseOpenAIAuthMode(process.env.PREFLIGHT_OPENAI_AUTH_MODE),
+
+    // LSP integration (optional, disabled by default)
+    lsp: {
+      enabled: envBoolean('PREFLIGHT_LSP_ENABLED', false),
+      pythonCommand: (process.env.PREFLIGHT_LSP_PYTHON_COMMAND ?? 'pyright-langserver').trim(),
+      pythonArgs: (process.env.PREFLIGHT_LSP_PYTHON_ARGS ?? '--stdio').trim(),
+      goCommand: (process.env.PREFLIGHT_LSP_GO_COMMAND ?? 'gopls').trim(),
+      goArgs: (process.env.PREFLIGHT_LSP_GO_ARGS ?? 'serve').trim(),
+      rustCommand: (process.env.PREFLIGHT_LSP_RUST_COMMAND ?? 'rust-analyzer').trim(),
+      rustArgs: (process.env.PREFLIGHT_LSP_RUST_ARGS ?? '').trim(),
+      timeoutMs: envNumber('PREFLIGHT_LSP_TIMEOUT_MS', 8000),
+      idleMs: envNumber('PREFLIGHT_LSP_IDLE_MS', 300000),
+      maxConcurrency: envNumber('PREFLIGHT_LSP_MAX_CONCURRENCY', 6),
+    },
   };
 }

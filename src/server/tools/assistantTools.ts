@@ -27,20 +27,22 @@ export function registerAssistantTools({ server, cfg }: ToolDependencies): void 
           tool: z.string(),
           schemaVersion: z.string(),
           timeMs: z.number(),
+          mode: z.string().optional(),
         }),
-        intent: z.enum(['project', 'paper', 'pair']),
+        // Standard retrieval mode fields (optional for code-intel mode)
+        intent: z.enum(['project', 'paper', 'pair']).optional(),
         question: z.string(),
         sources: z.object({
           repos: z.array(z.any()),
           bundleIds: z.array(z.string()),
           docPaths: z.array(z.string()),
-        }),
+        }).optional(),
         resolved: z.object({
           usedBundleIds: z.array(z.string()),
           repoBundleId: z.string().optional(),
           docsBundleId: z.string().optional(),
           targetBundleId: z.string().optional(),
-        }),
+        }).optional(),
         operations: z.any().optional(),
         evidence: z.array(
           z.object({
@@ -55,8 +57,20 @@ export function registerAssistantTools({ server, cfg }: ToolDependencies): void 
             score: z.number().optional(),
             uri: z.string(),
           })
-        ),
+        ).optional(),
         target: z.any().optional(),
+        // Code-intel mode fields
+        codeIntel: z.object({
+          query: z.object({
+            action: z.string(),
+            filePath: z.string().optional(),
+            symbol: z.string().optional(),
+            line: z.number().optional(),
+            column: z.number().optional(),
+          }),
+          result: z.string(),
+          raw: z.any().optional(),
+        }).optional(),
       },
       annotations: { openWorldHint: true },
     },

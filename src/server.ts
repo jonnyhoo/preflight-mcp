@@ -44,6 +44,7 @@ import {
   registerModalTools,
   registerSemanticTools,
   registerAssistantTools,
+  registerLspTools,
 } from './server/tools/index.js';
 
 // Read version from package.json at startup
@@ -210,6 +211,10 @@ export async function startServer(): Promise<void> {
 
     if (cfg.semanticSearchEnabled) {
       registerSemanticTools(deps);
+    }
+
+    if (cfg.lsp.enabled) {
+      registerLspTools(deps);
     }
 
     registerAssistantTools(deps);
