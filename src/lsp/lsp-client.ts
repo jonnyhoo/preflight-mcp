@@ -8,7 +8,7 @@ import { logger } from '../logging/index.js';
 import type { LspServerConfig, OpenedFile, SupportedLanguage } from './types.js';
 import { pathToUri, uriToPath } from './uri.js';
 
-const DEFAULT_TIMEOUT_MS = 8000;
+const DEFAULT_TIMEOUT_MS = 30000;  // 30s for large projects
 
 export class LspClient {
   private config: LspServerConfig;
@@ -24,6 +24,7 @@ export class LspClient {
   private indexingPromise: Promise<void> | null = null;
   private indexingResolve: (() => void) | null = null;
   private activeProgressTokens: Set<string | number> = new Set();
+  private receivedAnyProgress = false;
 
   constructor(config: LspServerConfig, workspaceRoot: string) {
     this.config = config;
@@ -50,6 +51,7 @@ export class LspClient {
     });
     // Track workspace indexing progress (pyright sends $/progress during indexing)
     this.connection.onNotification('$/progress', (params: { token: string | number; value: { kind: string } }) => {
+      this.receivedAnyProgress = true;
       if (params.value.kind === 'begin') {
         this.activeProgressTokens.add(params.token);
         logger.debug(`[LSP ${this.config.language}] Progress begin: ${params.token}`);
@@ -66,25 +68,38 @@ export class LspClient {
     this.connection.listen();
 
     const initParams: InitializeParams = {
-      processId: process.pid, rootUri: pathToUri(this.workspaceRoot),
+      processId: process.pid,
+      rootUri: pathToUri(this.workspaceRoot),
       capabilities: this.getClientCapabilities(),
-      workspaceFolders: [{ uri: pathToUri(this.workspaceRoot), name: 'workspace' }],
     };
+    // NOTE: pyright hangs on requests when workspaceFolders is provided in initialize.
+    // Omit workspaceFolders to keep pyright responsive; rootUri is sufficient.
+    if (this.config.language !== 'python') {
+      initParams.workspaceFolders = [{ uri: pathToUri(this.workspaceRoot), name: 'workspace' }];
+    }
     const result = await this.sendRequest<InitializeResult>(InitializeRequest.type.method, initParams);
     this.capabilities = result.capabilities;
     this.connection.sendNotification('initialized', {});
     this.initialized = true;
-    // Create indexing promise that resolves when all progress tokens complete
+    // Create indexing promise - resolves when progress ends OR after short delay if no progress events
     this.indexingPromise = new Promise<void>((resolve) => {
       this.indexingResolve = resolve;
-      // Auto-resolve after max wait if no progress events received
+      // If no progress events received within 3s, assume server doesn't report progress (openFilesOnly mode)
+      setTimeout(() => {
+        if (!this.receivedAnyProgress && !this.indexingComplete) {
+          logger.debug(`[LSP ${this.config.language}] No progress events, assuming ready`);
+          this.indexingComplete = true;
+          resolve();
+        }
+      }, 3000);
+      // Max wait 60s for servers that do report progress
       setTimeout(() => {
         if (!this.indexingComplete) {
           logger.debug(`[LSP ${this.config.language}] Indexing timeout, assuming complete`);
           this.indexingComplete = true;
           resolve();
         }
-      }, 60000); // 60s max wait for indexing
+      }, 60000);
     });
     logger.debug('LSP server initialized', { language: this.config.language });
   }
@@ -116,13 +131,15 @@ export class LspClient {
     this.process = null; this.openedFiles.clear(); this.diagnosticsCache.clear(); this.initialized = false;
   }
 
-  async openFile(filePath: string): Promise<void> {
+  async openFile(filePath: string, waitMs = 2000): Promise<void> {
     if (!this.connection) throw new Error('LSP not initialized');
     const uri = pathToUri(filePath);
     if (this.openedFiles.has(uri)) return;
     const content = await fs.readFile(filePath, 'utf-8');
     this.connection.sendNotification('textDocument/didOpen', { textDocument: { uri, languageId: this.config.language, version: 1, text: content } });
     this.openedFiles.set(uri, { uri, version: 1, languageId: this.config.language });
+    // Wait for server to process the file (pyright needs time to analyze)
+    if (waitMs > 0) await new Promise(r => setTimeout(r, waitMs));
   }
 
   async closeFile(filePath: string): Promise<void> {
@@ -168,6 +185,7 @@ export class LspClient {
         documentSymbol: { dynamicRegistration: false }, publishDiagnostics: { relatedInformation: true }, callHierarchy: { dynamicRegistration: false },
       },
       workspace: { workspaceFolders: true, symbol: { dynamicRegistration: false } },
+      window: { workDoneProgress: true }, // Required to receive $/progress notifications
     };
   }
 }

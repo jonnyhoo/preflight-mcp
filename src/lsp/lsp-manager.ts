@@ -23,11 +23,11 @@ async function findWorkspaceRoot(filePath: string, language: SupportedLanguage):
 }
 
 const DEFAULT_SERVERS: Record<SupportedLanguage, LspServerConfig> = {
-  python: { language: 'python', command: 'pyright-langserver', args: ['--stdio'], extensions: ['.py', '.pyi'], timeoutMs: 8000, idleTimeoutMs: 300000 },
-  go: { language: 'go', command: 'gopls', args: ['serve'], extensions: ['.go'], timeoutMs: 8000, idleTimeoutMs: 300000 },
-  rust: { language: 'rust', command: 'rust-analyzer', args: [], extensions: ['.rs'], timeoutMs: 8000, idleTimeoutMs: 300000 },
+  python: { language: 'python', command: 'pyright-langserver', args: ['--stdio'], extensions: ['.py', '.pyi'], timeoutMs: 30000, idleTimeoutMs: 300000 },
+  go: { language: 'go', command: 'gopls', args: ['serve'], extensions: ['.go'], timeoutMs: 30000, idleTimeoutMs: 300000 },
+  rust: { language: 'rust', command: 'rust-analyzer', args: [], extensions: ['.rs'], timeoutMs: 30000, idleTimeoutMs: 300000 },
 };
-const DEFAULT_CONFIG: LspManagerConfig = { maxConcurrency: 6, defaultTimeoutMs: 8000, idleTimeoutMs: 300000, debug: false, servers: DEFAULT_SERVERS };
+const DEFAULT_CONFIG: LspManagerConfig = { maxConcurrency: 6, defaultTimeoutMs: 30000, idleTimeoutMs: 300000, debug: false, servers: DEFAULT_SERVERS };
 
 interface ClientEntry { client: LspClient; lastUsed: number; refCount: number; idleTimer?: NodeJS.Timeout; }
 
