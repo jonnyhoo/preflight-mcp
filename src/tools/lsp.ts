@@ -6,6 +6,7 @@ import * as z from 'zod';
 import { getConfig, type LspConfig } from '../config.js';
 import {
   getLspManager,
+  resetLspManager,
   getDefinition,
   getReferences,
   getHover,
@@ -53,6 +54,8 @@ Actions:
 
 Supported: Python (.py), Go (.go), Rust (.rs)
 Auto-detects languageId and workspaceRoot from file path.`;
+const OVERALL_TIMEOUT_GRACE_MS = 4000;
+const MIN_OVERALL_TIMEOUT_MS = 12000;
 
 /** Build LspManagerConfig from PreflightConfig.lsp */
 function buildLspManagerConfig(lspCfg: LspConfig): LspManagerConfig {
@@ -90,12 +93,56 @@ function buildLspManagerConfig(lspCfg: LspConfig): LspManagerConfig {
     servers,
   };
 }
+function isTimeoutError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  return msg.includes('timed out') || msg.includes('timeout');
+}
+
+function withOverallTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout | null = null;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => { if (timer) clearTimeout(timer); });
+}
+
+async function runWithRetry<T>(opts: {
+  label: string;
+  timeoutMs: number;
+  retryOnTimeout: boolean;
+  onTimeout: () => Promise<void>;
+  action: () => Promise<T>;
+}): Promise<T> {
+  try {
+    return await withOverallTimeout(opts.action(), opts.timeoutMs, opts.label);
+  } catch (err) {
+    if (opts.retryOnTimeout && isTimeoutError(err)) {
+      await opts.onTimeout();
+      return await withOverallTimeout(opts.action(), opts.timeoutMs, opts.label);
+    }
+    throw err;
+  }
+}
 
 export function createLspHandler() {
-  const cfg = getConfig();
-  const manager = getLspManager(buildLspManagerConfig(cfg.lsp));
 
   return async (input: LspInput): Promise<LspOutput> => {
+    const cfg = getConfig();
+    const managerConfig = buildLspManagerConfig(cfg.lsp);
+    let manager = getLspManager(managerConfig);
+    const overallTimeoutMs = Math.max(cfg.lsp.timeoutMs + OVERALL_TIMEOUT_GRACE_MS, MIN_OVERALL_TIMEOUT_MS);
+    const run = async <T>(label: string, action: () => Promise<T>): Promise<T> => runWithRetry({
+      label,
+      timeoutMs: overallTimeoutMs,
+      retryOnTimeout: true,
+      onTimeout: async () => {
+        await manager.shutdownAll();
+        resetLspManager();
+        manager = getLspManager(managerConfig);
+      },
+      action,
+    });
     const { action, file, line, column, symbol } = input;
 
     try {
@@ -104,27 +151,27 @@ export function createLspHandler() {
       switch (action) {
         case 'definition': {
           if (!line || !column) return { success: false, action, error: 'line and column required for definition' };
-          const res = await manager.withConcurrencyLimit(() => getDefinition(request, manager));
+          const res = await run('definition', () => manager.withConcurrencyLimit(() => getDefinition(request, manager)));
           return { success: true, action, result: res.formatted };
         }
         case 'references': {
           if (!line || !column) return { success: false, action, error: 'line and column required for references' };
-          const res = await manager.withConcurrencyLimit(() => getReferences(request, manager));
+          const res = await run('references', () => manager.withConcurrencyLimit(() => getReferences(request, manager)));
           return { success: true, action, result: res.formatted };
         }
         case 'hover': {
           if (!line || !column) return { success: false, action, error: 'line and column required for hover' };
-          const res = await manager.withConcurrencyLimit(() => getHover(request, manager));
+          const res = await run('hover', () => manager.withConcurrencyLimit(() => getHover(request, manager)));
           return { success: true, action, result: res.formatted };
         }
         case 'symbols': {
           const res = symbol
-            ? await manager.withConcurrencyLimit(() => getWorkspaceSymbols(request, manager))
-            : await manager.withConcurrencyLimit(() => getDocumentSymbols(request, manager));
+            ? await run('workspaceSymbols', () => manager.withConcurrencyLimit(() => getWorkspaceSymbols(request, manager)))
+            : await run('documentSymbols', () => manager.withConcurrencyLimit(() => getDocumentSymbols(request, manager)));
           return { success: true, action, result: res.formatted };
         }
         case 'diagnostics': {
-          const res = await manager.withConcurrencyLimit(() => getDiagnostics(request, manager));
+          const res = await run('diagnostics', () => manager.withConcurrencyLimit(() => getDiagnostics(request, manager)));
           return { success: true, action, result: res.formatted };
         }
         default:
@@ -132,6 +179,13 @@ export function createLspHandler() {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      if (isTimeoutError(err)) {
+        return {
+          success: false,
+          action,
+          error: `LSP timed out after ${overallTimeoutMs}ms. Server was restarted; please retry. (You can increase PREFLIGHT_LSP_TIMEOUT_MS for large projects.)`,
+        };
+      }
       return { success: false, action, error: msg };
     }
   };

@@ -140,6 +140,40 @@ Notes:
 - In **minimal toolset** mode, semantic *tools* are hidden, but `preflight_assistant` will still use semantic retrieval if enabled.
 - Semantic indexing is **incremental**: changed files are re-embedded, unchanged files are skipped.
 
+## Optional: LSP code intelligence (Python/Go/Rust)
+
+Enable LSP integration:
+- `PREFLIGHT_LSP_ENABLED=true`
+
+Install language servers and ensure they are on `PATH`:
+- Python: `pyright-langserver`
+- Go: `gopls`
+- Rust: `rust-analyzer`
+
+Optional overrides:
+- `PREFLIGHT_LSP_PYTHON_COMMAND`, `PREFLIGHT_LSP_PYTHON_ARGS` (default: `pyright-langserver --stdio`)
+- `PREFLIGHT_LSP_GO_COMMAND`, `PREFLIGHT_LSP_GO_ARGS` (default: `gopls serve`)
+- `PREFLIGHT_LSP_RUST_COMMAND`, `PREFLIGHT_LSP_RUST_ARGS` (default: `rust-analyzer`)
+- `PREFLIGHT_LSP_TIMEOUT_MS` (default: `8000`)
+- `PREFLIGHT_LSP_IDLE_MS` (default: `300000`)
+- `PREFLIGHT_LSP_MAX_CONCURRENCY` (default: `6`)
+
+Tool exposure:
+- In **full toolset** mode, `preflight_lsp` is registered when LSP is enabled.
+- Supported actions: `definition`, `references`, `hover`, `symbols`, `diagnostics`
+- Supported file types: `.py`, `.go`, `.rs`
+
+Example:
+
+```json
+{
+  "action": "definition",
+  "file": "C:\\path\\to\\file.py",
+  "line": 10,
+  "column": 5
+}
+```
+
 ## Storage
 
 - `PREFLIGHT_STORAGE_DIR`: primary bundle storage (default: `~/.preflight-mcp/bundles`)

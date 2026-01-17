@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Optional LSP code intelligence for Python/Go/Rust via `preflight_lsp` (enable with `PREFLIGHT_LSP_ENABLED=true`).
+
 ## [0.7.1] - 2025-12-31
 
 ### Added
