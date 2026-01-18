@@ -7,7 +7,6 @@ export type GuideGenerationParams = {
   bundleId: string;
   bundleRootDir: string;
   repos: Array<{ id: string; headSha?: string }>;
-  libraries?: Array<{ kind: string; input: string; id?: string }>;
 };
 
 /**
@@ -46,6 +45,32 @@ export async function writeAgentsMd(params: GuideGenerationParams): Promise<void
   sections.push(`- (evidence: <bundle-relative-path>:<startLine>-<endLine>)\n`);
   sections.push(`Example:`);
   sections.push(`- The project uses TypeScript. (evidence: repos/foo/bar/norm/package.json:1-40)\n`);
+  
+  // Preflight tools workflow guide
+  sections.push(`## Preflight Tools Workflow\n`);
+  sections.push(`### Tool Categories\n`);
+  sections.push(`**Bundle tools** (work with bundle snapshots):`);
+  sections.push(`- \`preflight_search_and_read\` - Search code/docs with context`);
+  sections.push(`- \`preflight_read_file\` - Read specific files from bundle`);
+  sections.push(`- \`preflight_repo_tree\` - View directory structure`);
+  sections.push(`- \`preflight_get_overview\` - Get project overview (OVERVIEW.md + START_HERE.md)\n`);
+  sections.push(`**LSP tools** (work with local project files, NOT bundle):`);
+  sections.push(`- \`preflight_lsp\` - Code intelligence (definition, references, hover, symbols)`);
+  sections.push(`  - Requires: project on local disk, real file paths, dependencies installed\n`);
+  sections.push(`### Common Workflows\n`);
+  sections.push(`**"Understand this codebase"**`);
+  sections.push(`1. \`preflight_create_bundle\` → create bundle`);
+  sections.push(`2. \`preflight_get_overview\` → read project overview`);
+  sections.push(`3. \`preflight_search_and_read\` → search for specific code/docs\n`);
+  sections.push(`**"Find where X is defined/used"**`);
+  sections.push(`- If project is local: \`preflight_lsp\` action=definition or references`);
+  sections.push(`- If only bundle available: \`preflight_search_and_read\` with query\n`);
+  sections.push(`**"Deep analysis" / "架构" / "设计模式"**`);
+  sections.push(`- Read \`analysis/*.json\` files in the bundle for detailed analysis results\n`);
+  sections.push(`### Important Notes\n`);
+  sections.push(`- Bundle paths (repos/owner/repo/norm/...) ≠ real file paths`);
+  sections.push(`- LSP needs real paths like \`/home/user/project/src/main.ts\``);
+  sections.push(`- Use \`preflight_update_bundle\` to ensure bundle reflects latest code changes\n`);
   
   // Dynamic: Key types and interfaces (from extension points)
   if (facts?.extensionPoints && facts.extensionPoints.length > 0) {
@@ -142,13 +167,6 @@ export async function writeStartHereMd(params: GuideGenerationParams): Promise<v
     .map((r) => `- ${r.id}${r.headSha ? ` @ ${r.headSha}` : ''}`)
     .join('\n');
 
-  const libraryLines = (params.libraries ?? [])
-    .map((l) => {
-      const resolved = l.id ? ` -> ${l.id}` : '';
-      return `- ${l.kind}: ${l.input}${resolved}`;
-    })
-    .join('\n');
-
   const sections: string[] = [];
   
   // Header
@@ -217,11 +235,6 @@ export async function writeStartHereMd(params: GuideGenerationParams): Promise<v
   // Repositories
   sections.push(`## Repositories included`);
   sections.push(repoLines || '(none)');
-  sections.push('');
-  
-  // Libraries
-  sections.push(`## Library docs included`);
-  sections.push(libraryLines || '(none)');
   sections.push('');
   
   // Dynamic: Quick start based on project type

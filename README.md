@@ -1,28 +1,43 @@
 # preflight-mcp
 
-Preflight MCP is an MCP server that turns **codebases + papers** into persistent, searchable “bundles” for LLM agents.
+[English](#english) | [中文](#中文)
 
-This repo is tuned for **LLM-first usage**:
-- **Minimal toolset mode**: expose *one* tool (`preflight_assistant`) to avoid tool-sprawl and token-wasting menus.
-- **Paper + companion code pairing**: search and cite evidence from both sides together.
-- **Incremental semantic indexing** (optional): update embeddings per-file, not full rebuilds.
+---
 
-> Upstream features like bundle creation, full-text search (FTS5), call graph analysis, document parsing, etc. are still available in **full** mode.
+# English
 
-## Modes
+## What is Preflight MCP?
 
-- **Minimal (recommended)**: `PREFLIGHT_TOOLSET=minimal`
-  - Tools exposed: **only** `preflight_assistant`
-  - Prompts/menus are disabled
-- **Full (admin/developer)**: `PREFLIGHT_TOOLSET=full`
-  - Tools exposed: all legacy tools **+** semantic tools (if enabled) **+** `preflight_assistant`
+Preflight MCP is a Model Context Protocol (MCP) server that transforms codebases, documents, and papers into persistent, searchable bundles for LLM agents. It returns citation-ready evidence with line numbers.
 
-## Quick start
+### Highlights
+- Sources: GitHub repos, local directories, PDF/DOCX/HTML
+- Paper + Code Pairing: search both sides jointly
+- Static Analysis: design patterns, architecture, test examples, configs, doc-code conflicts
+- Hybrid Search: SQLite FTS5 + optional semantic search
+- LSP: code intelligence for Python/Go/Rust/TypeScript
+- Incremental indexing: re-index only changed files
 
-### 1) Run via MCP host
+## Architecture
 
-Minimal mode example config:
+```
+MCP Server (resources + tools) → Bundle System (ingest, analyzers, search)
+```
 
+- Ingest: repository/doc ingestion and normalization
+- Analyzers: GoF patterns, architectural, test examples, config, conflicts
+- Search: FTS (always) + Semantic (optional)
+- LSP: external language servers (optional)
+
+## Tools
+- Bundle: create_bundle, list_bundles, delete_bundle
+- Reading: get_overview, read_file, repo_tree, search_and_read
+- Code intel: lsp (if enabled)
+- Code quality: preflight_check (unified: duplicates, doccheck, deadcode, circular dependencies, complexity)
+
+## Quick Start
+
+Add to your MCP client config:
 ```json
 {
   "mcpServers": {
@@ -30,169 +45,167 @@ Minimal mode example config:
       "command": "npx",
       "args": ["preflight-mcp"],
       "env": {
-        "PREFLIGHT_TOOLSET": "minimal",
-        "PREFLIGHT_STORAGE_DIR": "~/.preflight-mcp/bundles",
-        "PREFLIGHT_ASSISTANT_DIR": "~/.preflight-mcp/assistant",
-        "PREFLIGHT_SEMANTIC_SEARCH": "false"
+        "PREFLIGHT_LSP_ENABLED": "true",
+        "PREFLIGHT_SEMANTIC_SEARCH": "true"
       }
     }
   }
 }
 ```
 
-Full mode example:
+## Usage: Standard Workflow
 
+1. **Create bundle**: `preflight_create_bundle` with GitHub repo or local path
+2. **Get overview**: `preflight_get_overview` to understand project structure
+3. **Search**: `preflight_search_and_read` to find specific code/docs
+4. **Navigate**: `preflight_lsp` for precise code navigation (definitions, references)
+
+### Examples
+- Create bundle from local repo:
 ```json
-{
-  "mcpServers": {
-    "preflight": {
-      "command": "npx",
-      "args": ["preflight-mcp"],
-      "env": {
-        "PREFLIGHT_TOOLSET": "full"
-      }
-    }
-  }
-}
+{ "repos": [{ "kind": "local", "repo": "myorg/myproj", "path": "C:\\code\\myproj" }] }
+```
+- Create bundle from GitHub:
+```json
+{ "repos": [{ "kind": "github", "repo": "owner/repo" }] }
 ```
 
-### 2) Use the one tool: `preflight_assistant`
+### Analysis Files
+Bundles include static analysis results in `analysis/` directory:
+- `gof-patterns.json` - GoF design patterns
+- `architectural.json` - architecture patterns
+- `test-examples.json` - extracted test examples
+- `config.json` - configuration analysis
+- `doc-conflicts.json` - documentation inconsistencies
 
-`preflight_assistant` is the single natural-language entry point. It orchestrates:
-- repo ingest (optional) → create/reuse bundle
-- doc ingest (optional) → cached “docs bundle”
-- bundle repair/update (best-effort)
-- retrieval via **FTS** (and optional **semantic** search)
-- returns a compact, citation-ready **evidence pack**
-
-#### Project (code) analysis
-
-```json
-{
-  "question": "Deeply analyze this project and propose reusable designs for my B project",
-  "intent": "project",
-  "sources": {
-    "repos": [
-      {
-        "kind": "local",
-        "repo": "owner/projectA",
-        "path": "C:\\path\\to\\projectA"
-      }
-    ]
-  },
-  "target": {
-    "description": "B project: (describe your target system + constraints)"
-  },
-  "fresh": "auto"
-}
+## Bundle Layout
+```
+OVERVIEW.md, START_HERE.md, AGENTS.md
+analysis/{gof-patterns.json, architectural.json, test-examples.json, config.json, doc-conflicts.json, SUMMARY.json}
+search.db, manifest.json, repos/*
 ```
 
-#### Paper analysis
+## Configuration
 
-```json
-{
-  "question": "Summarize the core contribution + innovation and map it to my B project",
-  "intent": "paper",
-  "sources": {
-    "docPaths": ["C:\\papers\\my-paper.pdf"]
-  }
-}
-```
+Environment variables (common):
+- PREFLIGHT_STORAGE_DIR, PREFLIGHT_STORAGE_DIRS
+- PREFLIGHT_ANALYSIS_MODE=none|quick|full
+- PREFLIGHT_MAX_FILE_BYTES (default 512KB)
+- PREFLIGHT_MAX_TOTAL_BYTES (default 50MB)
 
-#### Paper + companion code (paired retrieval)
+Semantic search:
+- PREFLIGHT_SEMANTIC_SEARCH=true
+- PREFLIGHT_EMBEDDING_PROVIDER=ollama|openai
+- PREFLIGHT_OLLAMA_HOST, PREFLIGHT_OLLAMA_MODEL
+- PREFLIGHT_OPENAI_API_KEY, PREFLIGHT_OPENAI_MODEL, PREFLIGHT_OPENAI_BASE_URL (optional)
 
-```json
-{
-  "question": "Find how the paper's method can be implemented in this codebase; cite evidence from both",
-  "intent": "pair",
-  "sources": {
-    "bundleIds": ["<existingBundleId>"],
-    "docPaths": ["C:\\papers\\my-paper.pdf"]
-  }
-}
-```
+LSP:
+- PREFLIGHT_LSP_ENABLED=true
+- Commands: pyright-langserver | gopls | rust-analyzer
 
-## Output format
-
-The assistant returns a JSON object with:
-- `evidence[]`: each item includes `bundleId`, `path`, `excerptRange`, `uri`, and a line-numbered `excerpt` for citations.
-- `resolved`: which bundles were used (e.g. `repoBundleId`, `docsBundleId`, `targetBundleId`).
-- `operations`: repair/update actions, doc ingestion cache summary, semantic index actions, and heuristic reuse candidates.
-
-## Optional: semantic search (vector)
-
-Enable semantic search:
-- `PREFLIGHT_SEMANTIC_SEARCH=true`
-- `PREFLIGHT_EMBEDDING_PROVIDER=ollama|openai`
-
-Ollama (local):
-- `PREFLIGHT_OLLAMA_HOST` (default: `http://localhost:11434`)
-- `PREFLIGHT_OLLAMA_MODEL` (default: `nomic-embed-text`)
-
-OpenAI-compatible / Azure:
-- `PREFLIGHT_OPENAI_API_KEY` (or `OPENAI_API_KEY`)
-- `PREFLIGHT_OPENAI_MODEL` (default: `text-embedding-3-small`)
-- `PREFLIGHT_OPENAI_BASE_URL` (optional)
-- `PREFLIGHT_OPENAI_EMBEDDINGS_URL` (optional, full embeddings endpoint)
-- `PREFLIGHT_OPENAI_AUTH_MODE=auto|bearer|api-key`
-
-Notes:
-- In **minimal toolset** mode, semantic *tools* are hidden, but `preflight_assistant` will still use semantic retrieval if enabled.
-- Semantic indexing is **incremental**: changed files are re-embedded, unchanged files are skipped.
-
-## Optional: LSP code intelligence (Python/Go/Rust)
-
-Enable LSP integration:
-- `PREFLIGHT_LSP_ENABLED=true`
-
-Install language servers and ensure they are on `PATH`:
-- Python: `pyright-langserver`
-- Go: `gopls`
-- Rust: `rust-analyzer`
-
-Optional overrides:
-- `PREFLIGHT_LSP_PYTHON_COMMAND`, `PREFLIGHT_LSP_PYTHON_ARGS` (default: `pyright-langserver --stdio`)
-- `PREFLIGHT_LSP_GO_COMMAND`, `PREFLIGHT_LSP_GO_ARGS` (default: `gopls serve`)
-- `PREFLIGHT_LSP_RUST_COMMAND`, `PREFLIGHT_LSP_RUST_ARGS` (default: `rust-analyzer`)
-- `PREFLIGHT_LSP_TIMEOUT_MS` (default: `8000`)
-- `PREFLIGHT_LSP_IDLE_MS` (default: `300000`)
-- `PREFLIGHT_LSP_MAX_CONCURRENCY` (default: `6`)
-
-Tool exposure:
-- In **full toolset** mode, `preflight_lsp` is registered when LSP is enabled.
-- Supported actions: `definition`, `references`, `hover`, `symbols`, `diagnostics`
-- Supported file types: `.py`, `.go`, `.rs`
-
-Example:
-
-```json
-{
-  "action": "definition",
-  "file": "C:\\path\\to\\file.py",
-  "line": 10,
-  "column": 5
-}
-```
-
-## Storage
-
-- `PREFLIGHT_STORAGE_DIR`: primary bundle storage (default: `~/.preflight-mcp/bundles`)
-- `PREFLIGHT_STORAGE_DIRS`: mirrored storage paths (semicolon-separated)
-- `PREFLIGHT_MAX_FILE_BYTES`, `PREFLIGHT_MAX_TOTAL_BYTES`: ingestion limits
+HTTP API:
+- PREFLIGHT_HTTP_ENABLED=true, PREFLIGHT_HTTP_PORT=37123
 
 ## Development
-
-```bash
+```
 npm install
 npm run typecheck
 npm run build
+npm test
 npm run smoke
 ```
 
-Extra smoke tests:
-- `node scripts/smoke-minimal.mjs`
-- `node scripts/smoke-assistant.mjs`
+## Deployment Examples
+
+### Claude Desktop
+```json
+{
+  "mcpServers": {
+    "preflight": {
+      "command": "node",
+      "args": ["path/to/preflight-mcp/dist/index.js"],
+      "env": {
+        "PREFLIGHT_STORAGE_DIR": "~/.preflight-mcp/bundles"
+      }
+    }
+  }
+}
+```
+
+### Cursor
+```json
+{
+  "mcp": {
+    "servers": {
+      "preflight": {
+        "command": "node",
+        "args": ["path/to/preflight-mcp/dist/index.js"]
+      }
+    }
+  }
+}
+```
+
+### Docker
+```bash
+docker run -e PREFLIGHT_STORAGE_DIR=/bundles -v /host/bundles:/bundles preflight-mcp
+```
+
+### Kubernetes
+See `k8s-deployment.yaml` and `docker-compose.yml` in repo.
 
 ## License
+AGPL-3.0
 
-AGPL-3.0 (see `LICENSE`).
+---
+
+# 中文
+
+## 简介
+Preflight MCP 是一个 MCP 服务器，把代码仓库、文档和论文转换为可搜索的 bundle，返回带行号的可引用证据。
+
+### 特性
+- 多源支持：GitHub、本地目录、PDF/DOCX/HTML
+- 论文+代码配对检索
+- 静态分析：设计模式、架构、测试示例、配置、文档冲突
+- 混合检索：FTS + 语义搜索（可选）
+- LSP：Python/Go/Rust/TypeScript 代码智能
+- 增量索引：只重建变更文件
+
+## 架构与工具
+- 工具：create/list/delete bundle，get_overview/read_file/repo_tree/search_and_read，lsp，preflight_check（统一代码质量检查：重复代码、文档一致性、死代码、循环依赖、复杂度）
+
+## 快速开始
+```json
+{
+  "mcpServers": { "preflight": { "command": "npx", "args": ["preflight-mcp"] } }
+}
+```
+
+## 标准工作流
+1. `preflight_create_bundle` → 创建 bundle
+2. `preflight_get_overview` → 了解项目结构
+3. `preflight_search_and_read` → 搜索代码/文档
+4. `preflight_lsp` → 精确导航（定义、引用等）
+
+## 分析文件
+Bundle 包含 `analysis/` 目录下的静态分析结果：
+- `gof-patterns.json` - 设计模式
+- `architectural.json` - 架构模式
+- `test-examples.json` - 测试示例
+- `config.json` - 配置分析
+- `doc-conflicts.json` - 文档冲突
+
+## 配置
+- 基本：`PREFLIGHT_STORAGE_DIR(S)`、`PREFLIGHT_ANALYSIS_MODE`
+- 语义：`PREFLIGHT_SEMANTIC_SEARCH`、嵌入提供商与模型
+- LSP：`PREFLIGHT_LSP_ENABLED` 与语言服务器
+- HTTP：`PREFLIGHT_HTTP_ENABLED`, `PREFLIGHT_HTTP_PORT`
+
+## 开发
+```
+npm install && npm run typecheck && npm run build && npm test
+```
+
+## 许可证
+AGPL-3.0

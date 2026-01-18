@@ -41,11 +41,6 @@ spec:
             secretKeyRef:
               name: preflight-secrets
               key: github-token
-        - name: CONTEXT7_API_KEY
-          valueFrom:
-            secretKeyRef:
-              name: preflight-secrets
-              key: context7-api-key
         volumeMounts:
         - name: preflight-storage
           mountPath: /app/bundles

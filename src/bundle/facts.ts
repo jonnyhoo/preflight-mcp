@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { extractModuleSyntaxWasm } from '../ast/treeSitter.js';
+import { extractModuleSyntaxWasm } from '../ast/index.js';
 import { type IngestedFile } from './ingest.js';
 import {
   createUnifiedAnalyzer,

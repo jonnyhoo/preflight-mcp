@@ -32,12 +32,32 @@ const SearchByTagsInputSchema = {
 };
 
 /**
- * Register all search-related tools.
+ * Core search tools (1 tool).
  */
-export function registerSearchTools({ server, cfg }: ToolDependencies): void {
+const CORE_SEARCH_TOOLS = new Set(['preflight_search_and_read']);
+
+export type SearchToolsOptions = {
+  coreOnly?: boolean;
+};
+
+/**
+ * Register search-related tools.
+ * @param deps - Server and config dependencies
+ * @param options - Options for registration
+ * @param options.coreOnly - If true, only register core tools (search_and_read)
+ */
+export function registerSearchTools({ server, cfg }: ToolDependencies, options?: SearchToolsOptions): void {
+  const coreOnly = options?.coreOnly ?? false;
+  
+  const shouldRegister = (toolName: string): boolean => {
+    if (!coreOnly) return true;
+    return CORE_SEARCH_TOOLS.has(toolName);
+  };
+
   // ==========================================================================
-  // preflight_search_by_tags
+  // preflight_search_by_tags (non-core)
   // ==========================================================================
+  if (shouldRegister('preflight_search_by_tags'))
   server.registerTool(
     'preflight_search_by_tags',
     {
@@ -136,8 +156,9 @@ export function registerSearchTools({ server, cfg }: ToolDependencies): void {
   );
 
   // ==========================================================================
-  // preflight_read_files (RFC v2)
+  // preflight_read_files (non-core)
   // ==========================================================================
+  if (shouldRegister('preflight_read_files')) {
   const readFilesHandler = createReadFilesHandler({
     findBundleStorageDir: (storageDirs, bundleId) => findBundleStorageDir(storageDirs, bundleId),
     getBundlePathsForId: (storageDir, bundleId) => getBundlePathsForId(storageDir, bundleId),
@@ -189,6 +210,7 @@ export function registerSearchTools({ server, cfg }: ToolDependencies): void {
           }),
           uri: z.string().optional(),
           snippet: z.string().optional(),
+          snippetSha256: z.string().optional(),
         })).optional(),
       },
       annotations: { readOnlyHint: true },
@@ -201,10 +223,12 @@ export function registerSearchTools({ server, cfg }: ToolDependencies): void {
       };
     }
   );
+  } // end if shouldRegister('preflight_read_files')
 
   // ==========================================================================
-  // preflight_search_and_read (RFC v2)
+  // preflight_search_and_read (core)
   // ==========================================================================
+  if (shouldRegister('preflight_search_and_read')) {
   const searchAndReadHandler = createSearchAndReadHandler({
     findBundleStorageDir: (storageDirs, bundleId) => findBundleStorageDir(storageDirs, bundleId),
     getBundlePathsForId: (storageDir, bundleId) => getBundlePathsForId(storageDir, bundleId),
@@ -270,6 +294,7 @@ export function registerSearchTools({ server, cfg }: ToolDependencies): void {
           }),
           uri: z.string().optional(),
           snippet: z.string().optional(),
+          snippetSha256: z.string().optional(),
         })).optional(),
       },
       annotations: { readOnlyHint: true },
@@ -282,4 +307,5 @@ export function registerSearchTools({ server, cfg }: ToolDependencies): void {
       };
     }
   );
+  } // end if shouldRegister('preflight_search_and_read')
 }

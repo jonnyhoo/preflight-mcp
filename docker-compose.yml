@@ -12,7 +12,6 @@ services:
       - PREFLIGHT_MAX_FILE_BYTES=1048576
       - PREFLIGHT_MAX_TOTAL_BYTES=104857600
       - GITHUB_TOKEN=${GITHUB_TOKEN}
-      - CONTEXT7_API_KEY=${CONTEXT7_API_KEY}
     volumes:
       - preflight_bundles:/app/bundles
       - preflight_backup:/data/preflight-backup
@@ -20,21 +19,10 @@ services:
     networks:
       - preflight-network
 
-  # 可选：Redis 用于缓存
-  redis:
-    image: redis:7-alpine
-    container_name: preflight-redis
-    restart: unless-stopped
-    volumes:
-      - redis_data:/data
-    networks:
-      - preflight-network
-
 volumes:
   preflight_bundles:
   preflight_backup:
   preflight_tmp:
-  redis_data:
 
 networks:
   preflight-network:

@@ -382,6 +382,14 @@ export interface PdfParseOptions extends ParseOptions {
   
   /** VLM URL for vision-language model backend */
   vlmUrl?: string;
+  
+  /**
+   * Whether to enable OCR fallback for scanned PDFs.
+   * When true (default), if native text extraction yields empty/minimal content,
+   * the parser will use Scribe.js OCR to extract text from images.
+   * @default true
+   */
+  enableOcr?: boolean;
 }
 
 /**

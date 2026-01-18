@@ -77,18 +77,8 @@ try {
     throw new Error('Expected at least one search hit');
   }
 
-  const updateRes = await client.callTool({
-    name: 'preflight_update_bundle',
-    arguments: { bundleId },
-  });
-
-  console.log('update_bundle isError:', updateRes.isError);
-  console.log('update_bundle structuredContent:', updateRes.structuredContent);
-  if (updateRes.isError || !updateRes.structuredContent) {
-    console.log('update_bundle content:', updateRes.content);
-    const msg = updateRes.content?.find((c) => c.type === 'text')?.text ?? 'preflight_update_bundle failed';
-    throw new Error(msg);
-  }
+  // Note: preflight_update_bundle is a non-core tool and not registered in core-only mode.
+  // Skip testing it in the basic smoke test.
 
   const listRes = await client.callTool({
     name: 'preflight_list_bundles',

@@ -37,6 +37,7 @@ export class LspClient {
 
     this.process = spawn(this.config.command, this.config.args, {
       stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, ...this.config.env }, cwd: this.workspaceRoot,
+      shell: process.platform === 'win32',
     });
     this.process.stderr?.on('data', (data: Buffer) => logger.debug(`[LSP ${this.config.language}] ${data.toString().trim()}`));
     this.process.on('error', (err) => logger.error(`LSP process error: ${this.config.language}`, err));
@@ -46,6 +47,8 @@ export class LspClient {
     });
 
     this.connection = createMessageConnection(new StreamMessageReader(this.process.stdout!), new StreamMessageWriter(this.process.stdin!));
+    // Some servers (e.g. typescript-language-server) expect this request to be handled.
+    this.connection.onRequest('window/workDoneProgress/create', async () => null);
     this.connection.onNotification('textDocument/publishDiagnostics', (params: PublishDiagnosticsParams) => {
       this.diagnosticsCache.set(params.uri, params.diagnostics);
     });

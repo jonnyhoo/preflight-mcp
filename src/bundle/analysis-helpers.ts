@@ -16,6 +16,8 @@ import type { PreflightConfig } from '../config.js';
 import { logger } from '../logging/logger.js';
 import { type IngestedFile, classifyIngestedFileKind } from './ingest.js';
 import { analyzeBundleStatic, type AnalysisMode } from './analysis.js';
+import { runAllAnalyzers, type RunAllAnalyzersOptions, type AllAnalyzersResult } from './analyzers/index.js';
+import { type BundleManifestV1 } from './manifest.js';
 import {
   statOrNull,
   readUtf8OrNull,
@@ -121,13 +123,81 @@ export async function generateFactsBestEffort(params: {
   }
 }
 
+/**
+ * Run all advanced analyzers on the bundle (best-effort).
+ * 
+ * This includes:
+ * - GoF design pattern detection
+ * - Architectural pattern detection  
+ * - Test example extraction
+ * - Configuration extraction
+ * - Doc-code conflict detection
+ * 
+ * Results are written to analysis/*.json files.
+ */
+export async function runAdvancedAnalyzersBestEffort(params: {
+  bundleId: string;
+  bundleRoot: string;
+  files: IngestedFile[];
+  manifest: BundleManifestV1;
+  mode: AnalysisMode;
+  options?: RunAllAnalyzersOptions;
+}): Promise<AllAnalyzersResult | null> {
+  // Skip if analysis mode is 'none'
+  if (params.mode === 'none') {
+    logger.debug('Skipping advanced analyzers (mode=none)');
+    return null;
+  }
+
+  // Only run in 'full' mode (advanced analyzers are expensive)
+  if (params.mode !== 'full') {
+    logger.debug('Skipping advanced analyzers (mode != full)');
+    return null;
+  }
+
+  try {
+    logger.info('Starting advanced analyzers', {
+      bundleId: params.bundleId,
+      fileCount: params.files.length,
+    });
+
+    const result = await runAllAnalyzers(
+      params.bundleRoot,
+      params.files,
+      params.manifest,
+      params.options
+    );
+
+    if (result.errors.length > 0) {
+      logger.warn('Some advanced analyzers had errors', { 
+        errors: result.errors,
+      });
+    }
+
+    logger.info('Advanced analyzers complete', {
+      bundleId: params.bundleId,
+      timing: result.timing,
+      gofPatterns: result.gofPatterns?.data?.totalPatterns ?? 0,
+      architectural: result.architectural?.data?.patterns?.length ?? 0,
+    });
+
+    return result;
+  } catch (err) {
+    logger.error('Advanced analyzers failed', err instanceof Error ? err : undefined);
+    return null;
+  }
+}
+
+// Re-export types for convenience
+export type { RunAllAnalyzersOptions, AllAnalyzersResult };
+
 // ============================================================================
 // Bundle File Scanning
 // ============================================================================
 
 /**
  * Scan a bundle for indexable files.
- * Returns files from repos/ and libraries/context7/.
+ * Returns files from repos/.
  */
 export async function scanBundleIndexableFiles(params: {
   cfg: PreflightConfig;
@@ -213,38 +283,6 @@ export async function scanBundleIndexableFiles(params: {
     }
   } catch {
     // ignore missing repos dir
-  }
-
-  // 2) libraries/context7/** (docs-only)
-  const context7Dir = path.join(params.librariesDir, 'context7');
-  const ctxSt = await statOrNull(context7Dir);
-  if (ctxSt?.isDirectory()) {
-    for await (const wf of walkFilesNoIgnore(context7Dir)) {
-      // Match original ingestion: only .md docs are indexed from Context7.
-      if (!wf.relPosix.toLowerCase().endsWith('.md')) continue;
-
-      const relFromLibRoot = wf.relPosix; // relative to libraries/context7
-      const parts = relFromLibRoot.split('/').filter(Boolean);
-      const fileName = parts[parts.length - 1] ?? '';
-      const dirParts = parts.slice(0, -1);
-
-      let repoId = 'context7:unknown';
-      if (dirParts[0] === '_unresolved' && dirParts[1]) {
-        repoId = `context7:unresolved/${dirParts[1]}`;
-      } else if (dirParts.length > 0) {
-        repoId = `context7:/${dirParts.join('/')}`;
-      }
-
-      const bundleRel = `libraries/context7/${relFromLibRoot}`;
-
-      await pushFile({
-        repoId,
-        kind: 'doc',
-        repoRelativePath: fileName,
-        bundleRelPosix: bundleRel,
-        absPath: wf.absPath,
-      });
-    }
   }
 
   return { files, totalBytes, skipped };

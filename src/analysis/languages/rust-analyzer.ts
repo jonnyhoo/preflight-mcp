@@ -15,7 +15,7 @@ import { createModuleLogger } from '../../logging/logger.js';
 import {
   extractExtensionPointsWasm,
   type ExtensionPoint as TreeSitterExtensionPoint,
-} from '../../ast/treeSitter.js';
+} from '../../ast/index.js';
 import type {
   ExtensionPointInfo,
   TypeSemantics,

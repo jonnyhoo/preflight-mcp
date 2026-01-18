@@ -43,17 +43,14 @@ export type LspOutput = {
   error?: string;
 };
 
-export const lspToolDescription = `Query language servers (gopls/pyright/rust-analyzer) for code intelligence.
+export const lspToolDescription = `Precise code navigation via language servers. Use for go-to-definition, find-references on LOCAL projects.
 
-Actions:
-- definition: Go to definition at file:line:column
-- references: Find all references at file:line:column
-- hover: Get type/documentation info at file:line:column
-- symbols: List document symbols (no line/column needed)
-- diagnostics: Get file diagnostics (no line/column needed)
+IMPORTANT: Requires REAL file paths (e.g., /home/user/project/src/main.ts), NOT bundle paths. Project must exist locally with dependencies installed.
 
-Supported: Python (.py), Go (.go), Rust (.rs)
-Auto-detects languageId and workspaceRoot from file path.`;
+Actions: definition, references, hover, symbols, diagnostics
+Supported: .py, .go, .rs, .ts, .tsx, .js, .jsx
+
+Use preflight_assistant for bundle-based search instead.`;
 const OVERALL_TIMEOUT_GRACE_MS = 4000;
 const MIN_OVERALL_TIMEOUT_MS = 12000;
 

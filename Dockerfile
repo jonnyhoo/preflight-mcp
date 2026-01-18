@@ -28,8 +28,8 @@ ENV PREFLIGHT_TMP_DIR=/tmp/preflight-mcp
 # 创建必要目录
 RUN mkdir -p /app/bundles /tmp/preflight-mcp
 
-# 暴露端口 (如果需要HTTP接口)
-EXPOSE 3000
+# 暴露端口 (内置HTTP接口, 默认37123)
+EXPOSE 37123
 
 # 启动命令
 CMD ["node", "dist/index.js"]

@@ -11,12 +11,12 @@ import {
   toCloneUrl,
 } from './github.js';
 import { type IngestedFile, classifyIngestedFileKind } from './ingest.js';
+import { ingestDocument, isParseableDocument } from './document-ingest.js';
 import { type RepoInput, type BundleManifestV1, type SkippedFileEntry, writeManifest, readManifest, invalidateManifestCache } from './manifest.js';
 import { getBundlePaths } from './paths.js';
 import { writeAgentsMd, writeStartHereMd } from './guides.js';
 import { generateOverviewMarkdown, writeOverviewFile } from './overview.js';
 import { rebuildIndex, incrementalIndexUpdate, supportsIncrementalIndex } from '../search/sqliteFts.js';
-import { ingestContext7Libraries, type Context7LibrarySummary } from './context7.js';
 import { autoDetectTags, generateDisplayName, generateDescription } from './tagging.js';
 import { bundleCreationLimiter } from '../core/concurrency-limiter.js';
 import { getProgressTracker, type TaskPhase, calcPercent } from '../jobs/progressTracker.js';
@@ -37,6 +37,7 @@ import {
   detectPrimaryLanguage,
   groupFilesByRepoId,
   generateFactsBestEffort,
+  runAdvancedAnalyzersBestEffort,
   scanBundleIndexableFiles as scanBundleIndexableFilesHelper,
 } from './analysis-helpers.js';
 import {
@@ -87,7 +88,6 @@ export type BundleSummary = {
     headSha?: string;
     notes?: string[];
   }>;
-  libraries?: Context7LibrarySummary[];
   /** User-facing warnings (e.g., git clone failed, used zip fallback) */
   warnings?: string[];
 };
@@ -122,7 +122,6 @@ async function readBundleSummary(cfg: PreflightConfig, bundleId: string): Promis
       headSha: r.headSha,
       notes: r.notes,
     })),
-    libraries: manifest.libraries as Context7LibrarySummary[] | undefined,
   };
 }
 
@@ -288,24 +287,6 @@ async function createBundleInternal(
       }
     }
 
-  // Context7 libraries (best-effort).
-  let librariesSummary: Context7LibrarySummary[] | undefined;
-  if (input.libraries?.length) {
-    // Clean libraries dir in case something wrote here earlier.
-    await rmIfExists(tmpPaths.librariesDir);
-    await ensureDir(tmpPaths.librariesDir);
-
-    const libIngest = await ingestContext7Libraries({
-      cfg,
-      bundlePaths: tmpPaths,
-      libraries: input.libraries,
-      topics: input.topics,
-    });
-
-    allIngestedFiles.push(...libIngest.files);
-    librariesSummary = libIngest.libraries;
-  }
-
   // Build index.
   reportProgress('indexing', 50, `Building search index (${allIngestedFiles.length} files)...`);
   tracker.updateProgress(taskId, 'indexing', 50, `Building search index (${allIngestedFiles.length} files)...`);
@@ -353,7 +334,6 @@ async function createBundleInternal(
         fetchedAt: createdAt,
         notes: r.notes,
       })),
-      libraries: librariesSummary,
       index: {
         backend: 'sqlite-fts5-lines',
         includeDocs: true,
@@ -371,14 +351,12 @@ async function createBundleInternal(
     bundleId,
     bundleRootDir: tmpPaths.rootDir,
     repos: reposSummary.map((r) => ({ id: r.id, headSha: r.headSha })),
-    libraries: librariesSummary,
   });
   await writeStartHereMd({
     targetPath: tmpPaths.startHerePath,
     bundleId,
     bundleRootDir: tmpPaths.rootDir,
     repos: reposSummary.map((r) => ({ id: r.id, headSha: r.headSha })),
-    libraries: librariesSummary,
   });
 
   // Generate static facts (FACTS.json) FIRST. This is intentionally non-LLM and safe to keep inside bundles.
@@ -389,6 +367,18 @@ async function createBundleInternal(
     bundleId,
     bundleRoot: tmpPaths.rootDir,
     files: allIngestedFiles,
+    mode: cfg.analysisMode,
+  });
+
+  // Run advanced analyzers (GoF patterns, architectural patterns, etc.) AFTER FACTS.json
+  reportProgress('analyzing', 75, 'Running advanced analyzers...');
+  tracker.updateProgress(taskId, 'analyzing', 75, 'Running advanced analyzers (patterns, config, tests)...');
+
+  await runAdvancedAnalyzersBestEffort({
+    bundleId,
+    bundleRoot: tmpPaths.rootDir,
+    files: allIngestedFiles,
+    manifest,
     mode: cfg.analysisMode,
   });
 
@@ -408,7 +398,6 @@ async function createBundleInternal(
     bundleId,
     bundleRootDir: tmpPaths.rootDir,
     repos: perRepoOverviews,
-    libraries: librariesSummary,
   });
   await writeOverviewFile(tmpPaths.overviewPath, overviewMd);
 
@@ -464,7 +453,6 @@ async function createBundleInternal(
       createdAt,
       updatedAt: createdAt,
       repos: reposSummary,
-      libraries: librariesSummary,
       warnings: allWarnings.length > 0 ? allWarnings : undefined,
     };
 
@@ -664,38 +652,6 @@ async function scanBundleIndexableFiles(params: {
     // ignore missing repos dir
   }
 
-  // 2) libraries/context7/** (docs-only)
-  const context7Dir = path.join(params.librariesDir, 'context7');
-  const ctxSt = await statOrNull(context7Dir);
-  if (ctxSt?.isDirectory()) {
-    for await (const wf of walkFilesNoIgnore(context7Dir)) {
-      // Match original ingestion: only .md docs are indexed from Context7.
-      if (!wf.relPosix.toLowerCase().endsWith('.md')) continue;
-
-      const relFromLibRoot = wf.relPosix; // relative to libraries/context7
-      const parts = relFromLibRoot.split('/').filter(Boolean);
-      const fileName = parts[parts.length - 1] ?? '';
-      const dirParts = parts.slice(0, -1);
-
-      let repoId = 'context7:unknown';
-      if (dirParts[0] === '_unresolved' && dirParts[1]) {
-        repoId = `context7:unresolved/${dirParts[1]}`;
-      } else if (dirParts.length > 0) {
-        repoId = `context7:/${dirParts.join('/')}`;
-      }
-
-      const bundleRel = `libraries/context7/${relFromLibRoot}`;
-
-      await pushFile({
-        repoId,
-        kind: 'doc',
-        repoRelativePath: fileName,
-        bundleRelPosix: bundleRel,
-        absPath: wf.absPath,
-      });
-    }
-  }
-
   return { files, totalBytes, skipped };
 }
 
@@ -779,7 +735,6 @@ export async function repairBundle(cfg: PreflightConfig, bundleId: string, optio
       bundleId,
       bundleRootDir: paths.rootDir,
       repos: (manifest.repos ?? []).map((r) => ({ id: r.id, headSha: r.headSha })),
-      libraries: manifest.libraries as Context7LibrarySummary[] | undefined,
     });
     actionsTaken.push('writeAgentsMd');
   }
@@ -790,7 +745,6 @@ export async function repairBundle(cfg: PreflightConfig, bundleId: string, optio
       bundleId,
       bundleRootDir: paths.rootDir,
       repos: (manifest.repos ?? []).map((r) => ({ id: r.id, headSha: r.headSha })),
-      libraries: manifest.libraries as Context7LibrarySummary[] | undefined,
     });
     actionsTaken.push('writeStartHereMd');
   }
@@ -809,7 +763,6 @@ export async function repairBundle(cfg: PreflightConfig, bundleId: string, optio
       bundleId,
       bundleRootDir: paths.rootDir,
       repos: perRepoOverviews,
-      libraries: manifest.libraries as Context7LibrarySummary[] | undefined,
     });
     await writeOverviewFile(paths.overviewPath, md);
     actionsTaken.push('writeOverviewFile');
@@ -971,24 +924,6 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
     }
   }
 
-  // Context7 libraries (best-effort).
-  let librariesSummary: Context7LibrarySummary[] | undefined;
-  if (manifest.inputs.libraries?.length) {
-    reportProgress('downloading', 80, 'Fetching Context7 libraries...');
-    await rmIfExists(paths.librariesDir);
-    await ensureDir(paths.librariesDir);
-
-    const libIngest = await ingestContext7Libraries({
-      cfg,
-      bundlePaths: paths,
-      libraries: manifest.inputs.libraries,
-      topics: manifest.inputs.topics,
-    });
-
-    allIngestedFiles.push(...libIngest.files);
-    librariesSummary = libIngest.libraries;
-  }
-
   // Re-scan the bundle so indexing reflects the actual on-disk snapshot (important when local repos are skipped).
   {
     const scanned = await scanBundleIndexableFilesHelper({
@@ -1037,7 +972,6 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
       fetchedAt: updatedAt,
       notes: r.notes,
     })),
-    libraries: librariesSummary,
   };
 
   await writeManifest(paths.manifestPath, newManifest);
@@ -1052,14 +986,12 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
     bundleId,
     bundleRootDir: paths.rootDir,
     repos: reposSummary.map((r) => ({ id: r.id, headSha: r.headSha })),
-    libraries: librariesSummary,
   });
   await writeStartHereMd({
     targetPath: paths.startHerePath,
     bundleId,
     bundleRootDir: paths.rootDir,
     repos: reposSummary.map((r) => ({ id: r.id, headSha: r.headSha })),
-    libraries: librariesSummary,
   });
 
   const perRepoOverviews = reposSummary
@@ -1074,16 +1006,26 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
     bundleId,
     bundleRootDir: paths.rootDir,
     repos: perRepoOverviews,
-    libraries: librariesSummary,
   });
   await writeOverviewFile(paths.overviewPath, overviewMd);
 
   // Refresh static facts (FACTS.json) after update.
-  reportProgress('analyzing', 95, 'Analyzing bundle...');
+  reportProgress('analyzing', 92, 'Analyzing bundle...');
   await generateFactsBestEffort({
     bundleId,
     bundleRoot: paths.rootDir,
     files: allIngestedFiles,
+    mode: cfg.analysisMode,
+  });
+
+  // Run advanced analyzers (GoF patterns, architectural, test examples, config, conflicts)
+  // This updates analysis/*.json files
+  reportProgress('analyzing', 95, 'Running advanced analyzers...');
+  await runAdvancedAnalyzersBestEffort({
+    bundleId,
+    bundleRoot: paths.rootDir,
+    files: allIngestedFiles,
+    manifest: newManifest,
     mode: cfg.analysisMode,
   });
 
@@ -1103,10 +1045,267 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
     createdAt: manifest.createdAt,
     updatedAt,
     repos: reposSummary,
-    libraries: librariesSummary,
   };
 
   return { summary, changed };
+}
+
+// ============================================================================
+// Document Bundle Creation
+// ============================================================================
+
+export type CreateDocumentBundleResult = {
+  bundleId: string;
+  created: boolean;
+  parsed: number;
+  skipped: number;
+  errors: Array<{ path: string; error: string }>;
+};
+
+export type CreateDocumentBundleOptions = {
+  maxPages?: number;
+  ifExists?: 'returnExisting' | 'error' | 'update';
+};
+
+/**
+ * Compute a stable bundle ID from document paths.
+ * Ensures idempotency: same set of documents → same bundleId.
+ */
+function computeDocumentBundleFingerprint(docPaths: string[]): string {
+  const normalized = docPaths
+    .map((p) => path.resolve(p).replace(/\\/g, '/').toLowerCase())
+    .sort();
+  const input = JSON.stringify({ schemaVersion: 1, type: 'document', paths: normalized });
+  return crypto.createHash('sha256').update(input, 'utf8').digest('hex');
+}
+
+/**
+ * Create a document-only bundle directly from document files (PDF, Office, etc.).
+ * 
+ * This is a simplified flow that bypasses the intermediate docs_repo layer:
+ * PDF → parse → bundle/docs/*.md → FTS index
+ * 
+ * @param cfg - Preflight configuration
+ * @param docPaths - Array of document file paths to ingest
+ * @param options - Optional configuration
+ * @returns Bundle creation result with bundleId and statistics
+ */
+export async function createDocumentBundle(
+  cfg: PreflightConfig,
+  docPaths: string[],
+  options?: CreateDocumentBundleOptions
+): Promise<CreateDocumentBundleResult> {
+  // Apply concurrency limiting
+  return await bundleCreationLimiter.run(async () => {
+    return await createDocumentBundleInternal(cfg, docPaths, options);
+  });
+}
+
+async function createDocumentBundleInternal(
+  cfg: PreflightConfig,
+  docPaths: string[],
+  options?: CreateDocumentBundleOptions
+): Promise<CreateDocumentBundleResult> {
+  const fingerprint = computeDocumentBundleFingerprint(docPaths);
+  const ifExists = options?.ifExists ?? 'returnExisting';
+
+  // Check for existing bundle with same fingerprint
+  const existing = await findExistingBundleByFingerprint(cfg, fingerprint);
+  if (existing) {
+    if (ifExists === 'returnExisting') {
+      return {
+        bundleId: existing,
+        created: false,
+        parsed: 0,
+        skipped: 0,
+        errors: [],
+      };
+    }
+    if (ifExists === 'error') {
+      throw new Error(`Document bundle already exists: ${existing}`);
+    }
+    // ifExists === 'update': fall through to update the bundle
+  }
+
+  // Generate stable bundleId from fingerprint (first 16 chars + 'doc-' prefix)
+  const bundleId = `doc-${fingerprint.slice(0, 32)}`;
+  const createdAt = nowIso();
+
+  // Use effective storage dir
+  const effectiveStorageDir = await getEffectiveStorageDirForWrite(cfg);
+  
+  // Create in temporary directory for atomic creation
+  const tmpBundlesDir = path.join(cfg.tmpDir, 'bundles-wip');
+  await ensureDir(tmpBundlesDir);
+  
+  const tmpPaths = getBundlePaths(tmpBundlesDir, bundleId);
+  await ensureDir(tmpPaths.rootDir);
+  
+  const finalPaths = getBundlePaths(effectiveStorageDir, bundleId);
+
+  // Create docs directory
+  const docsDir = path.join(tmpPaths.rootDir, 'docs');
+  await ensureDir(docsDir);
+  
+  // Create indexes directory
+  await ensureDir(tmpPaths.indexesDir);
+
+  const ingestedFiles: IngestedFile[] = [];
+  let parsed = 0;
+  let skipped = 0;
+  const errors: Array<{ path: string; error: string }> = [];
+  const docEntries: Array<{ sourcePath: string; docHash: string; bundleRelPath: string }> = [];
+
+  try {
+    // Process each document
+    for (const docPath of docPaths) {
+      const absPath = path.resolve(docPath);
+
+      // Check if file exists and is parseable
+      try {
+        const st = await fs.stat(absPath);
+        if (!st.isFile()) {
+          skipped++;
+          errors.push({ path: absPath, error: 'not a file' });
+          continue;
+        }
+      } catch (err) {
+        skipped++;
+        errors.push({ path: absPath, error: `cannot access: ${(err as Error).message}` });
+        continue;
+      }
+
+      if (!isParseableDocument(absPath)) {
+        skipped++;
+        errors.push({ path: absPath, error: 'unsupported document format' });
+        continue;
+      }
+
+      // Parse the document
+      const parseResult = await ingestDocument(absPath, {
+        extractImages: false,
+        extractTables: false,
+        extractEquations: false,
+        maxPagesPerDocument: options?.maxPages,
+      });
+
+      if (!parseResult.success || !parseResult.fullText) {
+        skipped++;
+        errors.push({ path: absPath, error: parseResult.error ?? 'failed to extract text' });
+        continue;
+      }
+
+      // Compute content hash for deduplication and filename
+      const contentHash = sha256Text(parseResult.fullText);
+      const docFileName = `${contentHash.slice(0, 16)}.md`;
+      const bundleRelPath = `docs/${docFileName}`;
+      const outPath = path.join(docsDir, docFileName);
+
+      // Write markdown with metadata header
+      const header = [
+        '<!-- preflight-doc -->',
+        `<!-- source: ${absPath} -->`,
+        `<!-- extracted_at: ${createdAt} -->`,
+        '',
+      ].join('\n');
+
+      await fs.writeFile(outPath, header + parseResult.fullText.trim() + '\n', 'utf8');
+
+      // Track for indexing
+      const fileStat = await fs.stat(outPath);
+      ingestedFiles.push({
+        repoId: 'document',
+        kind: 'doc',
+        repoRelativePath: docFileName,
+        bundleNormRelativePath: bundleRelPath,
+        bundleNormAbsPath: outPath,
+        sha256: contentHash,
+        bytes: fileStat.size,
+      });
+
+      docEntries.push({ sourcePath: absPath, docHash: contentHash, bundleRelPath });
+      parsed++;
+    }
+
+    // Build FTS index (docs only)
+    await rebuildIndex(tmpPaths.searchDbPath, ingestedFiles, {
+      includeDocs: true,
+      includeCode: false,
+    });
+
+    // Create manifest
+    const manifest: BundleManifestV1 = {
+      schemaVersion: 1,
+      bundleId,
+      createdAt,
+      updatedAt: createdAt,
+      type: 'document',
+      fingerprint,
+      displayName: `Documents (${parsed} files)`,
+      description: `Document bundle containing ${parsed} parsed document(s)`,
+      tags: ['documents'],
+      inputs: {
+        repos: [],
+      },
+      repos: [],
+      index: {
+        backend: 'sqlite-fts5-lines',
+        includeDocs: true,
+        includeCode: false,
+      },
+    };
+
+    await writeManifest(tmpPaths.manifestPath, manifest);
+
+    // Validate bundle completeness (minimal check for document bundles)
+    const manifestStat = await statOrNull(tmpPaths.manifestPath);
+    const indexStat = await statOrNull(tmpPaths.searchDbPath);
+    if (!manifestStat || !indexStat) {
+      throw new Error('Document bundle creation incomplete: missing manifest or index');
+    }
+
+    // Atomic move from temp to final location
+    await ensureDir(effectiveStorageDir);
+    
+    try {
+      await fs.rename(tmpPaths.rootDir, finalPaths.rootDir);
+      logger.info(`Document bundle ${bundleId} moved atomically to ${finalPaths.rootDir}`);
+    } catch (renameErr) {
+      const errCode = (renameErr as NodeJS.ErrnoException).code;
+      if (errCode === 'EXDEV') {
+        logger.warn(`Cross-filesystem move for document bundle ${bundleId}, falling back to copy`);
+        await copyDir(tmpPaths.rootDir, finalPaths.rootDir);
+        await rmIfExists(tmpPaths.rootDir);
+      } else {
+        throw renameErr;
+      }
+    }
+
+    // Update de-duplication index
+    await updateDedupIndexBestEffort(cfg, fingerprint, bundleId, createdAt, 'complete');
+
+    // Mirror to backup storage directories
+    if (cfg.storageDirs.length > 1) {
+      await mirrorBundleToBackups(effectiveStorageDir, cfg.storageDirs, bundleId);
+    }
+
+    return {
+      bundleId,
+      created: true,
+      parsed,
+      skipped,
+      errors,
+    };
+
+  } catch (err) {
+    // Clean up temp directory on failure
+    logger.error(`Document bundle creation failed, cleaning up: ${bundleId}`, err instanceof Error ? err : undefined);
+    await rmIfExists(tmpPaths.rootDir);
+    throw new Error(`Failed to create document bundle: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    // Ensure temp cleanup
+    await rmIfExists(tmpPaths.rootDir).catch(() => {});
+  }
 }
 
 export async function getBundleRoot(storageDir: string, bundleId: string): Promise<string> {

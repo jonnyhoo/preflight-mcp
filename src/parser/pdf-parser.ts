@@ -1,11 +1,17 @@
 /**
- * PDF document parser using unpdf.
+ * PDF document parser using unpdf with Scribe.js OCR fallback.
  *
  * This module provides PDF parsing capabilities including:
  * - Text extraction with position information
  * - Image extraction
  * - Table detection and extraction
  * - Metadata extraction
+ * - **OCR support for scanned PDFs** (via Scribe.js)
+ *
+ * Processing strategy:
+ * 1. Try unpdf for fast native text extraction
+ * 2. If text is empty/minimal, use Scribe.js OCR
+ * 3. Scribe.js auto-detects text-native vs image-native PDFs
  *
  * @module parser/pdf-parser
  */
@@ -32,6 +38,76 @@ import { DEFAULT_PARSE_OPTIONS } from './types.js';
 import { createModuleLogger } from '../logging/logger.js';
 
 const logger = createModuleLogger('pdf-parser');
+
+// ============================================================================
+// Scribe.js OCR Integration
+// ============================================================================
+
+/**
+ * Scribe.js module interface for OCR operations.
+ */
+interface ScribeModule {
+  extractText: (inputs: (string | ArrayBuffer)[], options?: {
+    preferNativeText?: boolean;
+    maxPages?: number;
+  }) => Promise<string>;
+  init?: (options?: { ocrMode?: 'quality' | 'speed' }) => Promise<void>;
+  terminate?: () => Promise<void>;
+}
+
+let scribeModule: ScribeModule | null = null;
+let scribeInitialized = false;
+
+/**
+ * Get or initialize Scribe.js module for OCR.
+ */
+async function getScribeOcr(): Promise<ScribeModule | null> {
+  if (scribeModule) return scribeModule;
+
+  try {
+    // Dynamic import for optional OCR dependency
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mod: any = await import('scribe.js-ocr');
+    scribeModule = {
+      extractText: mod.extractText || mod.default?.extractText,
+      init: mod.init || mod.default?.init,
+      terminate: mod.terminate || mod.default?.terminate,
+    };
+
+    // Initialize Scribe.js if not already done
+    if (!scribeInitialized && scribeModule.init) {
+      try {
+        await scribeModule.init({ ocrMode: 'quality' });
+        scribeInitialized = true;
+        logger.info('Scribe.js OCR engine initialized');
+      } catch {
+        // init may not be available in all versions
+        scribeInitialized = true;
+      }
+    }
+
+    return scribeModule;
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    logger.debug('Scribe.js OCR not available:', error);
+    return null;
+  }
+}
+
+/**
+ * Minimum text length to consider a PDF as having extractable text.
+ * PDFs with less text than this threshold will trigger OCR fallback.
+ */
+const MIN_TEXT_LENGTH_THRESHOLD = 50;
+
+/**
+ * Check if extracted text is substantial enough.
+ * Scanned PDFs often have no text or just whitespace.
+ */
+function hasSubstantialText(text: string): boolean {
+  const cleaned = text.replace(/\s+/g, ' ').trim();
+  return cleaned.length >= MIN_TEXT_LENGTH_THRESHOLD;
+}
 
 // ============================================================================
 // PDF Parser Implementation
@@ -98,14 +174,29 @@ export class PdfParser implements IDocumentParser {
       const maxPages = opts.maxPages ?? pageCount;
       const pagesToProcess = Math.min(endPage - startPage + 1, maxPages);
 
-      // Extract text content
+      // Extract text content using unpdf (fast, native text extraction)
       const textResult = await extractText(freshData(), {
         mergePages: false,
       });
 
       // Process each page
       const fullTextParts: string[] = [];
-      const pageTexts = textResult.text; // string[] when mergePages: false
+      let pageTexts = textResult.text; // string[] when mergePages: false
+
+      // Check if we got substantial text from native extraction
+      const totalNativeText = pageTexts.join(' ');
+      const needsOcr = !hasSubstantialText(totalNativeText);
+
+      // If PDF appears to be scanned (no/minimal text), try OCR
+      if (needsOcr && opts.enableOcr !== false) {
+        const ocrResult = await this.tryOcrExtraction(filePath, pagesToProcess, warnings);
+        if (ocrResult) {
+          pageTexts = ocrResult.pageTexts;
+          if (ocrResult.usedOcr) {
+            warnings.push('PDF appears to be scanned; used Scribe.js OCR for text extraction');
+          }
+        }
+      }
 
       for (let pageIdx = startPage; pageIdx < startPage + pagesToProcess; pageIdx++) {
         try {
@@ -249,6 +340,100 @@ export class PdfParser implements IDocumentParser {
         };
       }
     }
+  }
+
+  /**
+   * Try OCR extraction using Scribe.js.
+   * Scribe.js automatically handles both text-native and image-native PDFs.
+   */
+  private async tryOcrExtraction(
+    filePath: string,
+    maxPages: number,
+    warnings: string[]
+  ): Promise<{ pageTexts: string[]; usedOcr: boolean } | null> {
+    try {
+      const scribe = await getScribeOcr();
+      if (!scribe || !scribe.extractText) {
+        logger.debug('Scribe.js OCR not available for PDF fallback');
+        return null;
+      }
+
+      logger.info(`Attempting OCR extraction for: ${filePath}`);
+
+      // Read file as ArrayBuffer for Scribe.js
+      const buffer = fs.readFileSync(filePath);
+      const arrayBuffer = buffer.buffer.slice(
+        buffer.byteOffset,
+        buffer.byteOffset + buffer.byteLength
+      );
+
+      // Scribe.js extractText can handle PDF files directly
+      // It auto-detects if the PDF is text-native or image-native
+      const ocrText = await scribe.extractText([arrayBuffer], {
+        maxPages,
+        preferNativeText: true, // Try native text first, OCR as fallback
+      });
+
+      if (!ocrText || !ocrText.trim()) {
+        logger.debug('OCR extraction returned empty text');
+        return null;
+      }
+
+      // Split OCR result by page markers or paragraphs
+      // Scribe.js typically returns combined text, so we split heuristically
+      const pageTexts = this.splitOcrTextByPages(ocrText, maxPages);
+
+      logger.info(`OCR extracted ${ocrText.length} characters from PDF`);
+
+      return {
+        pageTexts,
+        usedOcr: true,
+      };
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      logger.error(`OCR extraction failed: ${errMsg}`);
+      warnings.push(`OCR fallback failed: ${errMsg}`);
+      return null;
+    }
+  }
+
+  /**
+   * Split OCR text into page-like segments.
+   * Since Scribe.js may return combined text, we use heuristics.
+   */
+  private splitOcrTextByPages(text: string, expectedPages: number): string[] {
+    // Try to split by common page break patterns
+    const pageBreakPatterns = [
+      /\f/g, // Form feed character
+      /\n{3,}/g, // Multiple newlines
+      /---+\s*Page\s*\d+\s*---+/gi, // Explicit page markers
+    ];
+
+    for (const pattern of pageBreakPatterns) {
+      const parts = text.split(pattern).filter(p => p.trim());
+      if (parts.length > 1) {
+        return parts;
+      }
+    }
+
+    // If no page breaks found, return as single page or split evenly
+    if (expectedPages <= 1) {
+      return [text];
+    }
+
+    // Split evenly by paragraph count
+    const paragraphs = text.split(/\n\n+/).filter(p => p.trim());
+    if (paragraphs.length <= expectedPages) {
+      return [text]; // Not enough paragraphs to split
+    }
+
+    const perPage = Math.ceil(paragraphs.length / expectedPages);
+    const pages: string[] = [];
+    for (let i = 0; i < paragraphs.length; i += perPage) {
+      pages.push(paragraphs.slice(i, i + perPage).join('\n\n'));
+    }
+
+    return pages;
   }
 
   /**

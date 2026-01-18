@@ -7,7 +7,6 @@ export type AstEngine = 'wasm' | 'native';
 
 export type EmbeddingProviderType = 'ollama' | 'openai';
 
-export type ToolsetMode = 'full' | 'minimal';
 
 export type OpenAIAuthMode = 'auto' | 'bearer' | 'api-key';
 
@@ -31,18 +30,10 @@ export type PreflightConfig = {
   storageDirs: string[];
   tmpDir: string;
 
-  /** Tool exposure mode. minimal = only expose the single natural-language assistant tool. */
-  toolset: ToolsetMode;
-
   /** LSP integration configuration. */
   lsp: LspConfig;
 
-  /** Persistent assistant working directory (for doc extraction cache, etc.). */
-  assistantDir: string;
-
   githubToken?: string;
-  context7ApiKey?: string;
-  context7McpUrl: string;
   /** Max time to allow git clone to run before failing (ms). */
   gitCloneTimeoutMs: number;
   maxFileBytes: number;
@@ -62,10 +53,6 @@ export type PreflightConfig = {
 
   // --- Limits and tuning parameters (previously hardcoded) ---
 
-  /** Max Context7 libraries to process per bundle (default: 20). */
-  maxContext7Libraries: number;
-  /** Max Context7 topics per library (default: 10). */
-  maxContext7Topics: number;
   /** Max tokens to extract for FTS query (default: 12). */
   maxFtsQueryTokens: number;
   /** Max skipped file notes to include in manifest (default: 50). */
@@ -161,12 +148,6 @@ function parseEmbeddingProvider(raw: string | undefined): EmbeddingProviderType 
   return 'ollama'; // Default to local Ollama
 }
 
-function parseToolset(raw: string | undefined): ToolsetMode {
-  const v = (raw ?? '').trim().toLowerCase();
-  if (v === 'minimal') return 'minimal';
-  return 'full';
-}
-
 function parseOpenAIAuthMode(raw: string | undefined): OpenAIAuthMode {
   const v = (raw ?? '').trim().toLowerCase();
   if (v === 'api-key') return 'api-key';
@@ -203,9 +184,6 @@ export function getConfig(): PreflightConfig {
 
   const tmpDir = process.env.PREFLIGHT_TMP_DIR ?? path.join(os.tmpdir(), 'preflight-mcp');
 
-  const toolset = parseToolset(process.env.PREFLIGHT_TOOLSET);
-  const assistantDir = process.env.PREFLIGHT_ASSISTANT_DIR ?? path.join(os.homedir(), '.preflight-mcp', 'assistant');
-
   const analysisMode = parseAnalysisMode(process.env.PREFLIGHT_ANALYSIS_MODE);
 
   const httpEnabled = envBoolean('PREFLIGHT_HTTP_ENABLED', true);
@@ -217,12 +195,7 @@ export function getConfig(): PreflightConfig {
     storageDirs,
     tmpDir,
 
-    toolset,
-    assistantDir,
-
     githubToken: process.env.GITHUB_TOKEN,
-    context7ApiKey: process.env.CONTEXT7_API_KEY,
-    context7McpUrl: process.env.CONTEXT7_MCP_URL ?? 'https://mcp.context7.com/mcp',
     gitCloneTimeoutMs: envNumber('PREFLIGHT_GIT_CLONE_TIMEOUT_MS', 5 * 60_000),
     maxFileBytes: envNumber('PREFLIGHT_MAX_FILE_BYTES', 512 * 1024),
     maxTotalBytes: envNumber('PREFLIGHT_MAX_TOTAL_BYTES', 50 * 1024 * 1024),
@@ -235,8 +208,6 @@ export function getConfig(): PreflightConfig {
     httpPort,
 
     // Tuning parameters with defaults (can be overridden via env vars)
-    maxContext7Libraries: envNumber('PREFLIGHT_MAX_CONTEXT7_LIBRARIES', 20),
-    maxContext7Topics: envNumber('PREFLIGHT_MAX_CONTEXT7_TOPICS', 10),
     maxFtsQueryTokens: envNumber('PREFLIGHT_MAX_FTS_QUERY_TOKENS', 12),
     maxSkippedNotes: envNumber('PREFLIGHT_MAX_SKIPPED_NOTES', 50),
     defaultMaxAgeHours: envNumber('PREFLIGHT_DEFAULT_MAX_AGE_HOURS', 24),

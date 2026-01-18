@@ -1,8 +1,49 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { type IngestedFile } from './ingest.js';
-import type { Context7LibrarySummary } from './context7.js';
 import { readFacts, type BundleFacts } from './facts.js';
+
+/**
+ * Highlight item from analysis results.
+ */
+type AnalysisHighlight = {
+  type: string;
+  description: string;
+  confidence: number;
+  file?: string;
+  line?: number;
+};
+
+/**
+ * Summary entry for a single analyzer.
+ */
+type AnalyzerSummaryEntry = {
+  analyzerName: string;
+  summary: string;
+  highlights: AnalysisHighlight[];
+};
+
+/**
+ * Combined summaries from all analyzers.
+ */
+type AnalysisSummary = {
+  overall: string;
+  analyzers: AnalyzerSummaryEntry[];
+  totalMs: number;
+};
+
+/**
+ * Load analysis summary from SUMMARY.json
+ */
+async function loadAnalysisSummary(bundleRootDir: string): Promise<AnalysisSummary | null> {
+  const summaryPath = path.join(bundleRootDir, 'analysis', 'SUMMARY.json');
+  try {
+    const content = await fs.readFile(summaryPath, 'utf8');
+    return JSON.parse(content) as AnalysisSummary;
+  } catch {
+    return null;
+  }
+}
 
 type RepoOverviewInput = {
   repoId: string;
@@ -119,69 +160,6 @@ async function renderNodePackageFacts(files: IngestedFile[]): Promise<string[]> 
   return out;
 }
 
-function safeContext7IdSegments(context7Id: string): string[] {
-  const raw = context7Id.trim().replace(/^\/+/, '');
-  const parts = raw.split('/').filter(Boolean);
-  return parts.filter((p) => p !== '.' && p !== '..');
-}
-
-function slug(s: string): string {
-  return s
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .slice(0, 64);
-}
-
-function context7MetaRelPath(lib: Context7LibrarySummary): string {
-  if (lib.id) {
-    const segs = safeContext7IdSegments(lib.id);
-    return `libraries/context7/${segs.join('/')}/meta.json`;
-  }
-  return `libraries/context7/_unresolved/${slug(lib.input) || 'library'}/meta.json`;
-}
-
-async function renderContext7LibraryFacts(bundleRootDir: string, lib: Context7LibrarySummary): Promise<string[]> {
-  const relMeta = context7MetaRelPath(lib);
-  const absMeta = path.join(bundleRootDir, ...relMeta.split('/'));
-
-  let lines: string[];
-  try {
-    lines = await readLines(absMeta);
-  } catch {
-    return [];
-  }
-
-  const out: string[] = [];
-
-  // Existence pointer.
-  out.push(`- Meta file: ${relMeta}. ${evidence(relMeta, 1, 1)}`);
-
-  const pushIf = (label: string, key: string) => {
-    const ln = firstLineNumberContaining(lines, `"${key}"`);
-    if (!ln) return;
-    out.push(`- ${label}. ${evidence(relMeta, ln, ln)}`);
-  };
-
-  pushIf('Library input recorded', 'input');
-  pushIf('Context7 ID recorded', 'id');
-  pushIf('Fetched at recorded', 'fetchedAt');
-  pushIf('Topics recorded', 'topics');
-
-  if (lib.files && lib.files.length) {
-    out.push('- Docs files:');
-    for (const f of lib.files.slice(0, 20)) {
-      out.push(`  - ${f}. ${evidence(f, 1, 1)}`);
-    }
-  } else {
-    const ln = firstLineNumberContaining(lines, `"files"`) ?? 1;
-    out.push(`- No docs files listed. ${evidence(relMeta, ln, ln)}`);
-  }
-
-  return out;
-}
-
 /**
  * Phase 3: Extract project purpose from README.md
  */
@@ -270,7 +248,6 @@ export async function generateOverviewMarkdown(params: {
   bundleId: string;
   bundleRootDir: string;
   repos: RepoOverviewInput[];
-  libraries?: Context7LibrarySummary[];
 }): Promise<string> {
   // Load FACTS.json if available
   const factsPath = path.join(params.bundleRootDir, 'analysis', 'FACTS.json');
@@ -386,6 +363,33 @@ export async function generateOverviewMarkdown(params: {
       sections.push(...standaloneLines.map(l => l + '\r\n'));
       sections.push('');
     }
+
+    // Phase 4: Code Analysis Summary
+    const analysisSummary = await loadAnalysisSummary(params.bundleRootDir);
+    if (analysisSummary) {
+      sections.push('## Code Analysis Summary\r\n');
+      
+      // Overall summary
+      if (analysisSummary.overall) {
+        sections.push(analysisSummary.overall + '\r\n\r\n');
+      }
+
+      // Individual analyzer summaries with highlights
+      for (const analyzer of analysisSummary.analyzers) {
+        sections.push(`### ${analyzer.analyzerName}\r\n`);
+        sections.push(`${analyzer.summary}\r\n`);
+        
+        // Show highlights if available
+        if (analyzer.highlights && analyzer.highlights.length > 0) {
+          sections.push('\r\n**Key Findings:**\r\n');
+          for (const h of analyzer.highlights.slice(0, 3)) {
+            const location = h.file ? ` (${h.file}${h.line ? `:${h.line}` : ''})` : '';
+            sections.push(`- ${h.description}${location}\r\n`);
+          }
+        }
+        sections.push('');
+      }
+    }
     
     // Return Phase 3 format directly
     return sections.join('\n') + '\n';
@@ -437,22 +441,6 @@ export async function generateOverviewMarkdown(params: {
     }
 
     sections.push('');
-  }
-
-  const libs = params.libraries ?? [];
-  if (libs.length) {
-    sections.push('## Context7 libraries');
-
-    for (const lib of libs) {
-      const facts = await renderContext7LibraryFacts(params.bundleRootDir, lib);
-      sections.push(`### ${lib.input}`);
-      if (facts.length) {
-        sections.push(...facts);
-      } else {
-        sections.push('- No library facts available.');
-      }
-      sections.push('');
-    }
     }
   }
 

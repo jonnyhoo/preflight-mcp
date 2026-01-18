@@ -131,16 +131,6 @@ export class GitHubError extends PreflightError {
 }
 
 /**
- * Error thrown when Context7 operations fail.
- */
-export class Context7Error extends PreflightError {
-  constructor(message: string, options?: { context?: Record<string, unknown>; cause?: Error }) {
-    super(message, 'CONTEXT7_ERROR', options);
-    this.name = 'Context7Error';
-  }
-}
-
-/**
  * Error thrown when search operations fail.
  */
 export class SearchError extends PreflightError {

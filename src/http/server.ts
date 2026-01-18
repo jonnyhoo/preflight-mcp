@@ -4,8 +4,6 @@ import { URL } from 'node:url';
 import { type PreflightConfig } from '../config.js';
 import { logger } from '../logging/logger.js';
 import { wrapPreflightError } from '../mcp/errorKinds.js';
-import { generateDependencyGraph } from '../evidence/dependencyGraph.js';
-import { traceQuery, traceUpsert } from '../trace/service.js';
 
 export type HttpServerHandle = {
   host: string;
@@ -65,33 +63,6 @@ export function startHttpServer(cfg: PreflightConfig): HttpServerHandle | null {
 
       if (method === 'GET' && pathname === '/health') {
         sendJson(res, 200, { ok: true, name: 'preflight-mcp', time: new Date().toISOString() });
-        return;
-      }
-
-      if (method === 'POST' && pathname === '/api/v1/evidence/dependency-graph') {
-        const body = await readJsonBody(req, 2_000_000);
-        const out = await generateDependencyGraph(cfg, body);
-        sendJson(res, 200, out as unknown as JsonValue);
-        return;
-      }
-
-      if (method === 'POST' && pathname === '/api/v1/trace/upsert') {
-        const body = await readJsonBody(req, 2_000_000);
-        const out = await traceUpsert(cfg, body);
-        sendJson(res, 200, out as unknown as JsonValue);
-        return;
-      }
-
-      if (method === 'GET' && pathname === '/api/v1/trace') {
-        const query = Object.fromEntries(url.searchParams.entries());
-        // Convert known numeric params
-        const body: Record<string, unknown> = { ...query };
-        if (typeof query.limit === 'string') body.limit = Number(query.limit);
-        if (typeof query.timeBudgetMs === 'string') body.timeBudgetMs = Number(query.timeBudgetMs);
-        if (typeof query.maxBundles === 'string') body.maxBundles = Number(query.maxBundles);
-
-        const out = await traceQuery(cfg, body);
-        sendJson(res, 200, out as unknown as JsonValue);
         return;
       }
 

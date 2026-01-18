@@ -163,6 +163,7 @@ export type BundleRepo = {
   notes?: string[];
 };
 
+/** @deprecated Context7 integration removed. Kept for backward compatibility with existing bundles. */
 export type BundleLibrary = {
   kind: 'context7';
   input: string;
@@ -190,6 +191,10 @@ export type BundleManifestV1 = {
   bundleId: string;
   createdAt: string;
   updatedAt: string;
+  /**
+   * Bundle type: 'repository' (default) for code repos, 'document' for document-only bundles.
+   */
+  type?: 'repository' | 'document';
   /**
    * Stable input fingerprint used for de-duplication.
    * When present, two bundles with the same fingerprint were created from the same normalized inputs.

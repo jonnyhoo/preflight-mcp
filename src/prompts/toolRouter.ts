@@ -35,7 +35,8 @@ export type ToolCategory =
   | 'search'        // Search functionality
   | 'bundle'        // Bundle management
   | 'analysis'      // Code analysis and dependency graphs
-  | 'callgraph'     // Function-level call graph analysis (NEW)
+  | 'callgraph'     // Function-level call graph analysis
+  | 'quality'       // Code quality checks (duplicates, deadcode, complexity, etc.)
   | 'trace'         // Trace links
   | 'modal'         // Multimodal content
   | 'navigation';   // Navigation and discovery
@@ -264,6 +265,19 @@ export const TOOL_REGISTRY: ToolInfo[] = [
     whenToUse: 'Use when you need AI analysis of visual content.',
   },
 
+  // === Code Quality Tools ===
+  {
+    name: 'preflight_check',
+    category: 'quality',
+    description: 'Run code quality checks: duplicates, doccheck, deadcode, circular dependencies, complexity hotspots.',
+    keywords: ['check', 'quality', 'duplicates', 'deadcode', 'dead', 'unused', 'circular', 'complexity', 'lint'],
+    chineseKeywords: ['检查', '质量', '重复', '死代码', '未使用', '循环依赖', '复杂度', '代码检查'],
+    requires: 'path',
+    mutating: false,
+    whenToUse: 'Use when user wants to check code quality: find duplicates, dead code, circular dependencies, or complexity hotspots.',
+    nextSteps: ['Review and fix reported issues', 'Run specific checks only if needed'],
+  },
+
   // === Trace Tools ===
   {
     name: 'preflight_trace_query',
@@ -420,14 +434,15 @@ export function generateRoutingPrompt(categories?: ToolCategory[]): string {
     bundle: '📦 Bundle Management (Start Here)',
     callgraph: '🔗 Call Graph Analysis (Deep Code Understanding)',
     analysis: '📊 Module Analysis',
-    search: '🔍 Search',
+    quality: '🔍 Code Quality Checks',
+    search: '🔎 Search',
     navigation: '📂 Navigation',
     document: '📄 Document Processing',
     modal: '🖼️ Multimodal Content',
     trace: '🔗 Trace Links',
   };
   
-  const categoryOrder: ToolCategory[] = ['bundle', 'callgraph', 'analysis', 'search', 'navigation', 'document', 'modal', 'trace'];
+  const categoryOrder: ToolCategory[] = ['bundle', 'callgraph', 'analysis', 'quality', 'search', 'navigation', 'document', 'modal', 'trace'];
   
   const filteredTools = categories
     ? TOOL_REGISTRY.filter(t => categories.includes(t.category))

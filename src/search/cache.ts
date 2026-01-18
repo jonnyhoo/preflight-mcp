@@ -200,13 +200,15 @@ export class LRUCache<T> {
 // Search-specific cache implementation
 // ============================================================================
 
-import type { SearchHit, GroupedSearchHit, SearchScope, SearchOptions } from './sqliteFts.js';
+import type {
+  SearchHit,
+  GroupedSearchHit,
+  SearchScope,
+  SearchOptions,
+  SearchCacheEntry,
+} from './types.js';
 
-export interface SearchCacheEntry {
-  hits: SearchHit[];
-  grouped?: GroupedSearchHit[];
-  meta: { tokenBudgetHint?: string };
-}
+export type { SearchCacheEntry } from './types.js';
 
 export interface SearchCacheConfig extends CacheConfig {
   /** Prefix for cache keys (e.g., bundle ID) */

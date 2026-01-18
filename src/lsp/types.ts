@@ -4,12 +4,13 @@
  */
 import type { Hover } from 'vscode-languageserver-protocol';
 
-export type SupportedLanguage = 'python' | 'go' | 'rust';
+export type SupportedLanguage = 'python' | 'go' | 'rust' | 'typescript';
 
-export const LANGUAGE_IDS: Record<SupportedLanguage, string> = { python: 'python', go: 'go', rust: 'rust' };
+export const LANGUAGE_IDS: Record<SupportedLanguage, string> = { python: 'python', go: 'go', rust: 'rust', typescript: 'typescript' };
 
 export const EXTENSION_TO_LANGUAGE: Record<string, SupportedLanguage> = {
   '.py': 'python', '.pyi': 'python', '.go': 'go', '.rs': 'rust',
+  '.ts': 'typescript', '.tsx': 'typescript', '.js': 'typescript', '.jsx': 'typescript',
 };
 
 export interface LspServerConfig {

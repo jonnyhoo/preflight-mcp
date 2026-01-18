@@ -5,12 +5,10 @@
  * and connects via stdio transport.
  * 
  * Tools are organized into modules under ./server/tools/:
- * - bundleTools: create/update/delete/repair/list/get_overview/read_file/repo_tree/cleanup/get_task_status
- * - searchTools: search_by_tags/read_files/search_and_read
- * - traceTools: trace_upsert/trace_query/suggest_traces
- * - analysisTools: deep_analyze/dependency_graph/validate_report
- * - callGraphTools: build/query/extract/interface_summary
- * - modalTools: analyze_modal/parse_document/search_modal
+ * - bundleTools: create/list/delete/get_overview/read_file/repo_tree
+ * - searchTools: search_and_read
+ * - lspTools: lsp
+ * - checkTools: preflight_check (unified: duplicates, doccheck, deadcode, circular, complexity)
  */
 
 import fs from 'node:fs/promises';
@@ -38,13 +36,8 @@ import { generateRoutingPrompt, routeQuery, suggestWorkflow } from './prompts/to
 import {
   registerBundleTools,
   registerSearchTools,
-  registerTraceTools,
-  registerAnalysisTools,
-  registerCallGraphTools,
-  registerModalTools,
-  registerSemanticTools,
-  registerAssistantTools,
   registerLspTools,
+  registerCheckTools,
 } from './server/tools/index.js';
 
 // Read version from package.json at startup
@@ -196,36 +189,31 @@ export async function startServer(): Promise<void> {
 
   const deps = { server, cfg };
 
-  // Tool exposure mode:
-  // - minimal: only expose a single natural-language assistant tool
-  // - full: expose all tools (plus assistant + optional semantic tools)
-  if (cfg.toolset === 'minimal') {
-    registerAssistantTools(deps);
-  } else {
-    registerBundleTools(deps);
-    registerSearchTools(deps);
-    registerTraceTools(deps);
-    registerAnalysisTools(deps);
-    registerCallGraphTools(deps);
-    registerModalTools(deps);
+  // Core tools:
+  // - Bundle management: create_bundle, list_bundles, delete_bundle (3)
+  // - Reading: get_overview, read_file, search_and_read, repo_tree (4)
+  // - Navigation: lsp (1, conditional on cfg.lsp.enabled)
+  // - Quality check: preflight_check (1, unified: duplicates, doccheck, deadcode, circular, complexity)
 
-    if (cfg.semanticSearchEnabled) {
-      registerSemanticTools(deps);
-    }
+  // Core bundle tools (6): create, list, delete, get_overview, read_file, repo_tree
+  registerBundleTools(deps, { coreOnly: true });
 
-    if (cfg.lsp.enabled) {
-      registerLspTools(deps);
-    }
+  // Core search tools (1): search_and_read
+  registerSearchTools(deps, { coreOnly: true });
 
-    registerAssistantTools(deps);
+  // LSP for precise navigation (1)
+  if (cfg.lsp.enabled) {
+    registerLspTools(deps);
   }
+
+  // Unified code quality check tool (1): duplicates, doccheck, deadcode, circular, complexity
+  registerCheckTools(deps);
 
   // ==========================================================================
   // PROMPTS - Interactive guidance for users
   // ==========================================================================
 
-  if (cfg.toolset === 'full') {
-    // Tool Router prompt - intelligent tool selection
+  // Tool Router prompt - intelligent tool selection
   server.registerPrompt(
     'preflight_router',
     {
@@ -283,38 +271,30 @@ export async function startServer(): Promise<void> {
 请选择您需要的功能：
 
 **1. 📂 深入分析项目** ⭐推荐
-创建 bundle → 查看概览 → 构建调用图 → 查询函数关系
-工具链: preflight_create_bundle → preflight_get_overview → preflight_build_call_graph
+创建 bundle → 查看概览 → 综合分析 → 精确定位（LSP）
+工具链: preflight_create_bundle → preflight_get_overview → preflight_search_and_read → preflight_lsp
 
-**2. 🔗 函数调用分析** (v0.7.2 新增)
-查询"谁调用了X"、"X调用了什么"、提取函数及依赖
-支持: TypeScript, Python, Go, Rust
-工具: preflight_build_call_graph, preflight_query_call_graph, preflight_extract_code
-
-**3. 🔍 搜索代码/文档**
+**2. 🔍 搜索代码/文档**
 在已索引的项目中全文搜索代码和文档
 工具: preflight_search_and_read
 
-**4. 📄 解析文档**
-解析 PDF、Word、Excel 等文档，提取文本和多模态内容
-工具: preflight_parse_document
+**3. 🔎 代码质量检查**
+检测重复代码、死代码、循环依赖、复杂度热点
+工具: preflight_check
 
-**5. 📋 管理 bundles**
-列出、更新、修复、删除已有的 bundle
-工具: preflight_list_bundles, preflight_update_bundle
-
-**6. 🔗 追溯链接**
-查询/创建代码-测试-文档之间的关联关系
-工具: preflight_trace_query, preflight_trace_upsert
+**4. 📋 管理 bundles**
+列出、删除已有的 bundle
+工具: preflight_list_bundles, preflight_delete_bundle
 
 ---
 🎯 **标准工作流（分析新项目）:**
 1. preflight_create_bundle → 索引项目
 2. preflight_get_overview → 了解项目概览
-3. preflight_build_call_graph → 构建函数调用关系
-4. preflight_query_call_graph → 查询具体函数
+3. preflight_search_and_read → 搜索具体代码/文档
+4. preflight_check → 检查代码质量
+5. preflight_lsp → 精确定位（定义、引用等）
 
-💡 直接说"分析项目 X"即可自动执行上述流程`,
+💡 分析结果保存在 bundle 的 analysis/*.json 中`,
             },
           },
         ],
@@ -356,29 +336,18 @@ export async function startServer(): Promise<void> {
    - 入口函数和关键路径
 \`\`\`
 
-**🔗 函数调用分析 (v0.7.2 新增):**
-
-| 工具 | 用途 |
-|------|------|
-| \`preflight_build_call_graph\` | 构建函数级调用图 |
-| \`preflight_query_call_graph\` | 查询"谁调用了X"/"X调用什么" |
-| \`preflight_extract_code\` | 提取函数+所有依赖 |
-| \`preflight_interface_summary\` | 生成 API 文档 |
-
-支持语言: TypeScript, JavaScript, Python, Go, Rust
-
 **📚 Bundle 文件结构:**
 | 文件 | 内容 |
 |------|------|
 | \`OVERVIEW.md\` | 项目概览和结构总结 |
 | \`START_HERE.md\` | 入口文件和关键路径 |
 | \`AGENTS.md\` | AI Agent 使用指南 |
-| \`deps/dependency-graph.json\` | 模块依赖图 |
+| \`analysis/*.json\` | 设计模式、架构、测试示例、配置、文档冲突
 
 ---
 💡 **示例查询:**
-- "谁调用了 handleRequest 函数？" → preflight_query_call_graph(symbol="handleRequest", direction="callers")
-- "提取 processData 函数及其依赖" → preflight_extract_code(symbol="processData")`,
+- "深入分析" → 读取 bundle 中的 analysis/*.json 文件
+- "谁调用了 handleRequest？" → preflight_lsp action=references`
             },
           },
         ],
@@ -426,7 +395,7 @@ export async function startServer(): Promise<void> {
 \`\`\`
 
 ---
-💡 搜索支持 FTS5 全文语法，如：\`config AND parser\`、\`"exact phrase"\``,
+💡 搜索支持 FTS5 全文语法，如：\`config AND parser\`、\`\"exact phrase\"\``
             },
           },
         ],
@@ -489,61 +458,6 @@ export async function startServer(): Promise<void> {
       };
     }
   );
-
-  // Trace guide prompt
-  server.registerPrompt(
-    'preflight_trace_guide',
-    {
-      title: '追溯链接指南',
-      description: '提供代码追溯功能的操作指南。Use when user selected "追溯" or wants to trace code relationships.',
-      argsSchema: {
-        bundleId: z.string().optional().describe('bundle ID（可选）'),
-      },
-    },
-    async (args) => {
-      const bundleHint = args.bundleId || '{bundleId}';
-      return {
-        messages: [
-          {
-            role: 'user',
-            content: {
-              type: 'text',
-              text: `🔗 **追溯链接指南**
-
-追溯功能用于建立和查询代码之间的关联关系：
-- 代码 ↔ 测试
-- 代码 ↔ 文档
-- 模块 ↔ 需求
-
-**查询已有的追溯链接**
-\`\`\`
-查询 bundle ${bundleHint} 中 src/main.ts 的相关测试
-查询所有 implements 类型的追溯链接
-\`\`\`
-
-**创建追溯链接**
-\`\`\`
-在 bundle ${bundleHint} 中创建追溯：
-src/parser.ts 被 tests/parser.test.ts 测试
-\`\`\`
-
-**常用链接类型：**
-- \`tested_by\` - 被...测试
-- \`implements\` - 实现了...
-- \`documents\` - 文档描述了...
-- \`depends_on\` - 依赖于...
-- \`relates_to\` - 相关联
-
----
-💡 追溯链接会持久化存储，便于未来快速查询代码关系`,
-            },
-          },
-        ],
-      };
-    }
-  );
-
-  }
 
   // ==========================================================================
   // CONNECT & SHUTDOWN
