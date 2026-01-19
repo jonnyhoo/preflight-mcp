@@ -65,8 +65,6 @@ interface FunctionContext {
   fundamental: number;
   nesting: number;
   maxNesting: number;
-  /** Last logical operator for chain detection */
-  lastLogicalOp: '&&' | '||' | null;
   /** Track if recursion detected */
   hasRecursion: boolean;
 }
@@ -98,7 +96,6 @@ export function computeComplexityMetrics(
       fundamental: 0,
       nesting: 0,
       maxNesting: 0,
-      lastLogicalOp: null,
       hasRecursion: false,
     };
 
@@ -167,6 +164,19 @@ function getFunctionNodeTypes(lang: TreeSitterLanguageId): string[] {
     default:
       return [];
   }
+}
+
+/**
+ * Get the nearest logical binary operator from the parent chain, skipping parentheses.
+ */
+function getLogicalParentOperator(node: Node): '&&' | '||' | null {
+  let parent = node.parent;
+  while (parent && parent.type === 'parenthesized_expression') {
+    parent = parent.parent;
+  }
+  if (parent?.type !== 'binary_expression') return null;
+  const op = parent.childForFieldName('operator')?.text;
+  return op === '&&' || op === '||' ? (op as '&&' | '||') : null;
 }
 
 /**
@@ -657,19 +667,14 @@ function processLogicalOperator(node: Node, ctx: FunctionContext): void {
   // Cyclomatic: each logical operator adds +1
   ctx.cyclomatic++;
 
-  // Check if parent is also a logical expression with same operator (chain continuation)
-  const parent = node.parent;
-  const isChainContinuation =
-    parent?.type === 'binary_expression' &&
-    parent.childForFieldName('operator')?.text === op;
+  // Chain scoring based on parent operator (ignoring parentheses):
+  // - If parent isn't a logical binary, this is a new chain (+1)
+  // - If parent is logical but a different operator, this is a switch (+1)
+  const parentOp = getLogicalParentOperator(node);
+  const parentIsLogical = parentOp === '&&' || parentOp === '||';
 
-  if (!isChainContinuation) {
-    // New chain or operator type switch: +1 to fundamental
-    if (ctx.lastLogicalOp === null || ctx.lastLogicalOp !== currentOp) {
-      ctx.fundamental += 1;
-    }
+  if (!parentIsLogical || parentOp !== currentOp) {
+    ctx.fundamental += 1;
   }
-
-  ctx.lastLogicalOp = currentOp;
 }
 
