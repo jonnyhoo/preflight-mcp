@@ -18,10 +18,12 @@ export function extractImportsJava(root: Node): ImportRef[] {
   for (const decl of root.descendantsOfType('import_declaration')) {
     const scopedId = decl.descendantsOfType('scoped_identifier')[0];
     if (scopedId) {
+      const hasWildcard = decl.descendantsOfType('asterisk').length > 0;
+      const module = hasWildcard ? `${scopedId.text}.*` : scopedId.text;
       out.push({
         language: 'java',
         kind: 'import',
-        module: scopedId.text,
+        module,
         range: rangeFromNode(scopedId),
       });
     }
@@ -38,7 +40,8 @@ export function extractExportsJava(root: Node): string[] {
   const out = new Set<string>();
 
   const isPublic = (node: Node): boolean => {
-    const modifiers = node.childForFieldName('modifiers');
+    const modifiers =
+      node.childForFieldName('modifiers') ?? node.namedChildren.find((n) => n.type === 'modifiers');
     if (!modifiers) return false;
     return modifiers.text.includes('public');
   };
@@ -88,7 +91,8 @@ function extractClassMembersJava(classNode: Node): SymbolOutline[] {
   if (!body) return members;
 
   const isPublic = (node: Node): boolean => {
-    const modifiers = node.childForFieldName('modifiers');
+    const modifiers =
+      node.childForFieldName('modifiers') ?? node.namedChildren.find((n) => n.type === 'modifiers');
     if (!modifiers) return false;
     return modifiers.text.includes('public');
   };
@@ -133,7 +137,8 @@ function extractClassMembersJava(classNode: Node): SymbolOutline[] {
 }
 
 const isPublic = (node: Node): boolean => {
-  const modifiers = node.childForFieldName('modifiers');
+  const modifiers =
+    node.childForFieldName('modifiers') ?? node.namedChildren.find((n) => n.type === 'modifiers');
   if (!modifiers) return false;
   return modifiers.text.includes('public');
 };

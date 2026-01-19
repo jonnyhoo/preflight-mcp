@@ -147,13 +147,10 @@ export function extractOutlineGo(root: Node): SymbolOutline[] {
 
     if (child.type === 'method_declaration') {
       const name = child.childForFieldName('name');
-      const receiver = child.childForFieldName('receiver');
       if (!name) continue;
-
-      const receiverType = receiver?.text || '';
       outline.push({
         kind: 'method',
-        name: `(${receiverType}).${name.text}`,
+        name: name.text,
         signature: extractMethodSignatureGo(child),
         range: {
           startLine: child.startPosition.row + 1,

@@ -107,10 +107,15 @@ const multiply = (a: number, b: number) => a * b;
     expect(add!.exported).toBe(true);
   });
 
-  it('returns null for unsupported file types', async () => {
+  it('extracts Java classes', async () => {
     const code = `public class Main { public static void main(String[] args) {} }`;
     const result = await extractOutlineWasm('Main.java', code);
-    expect(result).toBeNull(); // Java not yet supported for outline
+    expect(result).not.toBeNull();
+    expect(result!.language).toBe('java');
+
+    const mainClass = result!.outline.find(s => s.name === 'Main');
+    expect(mainClass).toBeDefined();
+    expect(mainClass!.kind).toBe('class');
   });
 
   it('extracts Python functions and classes', async () => {

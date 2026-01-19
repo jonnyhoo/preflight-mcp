@@ -14,6 +14,7 @@ import { rangeFromNode, firstOfTypes } from '../utils.js';
 
 export function extractImportsPython(root: Node): ImportRef[] {
   const out: ImportRef[] = [];
+  const seen = new Set<string>();
 
   for (const st of root.descendantsOfType('import_statement')) {
     const moduleNode = st.childForFieldName('name') ?? st.namedChild(0);
@@ -41,14 +42,49 @@ export function extractImportsPython(root: Node): ImportRef[] {
 
   for (const st of root.descendantsOfType('import_from_statement')) {
     const moduleNode = st.childForFieldName('module_name');
-    if (!moduleNode) continue;
+    const moduleText = moduleNode?.text ?? '';
+    const relativeNode = st.descendantsOfType('relative_import')[0];
+    let relativePrefix = relativeNode?.text ?? '';
 
-    out.push({
-      language: 'python',
-      kind: 'from',
-      module: moduleNode.text,
-      range: rangeFromNode(moduleNode),
-    });
+    // If module text is only dots (e.g. "." or ".."), treat it as the relative prefix
+    if (!relativePrefix && moduleText && /^\.+$/.test(moduleText)) {
+      relativePrefix = moduleText;
+    }
+
+    const hasExplicitModule = moduleText.length > 0 && !/^\.+$/.test(moduleText);
+
+    if (hasExplicitModule) {
+      let module = moduleText;
+      if (relativePrefix && !module.startsWith('.')) {
+        module = `${relativePrefix}${module}`;
+      }
+
+      if (!seen.has(module)) {
+        seen.add(module);
+        out.push({
+          language: 'python',
+          kind: 'from',
+          module,
+          range: rangeFromNode(moduleNode ?? st),
+        });
+      }
+      continue;
+    }
+
+    // No explicit module name; use imported names with relative prefix
+    const dottedNames = st.descendantsOfType('dotted_name');
+    for (const dn of dottedNames) {
+      if (moduleNode && dn.id === moduleNode.id) continue;
+      const module = `${relativePrefix}${dn.text}`;
+      if (!module || seen.has(module)) continue;
+      seen.add(module);
+      out.push({
+        language: 'python',
+        kind: 'from',
+        module,
+        range: rangeFromNode(dn),
+      });
+    }
   }
 
   return out;
@@ -60,20 +96,34 @@ export function extractImportsPython(root: Node): ImportRef[] {
 
 export function extractExportsPython(root: Node): string[] {
   const out = new Set<string>();
+  const addStringLiteral = (node: Node) => {
+    const inner = node.namedChild(0);
+    if (inner?.type === 'string_content') {
+      out.add(inner.text);
+      return;
+    }
+    const raw = node.text;
+    const trimmed = raw.replace(/^([rubfRUBF]+)?(['"])(.*)\2$/s, '$3');
+    if (trimmed) out.add(trimmed);
+  };
 
   for (const asn of root.descendantsOfType('assignment')) {
     const left = asn.childForFieldName('left');
     const right = asn.childForFieldName('right');
     if (left?.type === 'identifier' && left.text === '__all__') {
-      const listNode = right?.type === 'list' ? right : null;
+      const listNode =
+        right && (right.type === 'list' || right.type === 'tuple' || right.type === 'set')
+          ? right
+          : null;
       if (listNode) {
         for (const item of listNode.namedChildren) {
           if (item.type === 'string') {
-            const inner = item.namedChild(0);
-            if (inner?.type === 'string_content') {
-              out.add(inner.text);
-            }
+            addStringLiteral(item);
           }
+        }
+      } else if (right) {
+        for (const str of right.descendantsOfType('string')) {
+          addStringLiteral(str);
         }
       }
     }
@@ -158,6 +208,7 @@ function extractClassMethodsPython(classNode: Node): SymbolOutline[] {
 
 export function extractOutlinePython(root: Node): SymbolOutline[] {
   const outline: SymbolOutline[] = [];
+  const exportedNames = new Set(extractExportsPython(root));
 
   for (const child of root.namedChildren) {
     if (child.type === 'function_definition') {
@@ -172,7 +223,7 @@ export function extractOutlinePython(root: Node): SymbolOutline[] {
           startLine: child.startPosition.row + 1,
           endLine: child.endPosition.row + 1,
         },
-        exported: !name.text.startsWith('_'),
+        exported: exportedNames.has(name.text),
       });
     }
 
@@ -188,7 +239,7 @@ export function extractOutlinePython(root: Node): SymbolOutline[] {
           startLine: child.startPosition.row + 1,
           endLine: child.endPosition.row + 1,
         },
-        exported: !name.text.startsWith('_'),
+        exported: exportedNames.has(name.text),
         children: children.length > 0 ? children : undefined,
       });
     }
@@ -224,6 +275,7 @@ export function extractExtensionPointsPython(root: Node): ExtensionPoint[] {
     }
 
     const isABC = bases.some((b) => b === 'ABC' || b.endsWith('.ABC'));
+    const isProtocol = bases.some((b) => b === 'Protocol' || b.endsWith('.Protocol'));
 
     const methods: ExtensionPoint['methods'] = [];
     let hasAbstractMethods = false;
@@ -231,7 +283,7 @@ export function extractExtensionPointsPython(root: Node): ExtensionPoint[] {
     for (const member of body.namedChildren) {
       if (member.type === 'decorated_definition') {
         const decorators = member.descendantsOfType('decorator');
-        let isAbstract = false;
+        let isAbstract = isProtocol;
 
         for (const dec of decorators) {
           const decName = dec.namedChild(0);
@@ -273,6 +325,7 @@ export function extractExtensionPointsPython(root: Node): ExtensionPoint[] {
 
         const params = member.childForFieldName('parameters');
         const returnType = member.childForFieldName('return_type');
+        const isAbstract = isProtocol;
 
         methods.push({
           name: methodName.text,
@@ -280,13 +333,23 @@ export function extractExtensionPointsPython(root: Node): ExtensionPoint[] {
           signature: params
             ? `${params.text}${returnType ? ` -> ${returnType.text}` : ''}`
             : undefined,
-          isAbstract: false,
-          isDefault: true,
+          isAbstract,
+          isDefault: !isAbstract,
         });
       }
     }
 
-    if (isABC || hasAbstractMethods) {
+    if (isProtocol) {
+      points.push({
+        kind: 'protocol',
+        name: name.text,
+        line: child.startPosition.row + 1,
+        endLine: child.endPosition.row + 1,
+        isPublic: !name.text.startsWith('_'),
+        methods: methods.length > 0 ? methods : undefined,
+        bases: bases.length > 0 ? bases : undefined,
+      });
+    } else if (isABC || hasAbstractMethods) {
       points.push({
         kind: 'abstract-class',
         name: name.text,

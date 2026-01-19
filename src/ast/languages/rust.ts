@@ -14,54 +14,99 @@ import { rangeFromNode } from '../utils.js';
 
 export function extractImportsRust(root: Node): ImportRef[] {
   const out: ImportRef[] = [];
+  const pushUse = (module: string, node: Node, kind: ImportRef['kind'] = 'use') => {
+    out.push({
+      language: 'rust',
+      kind,
+      module,
+      range: rangeFromNode(node),
+    });
+  };
+
+  const collectUseList = (pathText: string | null, listNode: Node): boolean => {
+    let added = false;
+    for (const item of listNode.namedChildren) {
+      let nameText: string | null = null;
+      let nameNode: Node | null = null;
+
+      if (item.type === 'identifier' || item.type === 'scoped_identifier') {
+        nameText = item.text;
+        nameNode = item;
+      } else if (item.type === 'use_as_clause') {
+        const name =
+          item.childForFieldName('name') ?? item.childForFieldName('path') ?? item.namedChild(0);
+        if (name) {
+          nameText = name.text;
+          nameNode = name;
+        }
+      } else if (item.type === 'use_wildcard') {
+        nameText = '*';
+        nameNode = item;
+      } else if (item.type === 'scoped_use_list') {
+        const nestedPath = item.childForFieldName('path') ?? item.namedChild(0);
+        const nestedList = item.childForFieldName('list') ?? item.descendantsOfType('use_list')[0];
+        if (nestedPath && nestedList) {
+          const nextPath = pathText ? `${pathText}::${nestedPath.text}` : nestedPath.text;
+          if (collectUseList(nextPath, nestedList)) {
+            added = true;
+          }
+        }
+        continue;
+      }
+
+      if (!nameText || !nameNode) continue;
+      const module =
+        nameText === '*'
+          ? pathText
+            ? `${pathText}::*`
+            : '*'
+          : pathText
+            ? `${pathText}::${nameText}`
+            : nameText;
+      pushUse(module, nameNode);
+      added = true;
+    }
+    return added;
+  };
 
   for (const useDecl of root.descendantsOfType('use_declaration')) {
     const argument = useDecl.namedChild(0);
     if (!argument) continue;
+    if (argument.type === 'scoped_use_list') {
+      const pathNode = argument.childForFieldName('path') ?? argument.namedChild(0);
+      const listNode = argument.childForFieldName('list') ?? argument.descendantsOfType('use_list')[0];
+      if (pathNode && listNode) {
+        const added = collectUseList(pathNode.text, listNode);
+        if (added) continue;
+      }
+      if (pathNode) {
+        pushUse(pathNode.text, pathNode);
+        continue;
+      }
+    }
+
+    if (argument.type === 'use_list') {
+      collectUseList(null, argument);
+      continue;
+    }
 
     if (argument.type === 'scoped_identifier' || argument.type === 'identifier') {
-      out.push({
-        language: 'rust',
-        kind: 'use',
-        module: argument.text,
-        range: rangeFromNode(argument),
-      });
+      pushUse(argument.text, argument);
     }
 
     if (argument.type === 'use_wildcard' || argument.type === 'use_list') {
       const path = argument.childForFieldName('path') ?? argument.namedChild(0);
       if (path) {
-        out.push({
-          language: 'rust',
-          kind: 'use',
-          module: path.text,
-          range: rangeFromNode(path),
-        });
+        pushUse(path.text, path);
       }
     }
 
-    if (argument.type === 'scoped_use_list') {
-      const path = argument.childForFieldName('path');
-      if (path) {
-        out.push({
-          language: 'rust',
-          kind: 'use',
-          module: path.text,
-          range: rangeFromNode(path),
-        });
-      }
-    }
   }
 
   for (const externCrate of root.descendantsOfType('extern_crate_declaration')) {
     const name = externCrate.childForFieldName('name');
     if (name) {
-      out.push({
-        language: 'rust',
-        kind: 'externCrate',
-        module: name.text,
-        range: rangeFromNode(name),
-      });
+      pushUse(name.text, name, 'externCrate');
     }
   }
 
@@ -150,6 +195,34 @@ const isPublic = (node: Node): boolean => {
   return false;
 };
 
+function extractImplMethodsRust(implNode: Node): SymbolOutline[] {
+  const methods: SymbolOutline[] = [];
+  const body =
+    implNode.childForFieldName('body') ||
+    implNode.namedChildren.find((n) => n.type === 'declaration_list');
+
+  const members = body ? body.namedChildren : implNode.namedChildren;
+
+  for (const member of members) {
+    if (member.type !== 'function_item' && member.type !== 'function_signature_item') continue;
+    const name = member.childForFieldName('name');
+    if (!name) continue;
+
+    methods.push({
+      kind: 'method',
+      name: name.text,
+      signature: extractFunctionSignatureRust(member),
+      range: {
+        startLine: member.startPosition.row + 1,
+        endLine: member.endPosition.row + 1,
+      },
+      exported: isPublic(member),
+    });
+  }
+
+  return methods;
+}
+
 export function extractOutlineRust(root: Node): SymbolOutline[] {
   const outline: SymbolOutline[] = [];
 
@@ -236,6 +309,7 @@ export function extractOutlineRust(root: Node): SymbolOutline[] {
       if (!typeName) continue;
 
       const label = traitName ? `impl ${traitName.text} for ${typeName.text}` : `impl ${typeName.text}`;
+      const children = extractImplMethodsRust(child);
 
       outline.push({
         kind: 'class',
@@ -245,6 +319,7 @@ export function extractOutlineRust(root: Node): SymbolOutline[] {
           endLine: child.endPosition.row + 1,
         },
         exported: false,
+        children: children.length > 0 ? children : undefined,
       });
     }
 
@@ -329,13 +404,36 @@ export function extractExtensionPointsRust(root: Node): ExtensionPoint[] {
     }
 
     points.push({
-      kind: 'interface',
+      kind: 'trait',
       name: name.text,
       line: child.startPosition.row + 1,
       endLine: child.endPosition.row + 1,
       isPublic: isPublic(child),
       methods: methods.length > 0 ? methods : undefined,
       bases: bases.length > 0 ? bases : undefined,
+      supertraits: bases.length > 0 ? bases : undefined,
+    });
+  }
+
+  for (const child of root.namedChildren) {
+    if (child.type !== 'enum_item') continue;
+
+    const name = child.childForFieldName('name');
+    if (!name) continue;
+
+    const variants: string[] = [];
+    for (const variant of child.descendantsOfType('enum_variant')) {
+      const variantName = variant.childForFieldName('name') ?? variant.namedChild(0);
+      if (variantName) variants.push(variantName.text);
+    }
+
+    points.push({
+      kind: 'enum',
+      name: name.text,
+      line: child.startPosition.row + 1,
+      endLine: child.endPosition.row + 1,
+      isPublic: isPublic(child),
+      variants: variants.length > 0 ? variants : undefined,
     });
   }
 
