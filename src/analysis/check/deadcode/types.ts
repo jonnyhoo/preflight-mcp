@@ -39,6 +39,17 @@ export interface DependencyGraph {
 }
 
 /**
+ * Fine-grained deadcode issue (internal).
+ */
+export interface FineGrainedIssue {
+  type: 'unused-private-field' | 'unused-local-variable' | 'unused-parameter';
+  file: string;
+  line: number;
+  symbolName: string;
+  className?: string;
+}
+
+/**
  * Dead code detection result (internal).
  */
 export interface DeadCodeDetectionResult {
@@ -56,6 +67,8 @@ export interface DeadCodeDetectionResult {
     file: string;
     usedBy: string;
   }>;
+  /** Fine-grained issues */
+  fineGrained: FineGrainedIssue[];
 }
 
 /**
@@ -69,4 +82,6 @@ export type ResolvedDeadCodeOptions = Required<DeadCodeOptions>;
 export const DEFAULT_DEADCODE_OPTIONS: ResolvedDeadCodeOptions = {
   includeTests: false,
   entryPatterns: ['index.*', 'main.*', 'app.*', 'server.*', 'cli.*', 'lib.*'],
+  fineGrained: true,
+  fineGrainedLanguages: ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.java', '.rs'],
 };

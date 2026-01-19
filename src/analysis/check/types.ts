@@ -56,9 +56,19 @@ export interface BaseCheckIssue {
  * Deadcode-specific issue.
  */
 export interface DeadCodeIssue extends BaseCheckIssue {
-  type: 'orphaned' | 'unused-export' | 'unreachable';
+  type:
+    | 'orphaned'
+    | 'unused-export'
+    | 'unreachable'
+    | 'unused-private-field'
+    | 'unused-local-variable'
+    | 'unused-parameter';
   /** For unused-export: the export name */
   exportName?: string;
+  /** For fine-grained: the symbol name */
+  symbolName?: string;
+  /** For fine-grained: the containing class/struct name */
+  className?: string;
 }
 
 /**
@@ -150,6 +160,10 @@ export interface DeadCodeOptions {
   includeTests?: boolean;
   /** Consider entry point patterns (default: ['index.*', 'main.*', 'app.*', 'server.*']) */
   entryPatterns?: string[];
+  /** Enable fine-grained detection (unused params/locals/private fields) (default: true) */
+  fineGrained?: boolean;
+  /** Languages for fine-grained detection (default: all deadcode languages) */
+  fineGrainedLanguages?: string[];
 }
 
 /**
@@ -328,6 +342,8 @@ export const DEFAULT_CHECK_OPTIONS: Required<CheckOptions> = {
   deadcode: {
     includeTests: false,
     entryPatterns: ['index.*', 'main.*', 'app.*', 'server.*', 'cli.*', 'lib.*'],
+    fineGrained: true,
+    fineGrainedLanguages: ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.java', '.rs'],
   },
   circular: {
     maxCycleLength: 10,

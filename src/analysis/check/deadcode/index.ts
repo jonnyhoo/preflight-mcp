@@ -19,10 +19,11 @@ import { createModuleLogger } from '../../../logging/logger.js';
 import type { AnalysisContext } from '../../cache/index.js';
 import type { DeadCodeIssue, SingleCheckResult, DeadCodeOptions } from '../types.js';
 import { computeSummaryFromIssues, LANGUAGE_SUPPORT } from '../types.js';
-import type { DependencyGraph, FileNode, DeadCodeDetectionResult } from './types.js';
+import type { DependencyGraph, FileNode, DeadCodeDetectionResult, FineGrainedIssue } from './types.js';
 import { DEFAULT_DEADCODE_OPTIONS } from './types.js';
+import { analyzeFineGrained } from './fine-grained.js';
 
-export type { DependencyGraph, FileNode, DeadCodeDetectionResult } from './types.js';
+export type { DependencyGraph, FileNode, DeadCodeDetectionResult, FineGrainedIssue } from './types.js';
 
 const logger = createModuleLogger('deadcode');
 
@@ -67,6 +68,16 @@ export async function checkDeadCode(
 
     // Detect dead code
     const deadCode = detectDeadCode(graph, opts);
+
+    // Fine-grained analysis
+    if (opts.fineGrained && context) {
+      const fineGrainedIssues = await runFineGrainedAnalysis(
+        files,
+        opts.fineGrainedLanguages ?? LANGUAGE_SUPPORT.deadcode,
+        context
+      );
+      deadCode.fineGrained = fineGrainedIssues;
+    }
 
     // Convert to issues
     const issues = convertToIssues(deadCode, resolvedPath);
@@ -286,6 +297,7 @@ function detectDeadCode(
     unusedExports: [],
     testFiles: [],
     possiblyDead: [],
+    fineGrained: [],
   };
 
   // Build re-exporter set (index files that re-export other modules)
@@ -411,6 +423,43 @@ function isTypeDeclarationFile(fileName: string): boolean {
 }
 
 // ============================================================================
+// Fine-grained Analysis
+// ============================================================================
+
+/**
+ * Run fine-grained analysis on all supported files.
+ */
+async function runFineGrainedAnalysis(
+  files: string[],
+  supportedExtensions: string[],
+  context: AnalysisContext
+): Promise<FineGrainedIssue[]> {
+  const allIssues: FineGrainedIssue[] = [];
+  const extSet = new Set(supportedExtensions.map((e) => e.toLowerCase()));
+
+  for (const filePath of files) {
+    const ext = path.extname(filePath).toLowerCase();
+    if (!extSet.has(ext)) continue;
+
+    // Skip test files
+    if (isTestFile(filePath)) continue;
+
+    try {
+      const issues = await context.ast.withTree(context.fileIndex, filePath, (tree, lang) => {
+        return analyzeFineGrained(tree, lang, filePath);
+      });
+      if (issues) {
+        allIssues.push(...issues);
+      }
+    } catch {
+      // Skip files that can't be parsed
+    }
+  }
+
+  return allIssues;
+}
+
+// ============================================================================
 // Issue Conversion
 // ============================================================================
 
@@ -451,6 +500,24 @@ function convertToIssues(deadCode: DeadCodeDetectionResult, rootPath: string): D
       file: path.join(rootPath, file),
       line: '1',
       message: `Single-use file: only imported by ${path.basename(usedBy)}`,
+    });
+  }
+
+  // Fine-grained issues
+  for (const fg of deadCode.fineGrained ?? []) {
+    const messageMap: Record<FineGrainedIssue['type'], string> = {
+      'unused-private-field': `Unused private field '${fg.symbolName}'${fg.className ? ` in ${fg.className}` : ''}`,
+      'unused-local-variable': `Unused local variable '${fg.symbolName}'`,
+      'unused-parameter': `Unused parameter '${fg.symbolName}'`,
+    };
+    issues.push({
+      type: fg.type,
+      severity: fg.type === 'unused-parameter' ? 'info' : 'warning',
+      file: fg.file,
+      line: String(fg.line),
+      message: messageMap[fg.type],
+      symbolName: fg.symbolName,
+      className: fg.className,
     });
   }
 
