@@ -49,7 +49,7 @@ export async function checkErrorProne(
 
     if (files.length === 0) {
       return {
-        type: 'errorprone' as any,
+        type: 'errorprone',
         success: true,
         issues: [],
         summary: computeSummaryFromIssues([], 0),
@@ -68,7 +68,7 @@ export async function checkErrorProne(
     }
 
     return {
-      type: 'errorprone' as any,
+      type: 'errorprone',
       success: true,
       issues: allIssues,
       summary: computeSummaryFromIssues(allIssues, files.length),
@@ -77,7 +77,7 @@ export async function checkErrorProne(
     const msg = err instanceof Error ? err.message : String(err);
     logger.error(`Error-prone check failed: ${msg}`);
     return {
-      type: 'errorprone' as any,
+      type: 'errorprone',
       success: false,
       issues: [],
       summary: computeSummaryFromIssues([], 0),
@@ -92,7 +92,7 @@ export async function checkErrorProne(
 
 async function collectFiles(rootPath: string, excludePatterns: string[]): Promise<string[]> {
   const files: string[] = [];
-  const supportedExts = new Set(LANGUAGE_SUPPORT.deadcode); // Reuse deadcode language support
+  const supportedExts = new Set(LANGUAGE_SUPPORT.errorprone);
 
   await walkDir(rootPath, async (filePath) => {
     const ext = path.extname(filePath).toLowerCase();
@@ -342,17 +342,39 @@ function checkReturnFromFinally(tree: Tree, lang: TreeSitterLanguageId, filePath
 }
 
 /**
- * Find all return statements within a node.
+ * Find all return statements within a node, excluding nested functions/classes.
  */
 function findReturnStatements(node: Node): Node[] {
   const returns: Node[] = [];
 
-  visitNodes(node, (child) => {
-    if (child.type === 'return_statement') {
-      returns.push(child);
-    }
-  });
+  // Node types that define new scope (should not traverse into)
+  const scopeBoundaries = new Set([
+    'function_declaration',
+    'function_expression',
+    'arrow_function',
+    'method_definition',
+    'class_declaration',
+    'class_expression',
+    'method_declaration',
+    'constructor_declaration',
+    'lambda_expression',
+  ]);
 
+  function visit(n: Node): void {
+    if (n.type === 'return_statement') {
+      returns.push(n);
+      return;
+    }
+
+    for (let i = 0; i < n.childCount; i++) {
+      const child = n.child(i);
+      if (child && !scopeBoundaries.has(child.type)) {
+        visit(child);
+      }
+    }
+  }
+
+  visit(node);
   return returns;
 }
 
@@ -368,7 +390,7 @@ function checkMissingBreakInSwitch(tree: Tree, lang: TreeSitterLanguageId, fileP
     javascript: ['switch_statement'],
     typescript: ['switch_statement'],
     tsx: ['switch_statement'],
-    java: ['switch_expression'],
+    java: ['switch_statement', 'switch_expression'],
   };
 
   const types = switchTypes[lang];
@@ -377,7 +399,18 @@ function checkMissingBreakInSwitch(tree: Tree, lang: TreeSitterLanguageId, fileP
   visitNodes(tree.rootNode, (node) => {
     if (!types.includes(node.type)) return;
 
-    const body = node.childForFieldName('body');
+    // Get switch body (JS/TS: 'body' field, Java: 'switch_block' child)
+    let body = node.childForFieldName('body');
+    if (!body) {
+      // Java: look for switch_block child
+      for (let i = 0; i < node.childCount; i++) {
+        const child = node.child(i);
+        if (child?.type === 'switch_block') {
+          body = child;
+          break;
+        }
+      }
+    }
     if (!body) return;
 
     const cases = collectSwitchCases(body, lang);
@@ -385,8 +418,11 @@ function checkMissingBreakInSwitch(tree: Tree, lang: TreeSitterLanguageId, fileP
       const caseNode = cases[i]!;
       const nextCase = cases[i + 1];
 
-      // Skip default case at end
-      if (!nextCase && caseNode.type.includes('default')) continue;
+      // Skip default case at end (or last case)
+      if (!nextCase) {
+        // Check if it's a default case (or for Java, contains default switch_label)
+        if (caseNode.type.includes('default') || isDefaultCase(caseNode)) continue;
+      }
 
       // Check if case has terminating statement
       if (!hasTerminatingStatement(caseNode, lang)) {
@@ -413,15 +449,19 @@ function checkMissingBreakInSwitch(tree: Tree, lang: TreeSitterLanguageId, fileP
 function collectSwitchCases(body: Node, lang: TreeSitterLanguageId): Node[] {
   const cases: Node[] = [];
 
+  // JS/TS: switch_case, switch_default
+  // Java: switch_block_statement_group (contains switch_label)
+  const caseTypes = new Set([
+    'switch_case',
+    'switch_default',
+    'case_statement',
+    'default_case',
+    'switch_block_statement_group',
+  ]);
+
   for (let i = 0; i < body.childCount; i++) {
     const child = body.child(i);
-    if (
-      child &&
-      (child.type === 'switch_case' ||
-        child.type === 'switch_default' ||
-        child.type === 'case_statement' ||
-        child.type === 'default_case')
-    ) {
+    if (child && caseTypes.has(child.type)) {
       cases.push(child);
     }
   }
@@ -442,8 +482,8 @@ function hasTerminatingStatement(caseNode: Node, lang: TreeSitterLanguageId): bo
     const child = caseNode.child(i);
     if (!child) continue;
 
-    // Skip label (case x:)
-    if (child.type.includes('label') || child.type === ':') continue;
+    // Skip label (case x:) and switch_label (Java)
+    if (child.type.includes('label') || child.type === ':' || child.type === 'switch_label') continue;
 
     if (isStatementNode(child)) {
       lastStatement = child;
@@ -509,7 +549,8 @@ function isIntentionalFallThrough(caseNode: Node): boolean {
   for (let i = 0; i < caseNode.childCount; i++) {
     const child = caseNode.child(i);
     if (!child) continue;
-    if (child.type.includes('label') || child.type === ':') continue;
+    // Skip label and switch_label (Java)
+    if (child.type.includes('label') || child.type === ':' || child.type === 'switch_label') continue;
     if (isStatementNode(child)) {
       hasStatements = true;
       break;
@@ -519,12 +560,30 @@ function isIntentionalFallThrough(caseNode: Node): boolean {
   return !hasStatements;
 }
 
+/**
+ * Check if a case node is a default case (for Java switch_block_statement_group).
+ */
+function isDefaultCase(caseNode: Node): boolean {
+  for (let i = 0; i < caseNode.childCount; i++) {
+    const child = caseNode.child(i);
+    if (!child) continue;
+    // Java: switch_label containing 'default'
+    if (child.type === 'switch_label') {
+      for (let j = 0; j < child.childCount; j++) {
+        const labelChild = child.child(j);
+        if (labelChild?.type === 'default') return true;
+      }
+    }
+  }
+  return false;
+}
+
 // ============================================================================
 // Utility Functions
 // ============================================================================
 
 /**
- * Check if a block node is empty (no statements, only comments allowed).
+ * Check if a block node is empty (no statements, only comments/empty statements allowed).
  */
 function isEmptyBlock(node: Node): boolean {
   for (let i = 0; i < node.childCount; i++) {
@@ -535,6 +594,9 @@ function isEmptyBlock(node: Node): boolean {
     if (child.type === '{' || child.type === '}') continue;
     if (child.type === 'comment' || child.type === 'line_comment' || child.type === 'block_comment') continue;
     if (child.type === ':') continue;
+
+    // Empty statements are also considered "empty" (JS/TS/Java `;`, Python `pass`)
+    if (child.type === 'empty_statement' || child.type === 'pass_statement') continue;
 
     // Any other node means non-empty
     return false;

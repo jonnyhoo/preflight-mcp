@@ -398,6 +398,32 @@ function test(x: number) {
 
       expect(ifIssues.length).toBe(0);
     });
+
+    it('should detect if with only empty statement (semicolon)', async () => {
+      const content = `
+function test(x: number) {
+  if (x > 0) {
+    ;
+  }
+}
+`;
+      const result = await analyzeFixture(content, '.ts');
+      const ifIssues = result.issues.filter((i) => i.ruleId === 'empty-if-statement');
+
+      expect(ifIssues.length).toBe(1);
+    });
+
+    it('should detect if with only pass statement (Python)', async () => {
+      const content = `
+def test(x):
+    if x > 0:
+        pass
+`;
+      const result = await analyzeFixture(content, '.py');
+      const ifIssues = result.issues.filter((i) => i.ruleId === 'empty-if-statement');
+
+      expect(ifIssues.length).toBe(1);
+    });
   });
 
   describe('ReturnFromFinallyBlock', () => {
@@ -463,6 +489,16 @@ function test(): string {
       expect(result.success).toBe(true);
       const switchIssues = result.issues.filter((i) => i.ruleId === 'missing-break-in-switch');
 
+      expect(switchIssues.length).toBe(1);
+    });
+
+    it('should detect missing break in Java', async () => {
+      const result = await analyzeFixture(FIXTURES.missingBreakJava, '.java');
+
+      expect(result.success).toBe(true);
+      const switchIssues = result.issues.filter((i) => i.ruleId === 'missing-break-in-switch');
+
+      // case 1 is missing break
       expect(switchIssues.length).toBe(1);
     });
 
