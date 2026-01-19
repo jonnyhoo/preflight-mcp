@@ -21,6 +21,7 @@ import { checkDeadCode } from './deadcode/index.js';
 import { checkCircular } from './circular/index.js';
 import { checkComplexity } from './complexity/index.js';
 import { checkErrorProne } from './errorprone/index.js';
+import { checkSecurity } from './security/index.js';
 import type {
   CheckType,
   CheckOptions,
@@ -40,6 +41,7 @@ export { checkDeadCode } from './deadcode/index.js';
 export { checkCircular } from './circular/index.js';
 export { checkComplexity } from './complexity/index.js';
 export { checkErrorProne } from './errorprone/index.js';
+export { checkSecurity } from './security/index.js';
 
 const logger = createModuleLogger('check');
 
@@ -160,6 +162,9 @@ async function runSingleCheck(
     case 'errorprone':
       return checkErrorProne(targetPath, options.excludePatterns, context);
 
+    case 'security':
+      return checkSecurity(targetPath, options.excludePatterns, context, options.security);
+
     default:
       throw new Error(`Unknown check type: ${checkType}`);
   }
@@ -257,6 +262,7 @@ function mergeOptions(options?: Partial<CheckOptions>): Required<CheckOptions> {
     complexity: { ...DEFAULT_CHECK_OPTIONS.complexity, ...options?.complexity },
     doccheck: { ...DEFAULT_CHECK_OPTIONS.doccheck, ...options?.doccheck },
     duplicates: { ...DEFAULT_CHECK_OPTIONS.duplicates, ...options?.duplicates },
+    security: { ...DEFAULT_CHECK_OPTIONS.security, ...options?.security },
     // Phase 0: new rule configuration options
     rules: { ...DEFAULT_CHECK_OPTIONS.rules, ...options?.rules },
     categories: { ...DEFAULT_CHECK_OPTIONS.categories, ...options?.categories },

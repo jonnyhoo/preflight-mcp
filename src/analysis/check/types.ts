@@ -18,12 +18,12 @@
 /**
  * Available check types.
  */
-export type CheckType = 'duplicates' | 'doccheck' | 'deadcode' | 'circular' | 'complexity' | 'errorprone';
+export type CheckType = 'duplicates' | 'doccheck' | 'deadcode' | 'circular' | 'complexity' | 'errorprone' | 'security';
 
 /**
  * All available check types.
  */
-export const ALL_CHECK_TYPES: CheckType[] = ['duplicates', 'doccheck', 'deadcode', 'circular', 'complexity', 'errorprone'];
+export const ALL_CHECK_TYPES: CheckType[] = ['duplicates', 'doccheck', 'deadcode', 'circular', 'complexity', 'errorprone', 'security'];
 
 /**
  * Issue severity levels.
@@ -192,6 +192,16 @@ export interface ComplexityOptions {
   paramCountThreshold?: number;
 }
 
+/**
+ * Options for security detection.
+ */
+export interface SecurityOptions {
+  /** Regex patterns to ignore variable/field names (e.g., ["_test$", "Mock"]) */
+  ignoreNamePatterns?: string[];
+  /** Regex patterns to ignore string values (e.g., ["^fake", "localhost"]) */
+  ignoreValuePatterns?: string[];
+}
+
 // ============================================================================
 // Rule Metadata
 // ============================================================================
@@ -310,6 +320,9 @@ export interface CheckOptions {
     formats?: string[];
   };
 
+  /** Security-specific options */
+  security?: SecurityOptions;
+
   /** Rules configuration (Phase 0: types only, filtering not implemented) */
   rules?: RulesConfig;
 
@@ -369,6 +382,10 @@ export const DEFAULT_CHECK_OPTIONS: Required<CheckOptions> = {
     mode: 'mild',
     formats: [],
   },
+  security: {
+    ignoreNamePatterns: [],
+    ignoreValuePatterns: [],
+  },
   // Phase 0: default values for new options (filtering not implemented)
   rules: {},
   categories: {},
@@ -390,6 +407,7 @@ export const LANGUAGE_SUPPORT: Record<CheckType, string[]> = {
   circular: ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.java', '.rs'],
   complexity: ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.java', '.rs'],
   errorprone: ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.java', '.rs'],
+  security: ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.java', '.rs'],
 };
 
 /**
