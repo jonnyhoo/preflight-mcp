@@ -18,12 +18,12 @@
 /**
  * Available check types.
  */
-export type CheckType = 'duplicates' | 'doccheck' | 'deadcode' | 'circular' | 'complexity';
+export type CheckType = 'duplicates' | 'doccheck' | 'deadcode' | 'circular' | 'complexity' | 'errorprone';
 
 /**
  * All available check types.
  */
-export const ALL_CHECK_TYPES: CheckType[] = ['duplicates', 'doccheck', 'deadcode', 'circular', 'complexity'];
+export const ALL_CHECK_TYPES: CheckType[] = ['duplicates', 'doccheck', 'deadcode', 'circular', 'complexity', 'errorprone'];
 
 /**
  * Issue severity levels.
@@ -389,6 +389,7 @@ export const LANGUAGE_SUPPORT: Record<CheckType, string[]> = {
   deadcode: ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.java', '.rs'],
   circular: ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.java', '.rs'],
   complexity: ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.java', '.rs'],
+  errorprone: ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.java', '.rs'],
 };
 
 /**

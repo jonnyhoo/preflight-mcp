@@ -20,6 +20,7 @@ import { AnalysisContext } from '../cache/index.js';
 import { checkDeadCode } from './deadcode/index.js';
 import { checkCircular } from './circular/index.js';
 import { checkComplexity } from './complexity/index.js';
+import { checkErrorProne } from './errorprone/index.js';
 import type {
   CheckType,
   CheckOptions,
@@ -38,6 +39,7 @@ export * from './types.js';
 export { checkDeadCode } from './deadcode/index.js';
 export { checkCircular } from './circular/index.js';
 export { checkComplexity } from './complexity/index.js';
+export { checkErrorProne } from './errorprone/index.js';
 
 const logger = createModuleLogger('check');
 
@@ -154,6 +156,9 @@ async function runSingleCheck(
 
     case 'complexity':
       return checkComplexity(targetPath, options.complexity, options.excludePatterns, context);
+
+    case 'errorprone':
+      return checkErrorProne(targetPath, options.excludePatterns, context);
 
     default:
       throw new Error(`Unknown check type: ${checkType}`);
