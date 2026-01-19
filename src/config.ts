@@ -1,5 +1,52 @@
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+
+// ============================================================================
+// Config File Support
+// ============================================================================
+
+interface ConfigFile {
+  vlmApiBase?: string;
+  vlmApiKey?: string;
+  vlmModel?: string;
+  vlmEnabled?: boolean;
+  storageDir?: string;
+  storageDirs?: string[];
+  githubToken?: string;
+  // Add more as needed
+}
+
+let cachedConfigFile: ConfigFile | null = null;
+
+/**
+ * Load config from ~/.preflight/config.json (or PREFLIGHT_CONFIG_PATH)
+ */
+function loadConfigFile(): ConfigFile {
+  if (cachedConfigFile !== null) return cachedConfigFile;
+  
+  const configPaths = [
+    process.env.PREFLIGHT_CONFIG_PATH,
+    path.join(os.homedir(), '.preflight', 'config.json'),
+    path.join(os.homedir(), '.preflight-mcp', 'config.json'),
+  ].filter(Boolean) as string[];
+  
+  for (const configPath of configPaths) {
+    try {
+      if (fs.existsSync(configPath)) {
+        const content = fs.readFileSync(configPath, 'utf8');
+        cachedConfigFile = JSON.parse(content) as ConfigFile;
+        console.error(`[preflight] Loaded config from ${configPath}`);
+        return cachedConfigFile;
+      }
+    } catch (err) {
+      console.error(`[preflight] Failed to load config from ${configPath}:`, err);
+    }
+  }
+  
+  cachedConfigFile = {};
+  return cachedConfigFile;
+}
 
 export type AnalysisMode = 'none' | 'quick' | 'full'; // 'full' enables Phase 2 module analysis
 
@@ -108,6 +155,17 @@ export type PreflightConfig = {
   openaiEmbeddingsUrl?: string;
   /** Auth header mode for OpenAI-compatible endpoints (auto/bearer/api-key). */
   openaiAuthMode: OpenAIAuthMode;
+
+  // --- VLM (Vision-Language Model) for PDF analysis ---
+
+  /** VLM API base URL (e.g., https://apis.iflow.cn/v1). */
+  vlmApiBase?: string;
+  /** VLM API key. */
+  vlmApiKey?: string;
+  /** VLM model name (default: qwen3-vl-plus). */
+  vlmModel: string;
+  /** Enable VLM for PDF analysis (default: false, auto-enabled if API key set). */
+  vlmEnabled: boolean;
 };
 
 function envNumber(name: string, fallback: number): number {
@@ -237,6 +295,13 @@ export function getConfig(): PreflightConfig {
     openaiBaseUrl: process.env.PREFLIGHT_OPENAI_BASE_URL ?? process.env.OPENAI_BASE_URL,
     openaiEmbeddingsUrl: process.env.PREFLIGHT_OPENAI_EMBEDDINGS_URL,
     openaiAuthMode: parseOpenAIAuthMode(process.env.PREFLIGHT_OPENAI_AUTH_MODE),
+
+    // VLM for PDF smart analysis (optional)
+    // Priority: env > config file > default
+    vlmApiBase: process.env.VLM_API_BASE ?? process.env.PREFLIGHT_VLM_API_BASE ?? loadConfigFile().vlmApiBase,
+    vlmApiKey: process.env.VLM_API_KEY ?? process.env.PREFLIGHT_VLM_API_KEY ?? loadConfigFile().vlmApiKey,
+    vlmModel: (process.env.VLM_MODEL ?? process.env.PREFLIGHT_VLM_MODEL ?? loadConfigFile().vlmModel ?? 'qwen3-vl-plus').trim(),
+    vlmEnabled: envBoolean('PREFLIGHT_VLM_ENABLED', false) || Boolean(process.env.VLM_API_KEY) || loadConfigFile().vlmEnabled || Boolean(loadConfigFile().vlmApiKey),
 
     // LSP integration (optional, disabled by default)
     lsp: {

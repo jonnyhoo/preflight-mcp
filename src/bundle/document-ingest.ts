@@ -42,6 +42,8 @@ export interface DocumentIngestResult {
   fullText?: string;
   /** Extracted modal content items */
   modalContents: ModalContent[];
+  /** Raw parsed content items (equations, tables, code blocks, images) */
+  rawContents?: ParsedContent[];
   /** Page count if multi-page document */
   pageCount?: number;
   /** Parsing duration in milliseconds */
@@ -86,6 +88,14 @@ export interface DocumentIngestOptions {
   timeoutPerDocumentMs?: number;
   /** Output directory for extracted assets */
   outputDir?: string;
+  /** Enable smart analysis for academic papers */
+  smartAnalysis?: boolean;
+  /** VLM configuration for enhanced PDF analysis */
+  vlmConfig?: {
+    apiBase: string;
+    apiKey: string;
+    model?: string;
+  };
 }
 
 // ============================================================================
@@ -191,6 +201,8 @@ export async function ingestDocument(
       maxPages: options?.maxPagesPerDocument,
       timeoutMs: options?.timeoutPerDocumentMs,
       outputDir: options?.outputDir,
+      smartAnalysis: options?.smartAnalysis,
+      vlmConfig: options?.vlmConfig,
     });
     
     if (!parseResult.success) {
@@ -212,6 +224,7 @@ export async function ingestDocument(
       success: true,
       fullText: parseResult.fullText,
       modalContents,
+      rawContents: parseResult.contents,
       pageCount: parseResult.metadata.pageCount,
       parseTimeMs: Date.now() - startTime,
       warnings: parseResult.warnings,

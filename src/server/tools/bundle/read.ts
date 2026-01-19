@@ -498,6 +498,57 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
         const includeReadme = args.includeReadme ?? (mode === 'full');
         const includeDepsGraph = args.includeDepsGraph ?? (mode === 'full');
         
+        // Check if this is a document bundle (has docs/ directory)
+        const manifest = await readManifest(paths.manifestPath);
+        const isDocumentBundle = manifest.type === 'document';
+        
+        if (isDocumentBundle) {
+          // For document bundles, read docs/*.md files directly
+          const docsDir = safeJoin(bundleRoot, 'docs');
+          const files: Record<string, string | null> = {};
+          const sections: string[] = ['manifest.json'];
+          
+          files['manifest.json'] = JSON.stringify(manifest, null, 2);
+          
+          try {
+            const docFiles = await fs.readdir(docsDir);
+            for (const docFile of docFiles) {
+              if (docFile.endsWith('.md')) {
+                const docPath = `docs/${docFile}`;
+                try {
+                  const absPath = safeJoin(bundleRoot, docPath);
+                  const content = await fs.readFile(absPath, 'utf8');
+                  files[docPath] = content;
+                  sections.push(docPath);
+                } catch {
+                  files[docPath] = null;
+                }
+              }
+            }
+          } catch {
+            // docs dir doesn't exist
+          }
+          
+          const textParts: string[] = [];
+          textParts.push(`[Document Bundle] ${sections.length} file(s)`);
+          textParts.push('');
+          
+          for (const [filePath, content] of Object.entries(files)) {
+            if (content) {
+              // For large docs, show first 500 lines
+              const lines = content.split('\n');
+              const preview = lines.length > 500 ? lines.slice(0, 500).join('\n') + `\n\n... (${lines.length - 500} more lines, use file="${filePath}" to read full)` : content;
+              textParts.push(`=== ${filePath} ===\n${preview}`);
+            }
+          }
+          
+          const out = { bundleId: args.bundleId, mode, files, sections, isDocumentBundle: true };
+          return {
+            content: [{ type: 'text', text: textParts.join('\n') || '(no files found)' }],
+            structuredContent: out,
+          };
+        }
+        
         const coreFiles = ['OVERVIEW.md', 'START_HERE.md', 'AGENTS.md', 'manifest.json'];
         const keyFiles = [...coreFiles];
         

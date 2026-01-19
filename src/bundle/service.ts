@@ -1181,12 +1181,20 @@ async function createDocumentBundleInternal(
         continue;
       }
 
-      // Parse the document
+      // Parse the document with smart analysis and VLM if configured
+      const vlmConfig = cfg.vlmEnabled && cfg.vlmApiKey && cfg.vlmApiBase ? {
+        apiBase: cfg.vlmApiBase,
+        apiKey: cfg.vlmApiKey,
+        model: cfg.vlmModel,
+      } : undefined;
+      
       const parseResult = await ingestDocument(absPath, {
-        extractImages: false,
-        extractTables: false,
-        extractEquations: false,
+        extractImages: true,
+        extractTables: true,
+        extractEquations: true,
         maxPagesPerDocument: options?.maxPages,
+        smartAnalysis: true,
+        vlmConfig,
       });
 
       if (!parseResult.success || !parseResult.fullText) {
@@ -1195,21 +1203,80 @@ async function createDocumentBundleInternal(
         continue;
       }
 
-      // Compute content hash for deduplication and filename
-      const contentHash = sha256Text(parseResult.fullText);
-      const docFileName = `${contentHash.slice(0, 16)}.md`;
-      const bundleRelPath = `docs/${docFileName}`;
-      const outPath = path.join(docsDir, docFileName);
-
-      // Write markdown with metadata header
-      const header = [
+      // Build markdown content with structured elements
+      const mdParts: string[] = [
         '<!-- preflight-doc -->',
         `<!-- source: ${absPath} -->`,
         `<!-- extracted_at: ${createdAt} -->`,
         '',
-      ].join('\n');
+        parseResult.fullText.trim(),
+      ];
+      
+      // Append extracted equations
+      const rawContents = parseResult.rawContents ?? [];
+      const equations = rawContents.filter(c => c.type === 'equation');
+      if (equations.length > 0) {
+        mdParts.push('');
+        mdParts.push('## Extracted Equations');
+        for (const eq of equations) {
+          if (typeof eq.content === 'string') {
+            mdParts.push(`$$${eq.content}$$`);
+          }
+        }
+      }
+      
+      // Append extracted tables
+      const tables = rawContents.filter(c => c.type === 'table');
+      if (tables.length > 0) {
+        mdParts.push('');
+        mdParts.push('## Extracted Tables');
+        for (const tbl of tables) {
+          if (typeof tbl.content === 'object' && 'rows' in tbl.content) {
+            const tableData = tbl.content as { headers?: string[]; rows: string[][] };
+            if (tableData.headers) {
+              mdParts.push('| ' + tableData.headers.join(' | ') + ' |');
+              mdParts.push('| ' + tableData.headers.map(() => '---').join(' | ') + ' |');
+            }
+            for (const row of tableData.rows) {
+              mdParts.push('| ' + row.join(' | ') + ' |');
+            }
+            mdParts.push('');
+          }
+        }
+      }
+      
+      // Append code blocks
+      const codeBlocks = rawContents.filter(c => c.type === 'code_block');
+      if (codeBlocks.length > 0) {
+        mdParts.push('');
+        mdParts.push('## Extracted Code');
+        for (const cb of codeBlocks) {
+          if (typeof cb.content === 'object' && 'code' in cb.content) {
+            const codeData = cb.content as { code: string; language?: string };
+            mdParts.push('```' + (codeData.language || ''));
+            mdParts.push(codeData.code);
+            mdParts.push('```');
+          }
+        }
+      }
+      
+      // Note: Images are stored as base64 in contents but not written to markdown
+      // (would make files too large). Could be extracted to separate files if needed.
+      const imageCount = rawContents.filter(c => c.type === 'image').length;
+      if (imageCount > 0) {
+        mdParts.push('');
+        mdParts.push(`<!-- ${imageCount} image(s) extracted but not embedded -->`);
+      }
+      
+      const fullMarkdown = mdParts.join('\n');
+      
+      // Compute content hash for deduplication and filename
+      const contentHash = sha256Text(fullMarkdown);
+      const docFileName = `${contentHash.slice(0, 16)}.md`;
+      const bundleRelPath = `docs/${docFileName}`;
+      const outPath = path.join(docsDir, docFileName);
 
-      await fs.writeFile(outPath, header + parseResult.fullText.trim() + '\n', 'utf8');
+      await fs.writeFile(outPath, fullMarkdown + '\n', 'utf8');
 
       // Track for indexing
       const fileStat = await fs.stat(outPath);

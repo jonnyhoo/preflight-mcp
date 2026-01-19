@@ -85,6 +85,53 @@ analysis/{gof-patterns.json, architectural.json, test-examples.json, config.json
 search.db, manifest.json, repos/*
 ```
 
+## VLM Distillation (Experimental)
+
+Extract structured content (formulas, tables, code) from PDFs using Vision-Language Models.
+
+### Setup
+Create `~/.preflight/config.json`:
+```json
+{
+  "vlmApiBase": "https://your-vlm-api/v1",
+  "vlmApiKey": "your-api-key",
+  "vlmModel": "qwen3-vl-plus",
+  "vlmEnabled": true
+}
+```
+
+### Usage
+```bash
+# Extract from specific page
+npx tsx scripts/vlm-extract.ts paper.pdf --page 6
+
+# Extract from page range
+npx tsx scripts/vlm-extract.ts paper.pdf --start 5 --end 10
+
+# Save to file
+npx tsx scripts/vlm-extract.ts paper.pdf --page 6 --output tables.md
+```
+
+### Options
+- `--page <n>` - Extract from specific page
+- `--start/--end <n>` - Page range
+- `--describe` - Ask VLM to describe page content first
+- `--no-formulas/--no-tables/--no-code` - Skip specific content types
+- `--force-all` - Extract from all pages (skip smart detection)
+
+### Programmatic API
+```typescript
+import { extractFromPDF, formatAsMarkdown } from './src/distill/vlm-extractor.js';
+
+const result = await extractFromPDF('paper.pdf', {
+  startPage: 6,
+  endPage: 6,
+  extractTables: true,
+});
+
+console.log(formatAsMarkdown(result));
+```
+
 ## Configuration
 
 Environment variables (common):
@@ -195,6 +242,53 @@ Bundle 包含 `analysis/` 目录下的静态分析结果：
 - `test-examples.json` - 测试示例
 - `config.json` - 配置分析
 - `doc-conflicts.json` - 文档冲突
+
+## VLM 知识蒸馏（实验功能）
+
+使用视觉语言模型从 PDF 中提取结构化内容（公式、表格、代码）。
+
+### 配置
+创建 `~/.preflight/config.json`：
+```json
+{
+  "vlmApiBase": "https://your-vlm-api/v1",
+  "vlmApiKey": "your-api-key",
+  "vlmModel": "qwen3-vl-plus",
+  "vlmEnabled": true
+}
+```
+
+### 用法
+```bash
+# 提取指定页
+npx tsx scripts/vlm-extract.ts paper.pdf --page 6
+
+# 提取页面范围
+npx tsx scripts/vlm-extract.ts paper.pdf --start 5 --end 10
+
+# 保存到文件
+npx tsx scripts/vlm-extract.ts paper.pdf --page 6 --output tables.md
+```
+
+### 选项
+- `--page <n>` - 提取特定页面
+- `--start/--end <n>` - 页面范围
+- `--describe` - 先让 VLM 描述页面内容
+- `--no-formulas/--no-tables/--no-code` - 跳过特定内容类型
+- `--force-all` - 提取所有页面（跳过智能检测）
+
+### 编程接口
+```typescript
+import { extractFromPDF, formatAsMarkdown } from './src/distill/vlm-extractor.js';
+
+const result = await extractFromPDF('paper.pdf', {
+  startPage: 6,
+  endPage: 6,
+  extractTables: true,
+});
+
+console.log(formatAsMarkdown(result));
+```
 
 ## 配置
 - 基本：`PREFLIGHT_STORAGE_DIR(S)`、`PREFLIGHT_ANALYSIS_MODE`

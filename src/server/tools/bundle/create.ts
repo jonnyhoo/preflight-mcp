@@ -1,12 +1,14 @@
 /**
- * preflight_create_bundle - Create a new bundle from GitHub repos or local directories.
+ * preflight_create_bundle - Create a new bundle from GitHub repos, local directories, or documents.
  */
 
+import fs from 'node:fs/promises';
 import * as z from 'zod';
 
 import type { ToolDependencies } from '../types.js';
 import { CreateBundleInputSchema, shouldRegisterTool } from './types.js';
-import { createBundle } from '../../../bundle/service.js';
+import { createBundle, createDocumentBundle } from '../../../bundle/service.js';
+import { isParseableDocument } from '../../../bundle/document-ingest.js';
 import { getProgressTracker } from '../../../jobs/progressTracker.js';
 import { toBundleFileUri } from '../../../mcp/uris.js';
 import { wrapPreflightError } from '../../../mcp/errorKinds.js';
@@ -25,11 +27,11 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
     'preflight_create_bundle',
     {
       title: 'Create bundle',
-      description: 'Create a new bundle from GitHub repos or local directories. ' +
+      description: 'Create a new bundle from GitHub repos, local directories, or document files (PDF/Office). ' +
         '**Safe to call proactively** - use `ifExists: "returnExisting"` to avoid duplicates. ' +
         'Bundle creation is a **read-only collection** operation (clones repo, builds index, generates guides). ' +
         'When user asks to analyze/understand a project, create the bundle first if it does not exist. ' +
-        'Use when: "analyze this repo", "understand this codebase", "index project", "分析项目", "理解代码".',
+        'Use when: "analyze this repo", "understand this codebase", "index project", "分析项目", "理解代码", "analyze PDF".',
       inputSchema: CreateBundleInputSchema,
       outputSchema: {
         bundleId: z.string().optional(),
@@ -66,6 +68,57 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
     },
     async (args) => {
       try {
+        // Check if all inputs are document files (PDF, Office, etc.)
+        const localPaths = args.repos
+          .filter((r: any) => r.kind === 'local' && r.path)
+          .map((r: any) => r.path as string);
+        
+        let documentPaths: string[] = [];
+        for (const p of localPaths) {
+          try {
+            const st = await fs.stat(p);
+            if (st.isFile() && isParseableDocument(p)) {
+              documentPaths.push(p);
+            }
+          } catch {
+            // Path doesn't exist or can't be accessed, let createBundle handle it
+          }
+        }
+        
+        // If all local inputs are document files, use createDocumentBundle
+        if (documentPaths.length > 0 && documentPaths.length === localPaths.length && args.repos.length === localPaths.length) {
+          const docResult = await createDocumentBundle(cfg, documentPaths, {
+            ifExists: args.ifExists === 'returnExisting' ? 'returnExisting' 
+                    : args.ifExists === 'updateExisting' ? 'update' 
+                    : 'error',
+          });
+          
+          const resources = {
+            startHere: toBundleFileUri({ bundleId: docResult.bundleId, relativePath: 'START_HERE.md' }),
+            agents: toBundleFileUri({ bundleId: docResult.bundleId, relativePath: 'AGENTS.md' }),
+            overview: toBundleFileUri({ bundleId: docResult.bundleId, relativePath: 'OVERVIEW.md' }),
+            manifest: toBundleFileUri({ bundleId: docResult.bundleId, relativePath: 'manifest.json' }),
+          };
+          
+          server.sendResourceListChanged();
+          
+          const textResponse = docResult.created
+            ? `✅ Document bundle created: ${docResult.bundleId}\nParsed: ${docResult.parsed} document(s)${docResult.skipped > 0 ? `, skipped: ${docResult.skipped}` : ''}`
+            : `✅ Document bundle already exists: ${docResult.bundleId}`;
+          
+          return {
+            content: [{ type: 'text', text: textResponse }],
+            structuredContent: {
+              bundleId: docResult.bundleId,
+              created: docResult.created,
+              parsed: docResult.parsed,
+              skipped: docResult.skipped,
+              errors: docResult.errors,
+              resources,
+            },
+          };
+        }
+        
         const summary = await createBundle(
           cfg,
           {
