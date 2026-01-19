@@ -46,6 +46,7 @@ import { minimatch } from 'minimatch';
 import { createModuleLogger } from '../../logging/logger.js';
 import { createTypeScriptDocChecker } from './ts-checker.js';
 import { createPythonDocChecker } from './python/index.js';
+import type { AnalysisContext } from '../cache/index.js';
 import type {
   DocCheckOptions,
   DocCheckResult,
@@ -75,10 +76,15 @@ const EXT_TO_LANGUAGE: Record<string, DocCheckLanguage> = {
 
 /**
  * Check documentation for a directory.
+ *
+ * @param targetPath - Directory or file path to check
+ * @param options - Documentation check options
+ * @param context - Optional AnalysisContext for AST caching
  */
 export async function checkDocumentation(
   targetPath: string,
-  options?: Partial<DocCheckOptions>
+  options?: Partial<DocCheckOptions>,
+  context?: AnalysisContext
 ): Promise<DocCheckResult> {
   const opts = { ...DEFAULT_DOCCHECK_OPTIONS, ...options };
   const files = await collectFiles(targetPath, opts);
@@ -108,10 +114,10 @@ export async function checkDocumentation(
     tsChecker.clearCache();
   }
 
-  // Check Python files
+  // Check Python files (with context for AST caching)
   if (pyFiles.length > 0) {
-    const pyChecker = createPythonDocChecker(opts);
-    const pyResults = await pyChecker.checkFiles(pyFiles);
+    const pyChecker = createPythonDocChecker(opts, context);
+    const pyResults = await pyChecker.checkFiles(pyFiles, context);
     allResults.push(...pyResults);
   }
 

@@ -16,6 +16,7 @@ import * as path from 'node:path';
 import { createModuleLogger } from '../../logging/logger.js';
 import { checkDocumentation } from '../doccheck/index.js';
 import { checkDuplicates } from '../duplicates/index.js';
+import { AnalysisContext } from '../cache/index.js';
 import { checkDeadCode } from './deadcode/index.js';
 import { checkCircular } from './circular/index.js';
 import { checkComplexity } from './complexity/index.js';
@@ -58,6 +59,12 @@ export async function runChecks(
   logger.info(`Running checks on: ${resolvedPath}`);
   logger.info(`Checks: ${checksToRun.join(', ')}`);
 
+  // Create analysis context for shared caching
+  const context = new AnalysisContext({
+    rootPath: resolvedPath,
+    excludePatterns: opts.excludePatterns,
+  });
+
   const result: UnifiedCheckResult = {
     success: true,
     checks: {},
@@ -73,41 +80,50 @@ export async function runChecks(
   // Track unique files across all checks
   const allFiles = new Set<string>();
 
-  // Run each check
-  for (const checkType of checksToRun) {
-    try {
-      const checkResult = await runSingleCheck(checkType, resolvedPath, opts);
-      result.checks[checkType] = checkResult;
+  try {
+    // Run each check
+    for (const checkType of checksToRun) {
+      try {
+        const checkResult = await runSingleCheck(checkType, resolvedPath, opts, context);
+        result.checks[checkType] = checkResult;
 
-      if (!checkResult.success) {
+        if (!checkResult.success) {
+          result.success = false;
+        }
+
+        // Aggregate stats
+        result.summary.issuesByCheck[checkType] = checkResult.issues.length;
+        result.totalIssues += checkResult.issues.length;
+
+        for (const issue of checkResult.issues) {
+          result.summary.issuesBySeverity[issue.severity]++;
+          allFiles.add(issue.file);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error(`Check ${checkType} failed: ${msg}`);
+        result.checks[checkType] = {
+          type: checkType,
+          success: false,
+          issues: [],
+          summary: { totalFiles: 0, totalIssues: 0, issuesBySeverity: { error: 0, warning: 0, info: 0 } },
+          error: msg,
+        };
         result.success = false;
       }
-
-      // Aggregate stats
-      result.summary.issuesByCheck[checkType] = checkResult.issues.length;
-      result.totalIssues += checkResult.issues.length;
-
-      for (const issue of checkResult.issues) {
-        result.summary.issuesBySeverity[issue.severity]++;
-        allFiles.add(issue.file);
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error(`Check ${checkType} failed: ${msg}`);
-      result.checks[checkType] = {
-        type: checkType,
-        success: false,
-        issues: [],
-        summary: { totalFiles: 0, totalIssues: 0, issuesBySeverity: { error: 0, warning: 0, info: 0 } },
-        error: msg,
-      };
-      result.success = false;
     }
+
+    result.summary.totalFiles = allFiles.size;
+
+    // Log cache statistics
+    const stats = context.stats();
+    logger.info(`Cache stats: AST hits=${stats.astCache.hits}, misses=${stats.astCache.misses}`);
+
+    return result;
+  } finally {
+    // Always dispose the context to release resources
+    context.dispose();
   }
-
-  result.summary.totalFiles = allFiles.size;
-
-  return result;
 }
 
 // ============================================================================
@@ -120,23 +136,24 @@ export async function runChecks(
 async function runSingleCheck(
   checkType: CheckType,
   targetPath: string,
-  options: Required<CheckOptions>
+  options: Required<CheckOptions>,
+  context: AnalysisContext
 ): Promise<SingleCheckResult> {
   switch (checkType) {
     case 'duplicates':
       return runDuplicatesCheck(targetPath, options);
 
     case 'doccheck':
-      return runDocCheck(targetPath, options);
+      return runDocCheck(targetPath, options, context);
 
     case 'deadcode':
-      return checkDeadCode(targetPath, options.deadcode, options.excludePatterns);
+      return checkDeadCode(targetPath, options.deadcode, options.excludePatterns, context);
 
     case 'circular':
       return checkCircular(targetPath, options.circular, options.excludePatterns);
 
     case 'complexity':
-      return checkComplexity(targetPath, options.complexity, options.excludePatterns);
+      return checkComplexity(targetPath, options.complexity, options.excludePatterns, context);
 
     default:
       throw new Error(`Unknown check type: ${checkType}`);
@@ -184,15 +201,20 @@ async function runDuplicatesCheck(
  */
 async function runDocCheck(
   targetPath: string,
-  options: Required<CheckOptions>
+  options: Required<CheckOptions>,
+  context: AnalysisContext
 ): Promise<SingleCheckResult> {
-  const docResult = await checkDocumentation(targetPath, {
-    onlyExported: options.doccheck.onlyExported,
-    requireDocs: options.doccheck.requireDocs,
-    checkParamTypes: options.doccheck.checkParamTypes,
-    pythonStyle: options.doccheck.pythonStyle,
-    excludePatterns: options.excludePatterns,
-  });
+  const docResult = await checkDocumentation(
+    targetPath,
+    {
+      onlyExported: options.doccheck.onlyExported,
+      requireDocs: options.doccheck.requireDocs,
+      checkParamTypes: options.doccheck.checkParamTypes,
+      pythonStyle: options.doccheck.pythonStyle,
+      excludePatterns: options.excludePatterns,
+    },
+    context
+  );
 
   // Convert to unified format
   const issues: BaseCheckIssue[] = docResult.issues.map((issue) => ({
@@ -230,5 +252,10 @@ function mergeOptions(options?: Partial<CheckOptions>): Required<CheckOptions> {
     complexity: { ...DEFAULT_CHECK_OPTIONS.complexity, ...options?.complexity },
     doccheck: { ...DEFAULT_CHECK_OPTIONS.doccheck, ...options?.doccheck },
     duplicates: { ...DEFAULT_CHECK_OPTIONS.duplicates, ...options?.duplicates },
+    // Phase 0: new rule configuration options
+    rules: { ...DEFAULT_CHECK_OPTIONS.rules, ...options?.rules },
+    categories: { ...DEFAULT_CHECK_OPTIONS.categories, ...options?.categories },
+    suppressions: { ...DEFAULT_CHECK_OPTIONS.suppressions, ...options?.suppressions },
+    semantics: { ...DEFAULT_CHECK_OPTIONS.semantics, ...options?.semantics },
   };
 }

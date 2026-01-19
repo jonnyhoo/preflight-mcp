@@ -16,6 +16,7 @@ import { minimatch } from 'minimatch';
 
 import { extractModuleSyntaxWasm, languageForFile } from '../../../ast/index.js';
 import { createModuleLogger } from '../../../logging/logger.js';
+import type { AnalysisContext } from '../../cache/index.js';
 import type { DeadCodeIssue, SingleCheckResult, DeadCodeOptions } from '../types.js';
 import { computeSummaryFromIssues, LANGUAGE_SUPPORT } from '../types.js';
 import type { DependencyGraph, FileNode, DeadCodeDetectionResult } from './types.js';
@@ -31,11 +32,17 @@ const logger = createModuleLogger('deadcode');
 
 /**
  * Check for dead code in a directory.
+ *
+ * @param targetPath - Directory to check
+ * @param options - DeadCode options
+ * @param excludePatterns - File patterns to exclude
+ * @param context - Optional AnalysisContext for shared caching
  */
 export async function checkDeadCode(
   targetPath: string,
   options?: Partial<DeadCodeOptions>,
-  excludePatterns?: string[]
+  excludePatterns?: string[],
+  context?: AnalysisContext
 ): Promise<SingleCheckResult<DeadCodeIssue>> {
   const opts = { ...DEFAULT_DEADCODE_OPTIONS, ...options };
   const resolvedPath = path.resolve(targetPath);
@@ -55,8 +62,8 @@ export async function checkDeadCode(
       };
     }
 
-    // Build dependency graph
-    const graph = await buildDependencyGraph(files, resolvedPath);
+    // Build dependency graph (use context if available)
+    const graph = await buildDependencyGraph(files, resolvedPath, context);
 
     // Detect dead code
     const deadCode = detectDeadCode(graph, opts);
@@ -153,7 +160,11 @@ async function walkDir(dir: string, callback: (filePath: string) => Promise<void
 /**
  * Build dependency graph from files.
  */
-async function buildDependencyGraph(files: string[], rootPath: string): Promise<DependencyGraph> {
+async function buildDependencyGraph(
+  files: string[],
+  rootPath: string,
+  context?: AnalysisContext
+): Promise<DependencyGraph> {
   const graph: DependencyGraph = {
     nodes: new Map(),
     entryPoints: new Set(),
@@ -165,13 +176,19 @@ async function buildDependencyGraph(files: string[], rootPath: string): Promise<
     const relativePath = path.relative(rootPath, filePath).replace(/\\/g, '/');
 
     try {
-      const content = await fs.readFile(filePath, 'utf8');
-      const normalizedContent = content.replace(/\r\n/g, '\n');
-
       const lang = languageForFile(filePath);
       if (!lang) continue;
 
-      const parsed = await extractModuleSyntaxWasm(filePath, normalizedContent);
+      // When context is provided, extractModuleSyntaxWasm reads file internally via withTree
+      // When no context, we need to read the file first
+      const normalizedContent = context
+        ? '' // Content not needed - withTree handles file reading
+        : (await fs.readFile(filePath, 'utf8')).replace(/\r\n/g, '\n');
+
+      if (!context && !normalizedContent) continue;
+
+      // Use context for AST caching if available
+      const parsed = await extractModuleSyntaxWasm(filePath, normalizedContent, context);
 
       const node: FileNode = {
         path: relativePath,

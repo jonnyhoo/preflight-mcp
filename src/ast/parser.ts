@@ -85,7 +85,13 @@ export async function loadLanguage(lang: TreeSitterLanguageId): Promise<Language
 
 /**
  * Parse a file and return the AST tree.
- * The caller is responsible for calling tree.delete() when done.
+ *
+ * **Important**: The caller is responsible for calling `tree.delete()` when done
+ * to avoid memory leaks. Consider using `AstCache.withTree()` instead for
+ * automatic lifecycle management.
+ *
+ * @deprecated Prefer using `AstCache.withTree()` from `analysis/cache` which
+ * handles tree lifecycle automatically with reference counting and LRU eviction.
  */
 export async function parseFileWasm(
   filePath: string,

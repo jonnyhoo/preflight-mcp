@@ -201,8 +201,11 @@ export async function ingestDocument(
       maxPages: options?.maxPagesPerDocument,
       timeoutMs: options?.timeoutPerDocumentMs,
       outputDir: options?.outputDir,
-      smartAnalysis: options?.smartAnalysis,
-      vlmConfig: options?.vlmConfig,
+      // Pass additional options via extra field
+      extra: {
+        smartAnalysis: options?.smartAnalysis,
+        vlmConfig: options?.vlmConfig,
+      },
     });
     
     if (!parseResult.success) {

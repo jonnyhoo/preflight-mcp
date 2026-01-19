@@ -46,6 +46,10 @@ export interface BaseCheckIssue {
   line: string;
   /** Human-readable message */
   message: string;
+  /** Rule ID (optional, being phased in) */
+  ruleId?: string;
+  /** Whether this issue is suppressed */
+  suppressed?: boolean;
 }
 
 /**
@@ -172,6 +176,88 @@ export interface ComplexityOptions {
   paramCountThreshold?: number;
 }
 
+// ============================================================================
+// Rule Metadata
+// ============================================================================
+
+/**
+ * Rule category for grouping rules.
+ */
+export type RuleCategory =
+  | 'bestpractices'
+  | 'codestyle'
+  | 'design'
+  | 'documentation'
+  | 'errorprone'
+  | 'multithreading'
+  | 'performance'
+  | 'security';
+
+/**
+ * Confidence level for rule detection.
+ */
+export type RuleConfidence = 'high' | 'medium' | 'low';
+
+/**
+ * Rule metadata for rule registration and gating.
+ */
+export interface RuleMetadata {
+  /** Unique rule identifier */
+  ruleId: string;
+  /** Rule category */
+  category: RuleCategory;
+  /** Languages this rule applies to */
+  languages: string[];
+  /** Detection confidence */
+  confidence: RuleConfidence;
+  /** Whether rule is enabled by default */
+  defaultEnabled: boolean;
+  /** Whether rule requires semantic analysis */
+  requiresSemantics: boolean;
+  /** Default severity */
+  severity: CheckSeverity;
+  /** Human-readable description */
+  description?: string;
+}
+
+/**
+ * Rules configuration for enabling/disabling rules.
+ */
+export interface RulesConfig {
+  /** Rules to enable (by ID) */
+  enable?: string[];
+  /** Rules to disable (by ID) */
+  disable?: string[];
+}
+
+/**
+ * Categories configuration for enabling/disabling categories.
+ */
+export interface CategoriesConfig {
+  /** Categories to enable */
+  enable?: RuleCategory[];
+  /** Categories to disable */
+  disable?: RuleCategory[];
+}
+
+/**
+ * Suppressions configuration.
+ */
+export interface SuppressionsConfig {
+  /** Global suppressions by rule ID */
+  global?: string[];
+  /** Per-file suppressions */
+  files?: Record<string, string[]>;
+}
+
+/**
+ * Semantics configuration.
+ */
+export interface SemanticsConfig {
+  /** Enable semantic analysis (default: false) */
+  enabled?: boolean;
+}
+
 /**
  * Unified check options.
  */
@@ -207,6 +293,18 @@ export interface CheckOptions {
     mode?: 'strict' | 'mild' | 'weak';
     formats?: string[];
   };
+
+  /** Rules configuration (Phase 0: types only, filtering not implemented) */
+  rules?: RulesConfig;
+
+  /** Categories configuration (Phase 0: types only) */
+  categories?: CategoriesConfig;
+
+  /** Suppressions configuration (Phase 0: types only) */
+  suppressions?: SuppressionsConfig;
+
+  /** Semantics configuration (Phase 0: types only) */
+  semantics?: SemanticsConfig;
 }
 
 /**
@@ -252,6 +350,11 @@ export const DEFAULT_CHECK_OPTIONS: Required<CheckOptions> = {
     mode: 'mild',
     formats: [],
   },
+  // Phase 0: default values for new options (filtering not implemented)
+  rules: {},
+  categories: {},
+  suppressions: {},
+  semantics: { enabled: false },
 };
 
 // ============================================================================

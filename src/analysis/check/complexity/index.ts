@@ -18,6 +18,7 @@ import { minimatch } from 'minimatch';
 import Parser from 'web-tree-sitter';
 
 import { createModuleLogger } from '../../../logging/logger.js';
+import type { AnalysisContext } from '../../cache/index.js';
 import type { ComplexityIssue, SingleCheckResult, ComplexityOptions } from '../types.js';
 import { computeSummaryFromIssues, LANGUAGE_SUPPORT, DEFAULT_CHECK_OPTIONS } from '../types.js';
 import { languageForFile } from '../../../ast/index.js';
@@ -57,11 +58,17 @@ interface FunctionMetrics {
 
 /**
  * Check for complexity issues in a directory.
+ *
+ * @param targetPath - Directory to check
+ * @param options - Complexity options
+ * @param excludePatterns - File patterns to exclude
+ * @param context - Optional AnalysisContext for shared caching
  */
 export async function checkComplexity(
   targetPath: string,
   options?: Partial<ComplexityOptions>,
-  excludePatterns?: string[]
+  excludePatterns?: string[],
+  context?: AnalysisContext
 ): Promise<SingleCheckResult<ComplexityIssue>> {
   const opts = { ...DEFAULT_COMPLEXITY_OPTIONS, ...options };
   const resolvedPath = path.resolve(targetPath);
@@ -86,7 +93,7 @@ export async function checkComplexity(
 
     for (const filePath of files) {
       try {
-        const fileIssues = await analyzeFileComplexity(filePath, resolvedPath, opts);
+        const fileIssues = await analyzeFileComplexity(filePath, resolvedPath, opts, context);
         allIssues.push(...fileIssues);
       } catch {
         // Skip files that can't be analyzed
@@ -182,12 +189,18 @@ async function walkDir(dir: string, callback: (filePath: string) => Promise<void
 async function analyzeFileComplexity(
   filePath: string,
   rootPath: string,
-  options: Required<ComplexityOptions>
+  options: Required<ComplexityOptions>,
+  context?: AnalysisContext
 ): Promise<ComplexityIssue[]> {
   const issues: ComplexityIssue[] = [];
 
-  const content = await fs.readFile(filePath, 'utf8');
-  const normalizedContent = content.replace(/\r\n/g, '\n');
+  // Use context for file reading if available
+  const normalizedContent = context
+    ? await context.fileIndex.readNormalized(filePath)
+    : (await fs.readFile(filePath, 'utf8')).replace(/\r\n/g, '\n');
+
+  if (!normalizedContent) return issues;
+
   const lines = normalizedContent.split('\n');
 
   const lang = languageForFile(filePath);

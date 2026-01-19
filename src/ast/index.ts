@@ -19,6 +19,7 @@ export type { Tree } from 'web-tree-sitter';
 
 // Import internal functions
 import { languageForFile, loadLanguage } from './parser.js';
+import type { AnalysisContext } from '../analysis/cache/index.js';
 import type { TreeSitterLanguageId, ImportRef, SymbolOutline, ExtensionPoint } from './types.js';
 
 // Import language-specific extractors
@@ -137,14 +138,33 @@ function extractExtensionPoints(root: Node, lang: TreeSitterLanguageId): Extensi
 
 /**
  * Extract imports and exports from a source file.
+ *
+ * @param filePath - File path
+ * @param normalizedContent - Normalized file content (CRLF -> LF)
+ * @param context - Optional AnalysisContext for AST caching
  */
 export async function extractModuleSyntaxWasm(
   filePath: string,
-  normalizedContent: string
+  normalizedContent: string,
+  context?: AnalysisContext
 ): Promise<{ language: TreeSitterLanguageId; imports: ImportRef[]; exports: string[] } | null> {
   const lang = languageForFile(filePath);
   if (!lang) return null;
 
+  // Use AstCache if context provided
+  if (context) {
+    const result = await context.ast.withTree(context.fileIndex, filePath, (tree) => {
+      const root = tree.rootNode;
+      return {
+        language: lang,
+        imports: extractImports(root, lang),
+        exports: extractExports(root, lang),
+      };
+    });
+    return result ?? { language: lang, imports: [], exports: [] };
+  }
+
+  // Fallback: direct parsing (legacy path)
   const language = await loadLanguage(lang);
 
   const parser = new Parser();
@@ -171,24 +191,34 @@ export async function extractModuleSyntaxWasm(
 
 /**
  * Extract import references from a source file.
+ *
+ * @param filePath - File path
+ * @param normalizedContent - Normalized file content (CRLF -> LF)
+ * @param context - Optional AnalysisContext for AST caching
  */
 export async function extractImportRefsWasm(
   filePath: string,
-  normalizedContent: string
+  normalizedContent: string,
+  context?: AnalysisContext
 ): Promise<{ language: TreeSitterLanguageId; imports: ImportRef[] } | null> {
-  const res = await extractModuleSyntaxWasm(filePath, normalizedContent);
+  const res = await extractModuleSyntaxWasm(filePath, normalizedContent, context);
   if (!res) return null;
   return { language: res.language, imports: res.imports };
 }
 
 /**
  * Extract exported symbols from a source file.
+ *
+ * @param filePath - File path
+ * @param normalizedContent - Normalized file content (CRLF -> LF)
+ * @param context - Optional AnalysisContext for AST caching
  */
 export async function extractExportedSymbolsWasm(
   filePath: string,
-  normalizedContent: string
+  normalizedContent: string,
+  context?: AnalysisContext
 ): Promise<{ language: TreeSitterLanguageId; exports: string[] } | null> {
-  const res = await extractModuleSyntaxWasm(filePath, normalizedContent);
+  const res = await extractModuleSyntaxWasm(filePath, normalizedContent, context);
   if (!res) return null;
   return { language: res.language, exports: res.exports };
 }
@@ -196,10 +226,15 @@ export async function extractExportedSymbolsWasm(
 /**
  * Extract symbol outline from a source file.
  * Returns null if the file type is not supported.
+ *
+ * @param filePath - File path
+ * @param normalizedContent - Normalized file content (CRLF -> LF)
+ * @param context - Optional AnalysisContext for AST caching
  */
 export async function extractOutlineWasm(
   filePath: string,
-  normalizedContent: string
+  normalizedContent: string,
+  context?: AnalysisContext
 ): Promise<{ language: TreeSitterLanguageId; outline: SymbolOutline[] } | null> {
   const lang = languageForFile(filePath);
   if (!lang) return null;
@@ -208,6 +243,16 @@ export async function extractOutlineWasm(
     return null;
   }
 
+  // Use AstCache if context provided
+  if (context) {
+    const result = await context.ast.withTree(context.fileIndex, filePath, (tree) => {
+      const root = tree.rootNode;
+      return { language: lang, outline: extractOutline(root, lang) };
+    });
+    return result ?? { language: lang, outline: [] };
+  }
+
+  // Fallback: direct parsing (legacy path)
   const language = await loadLanguage(lang);
 
   const parser = new Parser();
@@ -231,10 +276,15 @@ export async function extractOutlineWasm(
 /**
  * Extract extension points from a source file using tree-sitter.
  * Returns null if the file type is not supported.
+ *
+ * @param filePath - File path
+ * @param normalizedContent - Normalized file content (CRLF -> LF)
+ * @param context - Optional AnalysisContext for AST caching
  */
 export async function extractExtensionPointsWasm(
   filePath: string,
-  normalizedContent: string
+  normalizedContent: string,
+  context?: AnalysisContext
 ): Promise<{ language: TreeSitterLanguageId; extensionPoints: ExtensionPoint[] } | null> {
   const lang = languageForFile(filePath);
   if (!lang) return null;
@@ -243,6 +293,16 @@ export async function extractExtensionPointsWasm(
     return null;
   }
 
+  // Use AstCache if context provided
+  if (context) {
+    const result = await context.ast.withTree(context.fileIndex, filePath, (tree) => {
+      const root = tree.rootNode;
+      return { language: lang, extensionPoints: extractExtensionPoints(root, lang) };
+    });
+    return result ?? { language: lang, extensionPoints: [] };
+  }
+
+  // Fallback: direct parsing (legacy path)
   const language = await loadLanguage(lang);
 
   const parser = new Parser();
