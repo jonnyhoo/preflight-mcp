@@ -3,11 +3,12 @@
  *
  * Detects code complexity issues:
  * - High cyclomatic complexity
+ * - High cognitive complexity
  * - Long functions
  * - Deep nesting
  * - Too many parameters
  *
- * Uses tree-sitter for AST analysis.
+ * Uses tree-sitter AST for JS/TS/TSX/Java, falls back to regex for other languages.
  *
  * @module analysis/check/complexity
  */
@@ -15,13 +16,13 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { minimatch } from 'minimatch';
-import Parser from 'web-tree-sitter';
 
 import { createModuleLogger } from '../../../logging/logger.js';
 import type { AnalysisContext } from '../../cache/index.js';
 import type { ComplexityIssue, SingleCheckResult, ComplexityOptions } from '../types.js';
 import { computeSummaryFromIssues, LANGUAGE_SUPPORT, DEFAULT_CHECK_OPTIONS } from '../types.js';
 import { languageForFile } from '../../../ast/index.js';
+import { computeComplexityMetrics, type FunctionComplexityMetrics } from './cognitive.js';
 
 const logger = createModuleLogger('complexity');
 
@@ -34,10 +35,14 @@ const logger = createModuleLogger('complexity');
  */
 const DEFAULT_COMPLEXITY_OPTIONS: Required<ComplexityOptions> = {
   complexityThreshold: DEFAULT_CHECK_OPTIONS.complexity.complexityThreshold!,
+  cognitiveThreshold: DEFAULT_CHECK_OPTIONS.complexity.cognitiveThreshold!,
   lineLengthThreshold: DEFAULT_CHECK_OPTIONS.complexity.lineLengthThreshold!,
   nestingThreshold: DEFAULT_CHECK_OPTIONS.complexity.nestingThreshold!,
   paramCountThreshold: DEFAULT_CHECK_OPTIONS.complexity.paramCountThreshold!,
 };
+
+/** Languages supported by AST-based analysis */
+const AST_SUPPORTED_LANGUAGES = new Set(['javascript', 'typescript', 'tsx', 'java']);
 
 /**
  * Function metrics.
@@ -201,14 +206,143 @@ async function analyzeFileComplexity(
 
   if (!normalizedContent) return issues;
 
-  const lines = normalizedContent.split('\n');
-
   const lang = languageForFile(filePath);
   if (!lang) return issues;
 
-  // Use simple regex-based analysis for now (tree-sitter parsing is complex to set up)
-  // This is a simplified approach that works for most cases
-  const functions = extractFunctions(normalizedContent, lang);
+  // Try AST-based analysis for supported languages
+  if (AST_SUPPORTED_LANGUAGES.has(lang) && context) {
+    const astIssues = await analyzeWithAst(filePath, options, context, lang);
+    if (astIssues !== null) {
+      return astIssues;
+    }
+    // AST analysis failed, fall back to regex
+    logger.debug(`AST analysis failed for ${filePath}, falling back to regex`);
+  }
+
+  // Fallback: regex-based analysis
+  return analyzeWithRegex(filePath, normalizedContent, lang, options);
+}
+
+/**
+ * Analyze complexity using AST (tree-sitter).
+ * Returns null if AST parsing fails.
+ */
+async function analyzeWithAst(
+  filePath: string,
+  options: Required<ComplexityOptions>,
+  context: AnalysisContext,
+  lang: string
+): Promise<ComplexityIssue[] | null> {
+  try {
+    const result = await context.ast.withTree(context.fileIndex, filePath, (tree, tsLang) => {
+      return computeComplexityMetrics(tree, tsLang);
+    });
+
+    if (!result) return null;
+
+    return generateIssuesFromMetrics(result, filePath, options);
+  } catch (err) {
+    logger.debug(`AST parsing error for ${filePath}: ${err}`);
+    return null;
+  }
+}
+
+/**
+ * Generate complexity issues from AST-computed metrics.
+ */
+function generateIssuesFromMetrics(
+  metrics: FunctionComplexityMetrics[],
+  filePath: string,
+  options: Required<ComplexityOptions>
+): ComplexityIssue[] {
+  const issues: ComplexityIssue[] = [];
+
+  for (const func of metrics) {
+    // Check line length
+    if (func.lineCount > options.lineLengthThreshold) {
+      issues.push({
+        type: 'long-function',
+        severity: func.lineCount > options.lineLengthThreshold * 2 ? 'error' : 'warning',
+        file: filePath,
+        line: String(func.startLine),
+        message: `Function '${func.name}' is too long (${func.lineCount} lines, threshold: ${options.lineLengthThreshold})`,
+        functionName: func.name,
+        value: func.lineCount,
+        threshold: options.lineLengthThreshold,
+      });
+    }
+
+    // Check cyclomatic complexity
+    if (func.cyclomatic > options.complexityThreshold) {
+      issues.push({
+        type: 'high-complexity',
+        severity: func.cyclomatic > options.complexityThreshold * 2 ? 'error' : 'warning',
+        file: filePath,
+        line: String(func.startLine),
+        message: `Function '${func.name}' has high cyclomatic complexity (${func.cyclomatic}, threshold: ${options.complexityThreshold})`,
+        functionName: func.name,
+        value: func.cyclomatic,
+        threshold: options.complexityThreshold,
+      });
+    }
+
+    // Check cognitive complexity
+    if (func.cognitive > options.cognitiveThreshold) {
+      issues.push({
+        type: 'cognitive-complexity',
+        severity: func.cognitive > options.cognitiveThreshold * 2 ? 'error' : 'warning',
+        file: filePath,
+        line: String(func.startLine),
+        message: `Function '${func.name}' has high cognitive complexity (${func.cognitive}, threshold: ${options.cognitiveThreshold})`,
+        functionName: func.name,
+        value: func.cognitive,
+        threshold: options.cognitiveThreshold,
+      });
+    }
+
+    // Check nesting depth
+    if (func.nestingDepth > options.nestingThreshold) {
+      issues.push({
+        type: 'deep-nesting',
+        severity: func.nestingDepth > options.nestingThreshold + 2 ? 'error' : 'warning',
+        file: filePath,
+        line: String(func.startLine),
+        message: `Function '${func.name}' has deep nesting (${func.nestingDepth} levels, threshold: ${options.nestingThreshold})`,
+        functionName: func.name,
+        value: func.nestingDepth,
+        threshold: options.nestingThreshold,
+      });
+    }
+
+    // Check parameter count
+    if (func.paramCount > options.paramCountThreshold) {
+      issues.push({
+        type: 'many-params',
+        severity: 'warning',
+        file: filePath,
+        line: String(func.startLine),
+        message: `Function '${func.name}' has too many parameters (${func.paramCount}, threshold: ${options.paramCountThreshold})`,
+        functionName: func.name,
+        value: func.paramCount,
+        threshold: options.paramCountThreshold,
+      });
+    }
+  }
+
+  return issues;
+}
+
+/**
+ * Analyze complexity using regex (fallback for unsupported languages or AST failures).
+ */
+function analyzeWithRegex(
+  filePath: string,
+  content: string,
+  lang: string,
+  options: Required<ComplexityOptions>
+): ComplexityIssue[] {
+  const issues: ComplexityIssue[] = [];
+  const functions = extractFunctions(content, lang);
 
   for (const func of functions) {
     // Check line length
@@ -225,7 +359,7 @@ async function analyzeFileComplexity(
       });
     }
 
-    // Check complexity
+    // Check complexity (regex-based is cyclomatic only, no cognitive for fallback)
     if (func.complexity > options.complexityThreshold) {
       issues.push({
         type: 'high-complexity',

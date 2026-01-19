@@ -74,7 +74,7 @@ export interface CircularIssue extends BaseCheckIssue {
  * Complexity issue.
  */
 export interface ComplexityIssue extends BaseCheckIssue {
-  type: 'high-complexity' | 'deep-nesting' | 'long-function' | 'many-params';
+  type: 'high-complexity' | 'cognitive-complexity' | 'deep-nesting' | 'long-function' | 'many-params';
   /** Function or method name */
   functionName?: string;
   /** Measured value (complexity score, nesting depth, lines, param count) */
@@ -168,6 +168,8 @@ export interface CircularOptions {
 export interface ComplexityOptions {
   /** Cyclomatic complexity threshold (default: 15) */
   complexityThreshold?: number;
+  /** Cognitive complexity threshold (default: 15) */
+  cognitiveThreshold?: number;
   /** Function line count threshold (default: 100) */
   lineLengthThreshold?: number;
   /** Nesting depth threshold (default: 5) */
@@ -333,6 +335,7 @@ export const DEFAULT_CHECK_OPTIONS: Required<CheckOptions> = {
   },
   complexity: {
     complexityThreshold: 15,
+    cognitiveThreshold: 15,
     lineLengthThreshold: 100,
     nestingThreshold: 5,
     paramCountThreshold: 6,
