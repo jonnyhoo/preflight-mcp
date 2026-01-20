@@ -140,12 +140,13 @@ export class ProgressTracker {
     this.emitProgress(task);
     
     // Clean up after a delay to allow final status queries
-    setTimeout(() => {
+    const cleanup = setTimeout(() => {
       this.tasks.delete(taskId);
       if (this.fingerprintToTaskId.get(task.fingerprint) === taskId) {
         this.fingerprintToTaskId.delete(task.fingerprint);
       }
     }, 60_000); // Keep completed task for 1 minute
+    cleanup.unref?.();
   }
 
   /**
@@ -163,12 +164,13 @@ export class ProgressTracker {
     this.emitProgress(task);
     
     // Clean up after a delay
-    setTimeout(() => {
+    const cleanup = setTimeout(() => {
       this.tasks.delete(taskId);
       if (this.fingerprintToTaskId.get(task.fingerprint) === taskId) {
         this.fingerprintToTaskId.delete(task.fingerprint);
       }
     }, 60_000);
+    cleanup.unref?.();
   }
 
   /**
