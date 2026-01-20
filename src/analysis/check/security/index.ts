@@ -185,6 +185,47 @@ async function walkDir(dir: string, callback: (filePath: string) => Promise<void
 }
 
 // ============================================================================
+// Suppression Comments
+// ============================================================================
+
+/**
+ * Patterns for suppression comments.
+ * Supports: @security-ignore, @preflight-ignore: security, @preflight-ignore
+ */
+const SUPPRESSION_PATTERNS = [
+  /@security-ignore/i,
+  /@preflight-ignore:\s*security/i,
+  /@preflight-ignore(?!:)/i,  // @preflight-ignore without specific check
+];
+
+/**
+ * Check if a line is suppressed by a comment.
+ * Looks for suppression comments on the same line or the line above.
+ */
+function isLineSuppressed(sourceLines: string[], lineNumber: number): boolean {
+  // lineNumber is 1-based
+  const lineIndex = lineNumber - 1;
+  
+  // Check current line (inline comment)
+  if (lineIndex >= 0 && lineIndex < sourceLines.length) {
+    const currentLine = sourceLines[lineIndex] ?? '';
+    if (SUPPRESSION_PATTERNS.some(p => p.test(currentLine))) {
+      return true;
+    }
+  }
+  
+  // Check line above
+  if (lineIndex > 0 && lineIndex - 1 < sourceLines.length) {
+    const lineAbove = sourceLines[lineIndex - 1] ?? '';
+    if (SUPPRESSION_PATTERNS.some(p => p.test(lineAbove))) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+// ============================================================================
 // File Analysis
 // ============================================================================
 
@@ -200,8 +241,17 @@ async function analyzeFile(
     return [];
   }
 
+  // Read source for suppression check
+  let sourceLines: string[] = [];
+  try {
+    const content = await fs.readFile(filePath, 'utf8');
+    sourceLines = content.split(/\r?\n/);
+  } catch {
+    // If can't read, proceed without suppression support
+  }
+
   const result = await context.ast.withTree(context.fileIndex, filePath, (tree, tsLang) => {
-    return analyzeTree(tree, tsLang, filePath, patterns);
+    return analyzeTree(tree, tsLang, filePath, patterns, sourceLines);
   });
 
   return result ?? [];
@@ -211,16 +261,17 @@ function analyzeTree(
   tree: Tree,
   lang: TreeSitterLanguageId,
   filePath: string,
-  patterns: CompiledPatterns
+  patterns: CompiledPatterns,
+  sourceLines: string[]
 ): BaseCheckIssue[] {
   const issues: BaseCheckIssue[] = [];
 
   if (ruleAppliesToLanguage('hardcoded-credentials', lang)) {
-    issues.push(...checkHardcodedCredentials(tree, lang, filePath, patterns));
+    issues.push(...checkHardcodedCredentials(tree, lang, filePath, patterns, sourceLines));
   }
 
   if (ruleAppliesToLanguage('insecure-random', lang)) {
-    issues.push(...checkInsecureRandom(tree, lang, filePath));
+    issues.push(...checkInsecureRandom(tree, lang, filePath, sourceLines));
   }
 
   return issues;
@@ -238,7 +289,8 @@ function checkHardcodedCredentials(
   tree: Tree,
   lang: TreeSitterLanguageId,
   filePath: string,
-  patterns: CompiledPatterns
+  patterns: CompiledPatterns,
+  sourceLines: string[]
 ): BaseCheckIssue[] {
   const issues: BaseCheckIssue[] = [];
   const rule = getRuleMetadata('hardcoded-credentials')!;
@@ -248,6 +300,9 @@ function checkHardcodedCredentials(
     if (!result) return;
 
     const { name, value, line } = result;
+
+    // Check for suppression comment
+    if (isLineSuppressed(sourceLines, line)) return;
 
     if (
       isCredentialName(name, patterns.ignoreNames) &&
@@ -520,7 +575,8 @@ function extractRustCredentialAssignment(
 function checkInsecureRandom(
   tree: Tree,
   lang: TreeSitterLanguageId,
-  filePath: string
+  filePath: string,
+  sourceLines: string[]
 ): BaseCheckIssue[] {
   const issues: BaseCheckIssue[] = [];
   const rule = getRuleMetadata('insecure-random')!;
@@ -528,6 +584,11 @@ function checkInsecureRandom(
   visitNodes(tree.rootNode, (node) => {
     const isInsecure = detectInsecureRandom(node, lang);
     if (isInsecure) {
+      const line = node.startPosition.row + 1;
+
+      // Check for suppression comment
+      if (isLineSuppressed(sourceLines, line)) return;
+
       const message =
         lang === 'java'
           ? 'java.util.Random is not cryptographically secure. Use java.security.SecureRandom for security-sensitive contexts.'
@@ -537,7 +598,7 @@ function checkInsecureRandom(
         ruleId: 'insecure-random',
         severity: rule.severity,
         file: filePath,
-        line: String(node.startPosition.row + 1),
+        line: String(line),
         message,
       });
     }
