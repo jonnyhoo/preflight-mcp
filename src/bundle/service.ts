@@ -1018,7 +1018,7 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
     mode: cfg.analysisMode,
   });
 
-  // Run advanced analyzers (GoF patterns, architectural, test examples, config, conflicts)
+  // Run advanced analyzers (GoF patterns, architectural, test examples, config)
   // This updates analysis/*.json files
   reportProgress('analyzing', 95, 'Running advanced analyzers...');
   await runAdvancedAnalyzersBestEffort({

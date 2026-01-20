@@ -119,37 +119,6 @@ export {
 } from './test-examples/index.js';
 
 // ============================================================================
-// Conflict Detection Analyzers
-// ============================================================================
-
-export {
-  // Factory functions
-  createConflictDetector,
-  detectConflicts,
-  // Classes
-  ConflictDetector,
-  // Types
-  type ConflictType,
-  type ConflictSeverity,
-  type APIParameter,
-  type APIInfo,
-  type Conflict,
-  type DocsData,
-  type DocsPage,
-  type DocsPageContent,
-  type CodeData,
-  type CodeFile,
-  type CodeClass,
-  type CodeFunction,
-  type ConflictSummary,
-  type ConflictReport,
-  type ConflictOutput,
-  type ConflictAnalyzerOptions,
-  // Constants
-  DEFAULT_CONFLICT_OPTIONS,
-} from './conflicts/index.js';
-
-// ============================================================================
 // Config Extraction Analyzers
 // ============================================================================
 
@@ -183,7 +152,6 @@ import { createGofPatternAnalyzer, type GofPatternOutput } from './gof-patterns/
 import { createArchitecturalAnalyzer, type ArchitecturalOutput } from './architectural/index.js';
 import { createTestExampleAnalyzer, type TestExampleOutput } from './test-examples/index.js';
 import { createConfigAnalyzer, type ConfigOutput } from './config/index.js';
-import { createConflictDetector, type ConflictOutput } from './conflicts/index.js';
 import { createModuleLogger } from '../../logging/logger.js';
 
 const logger = createModuleLogger('analyzers:runner');
@@ -217,7 +185,6 @@ export type AllAnalyzersResult = {
   architectural?: AnalyzerOutput<ArchitecturalOutput>;
   testExamples?: AnalyzerOutput<TestExampleOutput>;
   config?: AnalyzerOutput<ConfigOutput>;
-  conflicts?: AnalyzerOutput<ConflictOutput>;
   /** Combined summaries for easy access */
   summaries: AnalysisSummary;
   /** Execution timing */
@@ -227,7 +194,6 @@ export type AllAnalyzersResult = {
     architecturalMs?: number;
     testExamplesMs?: number;
     configMs?: number;
-    conflictsMs?: number;
   };
   /** Errors that occurred but didn't prevent completion */
   errors: string[];
@@ -245,8 +211,6 @@ export type RunAllAnalyzersOptions = {
   enableTestExamples?: boolean;
   /** Enable config extraction (default: true) */
   enableConfig?: boolean;
-  /** Enable conflict detection (default: true) */
-  enableConflicts?: boolean;
   /** Write results to analysis/ directory (default: true) */
   writeResults?: boolean;
 };
@@ -256,7 +220,6 @@ const DEFAULT_RUN_OPTIONS: Required<RunAllAnalyzersOptions> = {
   enableArchitectural: true,
   enableTestExamples: true,
   enableConfig: true,
-  enableConflicts: true,
   writeResults: true,
 };
 
@@ -277,8 +240,7 @@ const DEFAULT_RUN_OPTIONS: Required<RunAllAnalyzersOptions> = {
  * const result = await runAllAnalyzers(
  *   '/path/to/bundle',
  *   ingestedFiles,
- *   manifest,
- *   { enableConflicts: false }
+ *   manifest
  * );
  * console.log(`Found ${result.gofPatterns?.data?.totalPatterns} patterns`);
  * ```
@@ -424,28 +386,6 @@ export async function runAllAnalyzers(
     );
   }
 
-  // 5. Conflict Detection
-  if (opts.enableConflicts) {
-    tasks.push(
-      (async () => {
-        const t0 = Date.now();
-        try {
-          const detector = createConflictDetector({
-            maxFiles: 100,
-          });
-          result.conflicts = await detector.analyze(input);
-          timing.conflictsMs = Date.now() - t0;
-          await writeJson('doc-conflicts.json', result.conflicts);
-        } catch (err) {
-          timing.conflictsMs = Date.now() - t0;
-          const msg = `Conflict detector failed: ${err instanceof Error ? err.message : String(err)}`;
-          logger.warn(msg);
-          errors.push(msg);
-        }
-      })()
-    );
-  }
-
   // Wait for all analyzers to complete
   await Promise.all(tasks);
 
@@ -486,14 +426,6 @@ export async function runAllAnalyzers(
     });
   }
 
-  if (result.conflicts) {
-    analyzerEntries.push({
-      analyzerName: 'Doc/Code Conflicts',
-      summary: result.conflicts.summary,
-      highlights: result.conflicts.highlights,
-    });
-  }
-
   // Generate overall summary
   const overallSummary = generateOverallSummary(analyzerEntries);
 
@@ -514,7 +446,6 @@ export async function runAllAnalyzers(
     architectural: result.architectural?.data?.patterns.length ?? 0,
     testExamples: result.testExamples?.data?.totalExamples ?? 0,
     configFiles: result.config?.data?.totalFiles ?? 0,
-    conflicts: result.conflicts?.data?.summary?.total ?? 0,
     errors: errors.length,
   });
 
