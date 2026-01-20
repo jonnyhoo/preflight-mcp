@@ -99,9 +99,46 @@ function normalizeList(values: string[] | undefined): string[] {
     .sort();
 }
 
+/** Canonical web config for fingerprinting (sorted fields) */
+type CanonicalWebConfig = {
+  maxPages?: number;
+  maxDepth?: number;
+  includePatterns?: string[];
+  excludePatterns?: string[];
+};
+
 type CanonicalRepoInput =
   | { kind: 'github'; repo: string; ref?: string }
-  | { kind: 'web'; url: string };
+  | { kind: 'web'; url: string; config?: CanonicalWebConfig };
+
+/**
+ * Normalize web URL for consistent fingerprinting.
+ * - Lowercase host
+ * - Remove default ports (80/443)
+ * - Remove trailing slash for non-root paths
+ * - Remove fragment
+ */
+function normalizeWebUrlForFingerprint(url: string): string {
+  try {
+    const parsed = new URL(url);
+    // Lowercase host
+    let normalized = `${parsed.protocol}//${parsed.hostname.toLowerCase()}`;
+    // Remove default ports
+    if (parsed.port && !((parsed.protocol === 'http:' && parsed.port === '80') ||
+        (parsed.protocol === 'https:' && parsed.port === '443'))) {
+      normalized += `:${parsed.port}`;
+    }
+    // Normalize path: remove trailing slash for non-root paths
+    let pathname = parsed.pathname;
+    if (pathname !== '/' && pathname.endsWith('/')) {
+      pathname = pathname.slice(0, -1);
+    }
+    normalized += pathname;
+    return normalized;
+  } catch {
+    return url.toLowerCase();
+  }
+}
 
 function canonicalizeCreateInput(input: CreateBundleInput): {
   schemaVersion: 1;
@@ -112,22 +149,27 @@ function canonicalizeCreateInput(input: CreateBundleInput): {
   const repos: CanonicalRepoInput[] = input.repos
     .map((r): CanonicalRepoInput => {
       if (r.kind === 'web') {
-        // Normalize web URL for deduplication
-        try {
-          const parsed = new URL(r.url);
-          // Normalize: lowercase host, remove trailing slash, remove fragment
-          const normalizedUrl = `${parsed.protocol}//${parsed.hostname.toLowerCase()}${parsed.pathname.replace(/\/$/, '')}`;
-          return {
-            kind: 'web' as const,
-            url: normalizedUrl,
-          };
-        } catch {
-          // If URL parsing fails, use as-is
-          return {
-            kind: 'web' as const,
-            url: r.url.toLowerCase(),
-          };
+        const normalizedUrl = normalizeWebUrlForFingerprint(r.url);
+        // Include config in fingerprint (different configs = different bundles)
+        const canonicalConfig: CanonicalWebConfig | undefined = r.config ? {
+          maxPages: r.config.maxPages,
+          maxDepth: r.config.maxDepth,
+          includePatterns: r.config.includePatterns ? [...r.config.includePatterns].sort() : undefined,
+          excludePatterns: r.config.excludePatterns ? [...r.config.excludePatterns].sort() : undefined,
+        } : undefined;
+        // Remove undefined values
+        if (canonicalConfig) {
+          Object.keys(canonicalConfig).forEach(key => {
+            if ((canonicalConfig as any)[key] === undefined) {
+              delete (canonicalConfig as any)[key];
+            }
+          });
         }
+        return {
+          kind: 'web' as const,
+          url: normalizedUrl,
+          config: canonicalConfig && Object.keys(canonicalConfig).length > 0 ? canonicalConfig : undefined,
+        };
       }
       // For de-duplication, treat local imports as equivalent to github imports of the same logical repo/ref.
       const { owner, repo } = parseOwnerRepo(r.repo);
@@ -138,8 +180,8 @@ function canonicalizeCreateInput(input: CreateBundleInput): {
       };
     })
     .sort((a, b) => {
-      const ka = a.kind === 'web' ? `web:${a.url}` : `github:${a.repo}:${a.ref ?? ''}`;
-      const kb = b.kind === 'web' ? `web:${b.url}` : `github:${b.repo}:${b.ref ?? ''}`;
+      const ka = a.kind === 'web' ? `web:${a.url}:${JSON.stringify(a.config ?? {})}` : `github:${a.repo}:${a.ref ?? ''}`;
+      const kb = b.kind === 'web' ? `web:${b.url}:${JSON.stringify(b.config ?? {})}` : `github:${b.repo}:${b.ref ?? ''}`;
       return ka.localeCompare(kb);
     });
 

@@ -73,13 +73,24 @@ export function validateWebUrl(url: string): void {
 }
 
 /**
+ * Check if a path has a file extension.
+ */
+function hasFileExtension(pathname: string): boolean {
+  const lastSegment = pathname.split('/').pop() || '';
+  return lastSegment.includes('.') && !lastSegment.startsWith('.');
+}
+
+/**
  * Normalize a URL for consistent comparison and storage.
  *
  * - Removes fragment (#)
  * - Removes credentials
  * - Lowercases host
  * - Removes default ports (80/443)
- * - Normalizes trailing slashes
+ * - Normalizes trailing slashes:
+ *   - Root path (/): keep trailing slash
+ *   - Paths with file extension: no trailing slash
+ *   - Other paths: remove trailing slash (e.g., /docs/ → /docs)
  */
 export function normalizeUrl(url: string): string {
   const parsed = new URL(url);
@@ -102,19 +113,24 @@ export function normalizeUrl(url: string): string {
     parsed.port = '';
   }
 
-  // Get normalized URL
-  let normalized = parsed.href;
-
-  // Normalize trailing slash for root paths
-  // (keep trailing slash for root, remove for paths ending in .html etc)
+  // Normalize trailing slash
   if (parsed.pathname === '/') {
     // Root URL - ensure trailing slash
-    if (!normalized.endsWith('/')) {
-      normalized += '/';
+    // (URL class already handles this)
+  } else if (hasFileExtension(parsed.pathname)) {
+    // Has file extension - no trailing slash
+    if (parsed.pathname.endsWith('/')) {
+      parsed.pathname = parsed.pathname.slice(0, -1);
+    }
+  } else {
+    // No extension - remove trailing slash for consistency
+    // /docs/ and /docs should be treated as the same URL
+    if (parsed.pathname.endsWith('/')) {
+      parsed.pathname = parsed.pathname.slice(0, -1);
     }
   }
 
-  return normalized;
+  return parsed.href;
 }
 
 /**
@@ -220,6 +236,7 @@ export function resolveUrl(href: string, baseUrl: string): string | null {
 /**
  * Extract the path component for use as a filename.
  * Converts URL path to filesystem-safe filename.
+ * Includes query parameter hash to prevent collisions (e.g., ?page=1 vs ?page=2).
  */
 export function urlToFilename(url: string): string {
   const parsed = new URL(url);
@@ -237,6 +254,18 @@ export function urlToFilename(url: string): string {
 
   // Remove or replace unsafe characters
   filename = filename.replace(/[<>:"|?*]/g, '_');
+
+  // Add query hash suffix if query params exist (prevents collisions)
+  if (parsed.search) {
+    const queryHash = crypto.createHash('sha256').update(parsed.search).digest('hex').slice(0, 8);
+    // Insert hash before extension or at end
+    const extMatch = filename.match(/\.(html?|php|asp|aspx|jsp|md)$/i);
+    if (extMatch) {
+      filename = filename.slice(0, -extMatch[0].length) + `_${queryHash}` + extMatch[0];
+    } else {
+      filename += `_${queryHash}`;
+    }
+  }
 
   // Ensure it ends with .md
   if (!filename.endsWith('.md')) {

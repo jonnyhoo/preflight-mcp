@@ -1063,6 +1063,12 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
       headSha: r.headSha,
       fetchedAt: updatedAt,
       notes: r.notes,
+      // Web-specific fields (only included for web sources)
+      ...(r.kind === 'web' ? {
+        baseUrl: r.baseUrl,
+        pageCount: r.pageCount,
+        usedLlmsTxt: r.usedLlmsTxt,
+      } : {}),
     })),
   };
 
@@ -1087,7 +1093,7 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
   });
 
   const perRepoOverviews = reposSummary
-    .filter((r) => r.kind === 'github' || r.kind === 'local')
+    .filter((r) => r.kind === 'github' || r.kind === 'local' || r.kind === 'web')
     .map((r) => {
       const repoId = r.id;
       const repoFiles = allIngestedFiles.filter((f) => f.repoId === repoId);

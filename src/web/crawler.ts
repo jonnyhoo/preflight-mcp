@@ -260,6 +260,12 @@ export async function crawlWebsite(
             const page = extractPage(fetchResult.html, fetchResult.finalUrl);
             page.content = cleanMarkdown(page.content);
 
+            // Mark finalUrl as visited too (handles redirects)
+            const normalizedFinalUrl = normalizeUrl(fetchResult.finalUrl);
+            if (normalizedFinalUrl !== normalized) {
+              visited.add(normalizedFinalUrl);
+            }
+
             // Add discovered links to queue (BFS)
             if (!usedLlmsTxt && depth < cfg.maxDepth) {
               for (const link of page.links) {

@@ -15,7 +15,7 @@ import type { PreflightConfig } from '../config.js';
 import type { IngestedFile } from './ingest.js';
 import type { SkippedFileEntry } from './manifest.js';
 import { getBundlePaths } from './paths.js';
-import { ensureDir, nowIso } from './utils.js';
+import { ensureDir, nowIso, rmIfExists } from './utils.js';
 import {
   crawlWebsite,
   generateSafeId,
@@ -141,6 +141,9 @@ export async function ingestWebSource(params: {
   // Structure: repos/web/{safeId}/norm/
   const webRepoDir = path.join(bundleRoot, 'repos', 'web', safeId);
   const normDir = path.join(webRepoDir, 'norm');
+
+  // Clear existing content before writing (prevents stale pages on update)
+  await rmIfExists(webRepoDir);
   await ensureDir(normDir);
 
   const files: IngestedFile[] = [];
@@ -197,21 +200,15 @@ export async function ingestWebSource(params: {
   }
 
   // Convert skipped URLs to SkippedFileEntry format
+  // Note: SkippedFileEntry.reason is limited to specific types, so we preserve
+  // the original reason in notes and use 'binary' as a catch-all category
   for (const skip of crawlResult.skipped) {
-    // Determine reason category
-    let reason: SkippedFileEntry['reason'] = 'binary';
-    if (skip.reason.includes('pattern')) {
-      reason = 'binary'; // Use binary as a catch-all for non-matching patterns
-    } else if (skip.reason.includes('robots')) {
-      reason = 'binary';
-    } else if (skip.reason.includes('content-type')) {
-      reason = 'binary';
-    }
-
     skipped.push({
       path: skip.url,
-      reason,
+      reason: 'binary', // SkippedFileEntry has limited reason types
     });
+    // Preserve original skip reason in notes for transparency
+    notes.push(`Skipped: ${skip.url} (${skip.reason})`);
   }
 
   // Compute overall content fingerprint
