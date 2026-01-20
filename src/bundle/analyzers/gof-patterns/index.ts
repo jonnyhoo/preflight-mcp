@@ -543,13 +543,28 @@ export class GofPatternAnalyzer extends BaseAnalyzer<GofPatternOutput, GofPatter
   /**
    * Generate highlights from high-confidence patterns.
    * Only includes patterns with confidence >= 0.7.
+   * Prefers patterns from source files over test files.
    */
   private generateHighlights(patterns: PatternInstance[]): AnalyzerHighlight[] {
     // Filter to high-confidence patterns only
     const highConfidence = patterns.filter((p) => p.confidence >= 0.7);
 
-    // Sort by confidence descending, then by pattern type
+    // Helper to check if pattern is from test file
+    const isTestFile = (location: string): boolean => {
+      const lower = location.toLowerCase();
+      return lower.includes('/test/') || 
+             lower.includes('/tests/') || 
+             lower.includes('/__tests__/') ||
+             lower.includes('.test.') ||
+             lower.includes('.spec.') ||
+             lower.includes('/fixtures/');
+    };
+
+    // Sort: non-test files first, then by confidence descending
     const sorted = highConfidence.sort((a, b) => {
+      const aIsTest = isTestFile(a.location);
+      const bIsTest = isTestFile(b.location);
+      if (aIsTest !== bIsTest) return aIsTest ? 1 : -1;  // Non-test files first
       if (b.confidence !== a.confidence) return b.confidence - a.confidence;
       return a.patternType.localeCompare(b.patternType);
     });

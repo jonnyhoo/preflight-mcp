@@ -1368,8 +1368,15 @@ function detectArchitecturePatterns(
     patterns.push('Layered Architecture');
   }
 
-  // Microservices indicators
-  if (pathSet.has('docker-compose.yml') || paths.filter(p => p.includes('/service/')).length > 3) {
+  // Microservices indicators - require stronger evidence
+  // Look for multiple service directories with their own configs, not just files with 'service' in path
+  const serviceDirectories = new Set(
+    paths
+      .filter(p => p.match(/\/services\/[^/]+\//))  // e.g., /services/auth/, /services/api/
+      .map(p => p.match(/\/services\/([^/]+)\//)?.[1])
+      .filter(Boolean)
+  );
+  if (serviceDirectories.size >= 3) {
     patterns.push('Microservices');
   }
 

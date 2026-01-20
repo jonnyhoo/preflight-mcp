@@ -284,26 +284,45 @@ export class ConfigAnalyzer extends BaseAnalyzer<ConfigOutput, ConfigAnalyzerOpt
 
   /**
    * Determine the primary configuration purpose based on all config files.
+   * Prioritizes core/development configs over deployment/infrastructure configs.
    */
   private determinePrimaryPurpose(configFiles: ConfigFile[]): ConfigPurpose | undefined {
     if (configFiles.length === 0) {
       return undefined;
     }
 
-    // Count purposes
-    const purposeCounts = new Map<ConfigPurpose, number>();
+    // Priority weights for different purposes
+    // Higher weight = more likely to be primary purpose
+    const purposeWeights: Record<ConfigPurpose, number> = {
+      'package_configuration': 10,      // Most indicative of project type
+      'typescript_configuration': 9,
+      'framework_configuration': 8,
+      'api_configuration': 7,
+      'database_configuration': 6,
+      'logging_configuration': 5,
+      'environment_configuration': 4,
+      'docker_configuration': 2,        // Deployment - less indicative
+      'ci_cd_configuration': 2,         // Deployment - less indicative
+      'general_configuration': 0,       // Excluded
+    };
+
+    // Calculate weighted scores
+    const purposeScores = new Map<ConfigPurpose, number>();
     for (const file of configFiles) {
-      const count = purposeCounts.get(file.purpose) ?? 0;
-      purposeCounts.set(file.purpose, count + 1);
+      const weight = purposeWeights[file.purpose] ?? 1;
+      if (weight === 0) continue;  // Skip general_configuration
+      
+      const currentScore = purposeScores.get(file.purpose) ?? 0;
+      purposeScores.set(file.purpose, currentScore + weight);
     }
 
-    // Find most common (excluding general_configuration)
-    let maxCount = 0;
+    // Find highest scored purpose
+    let maxScore = 0;
     let primaryPurpose: ConfigPurpose | undefined;
 
-    for (const [purpose, count] of purposeCounts) {
-      if (purpose !== 'general_configuration' && count > maxCount) {
-        maxCount = count;
+    for (const [purpose, score] of purposeScores) {
+      if (score > maxScore) {
+        maxScore = score;
         primaryPurpose = purpose;
       }
     }

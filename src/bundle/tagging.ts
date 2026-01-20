@@ -134,7 +134,16 @@ export function autoDetectTags(params: {
     tags.add('devops');
   }
 
-  if (fileNames.some((f) => f.includes('ci') || f.includes('github/workflows'))) {
+  // Check for CI/CD files - be precise to avoid matching 'circular', 'service', etc.
+  if (fileNames.some((f) => 
+    f.includes('github/workflows') || 
+    f.includes('.github/actions') ||
+    f.includes('/.ci/') ||
+    f.includes('.travis') ||
+    f.includes('.gitlab-ci') ||
+    f.includes('jenkinsfile') ||
+    f.includes('.circleci')
+  )) {
     tags.add('ci-cd');
     tags.add('devops');
   }
