@@ -11,6 +11,7 @@ export type TaskPhase =
   | 'downloading'  // zipball download
   | 'extracting'   // unzip
   | 'ingesting'    // file ingestion
+  | 'crawling'     // web crawling
   | 'indexing'     // building search index
   | 'analyzing'    // static analysis
   | 'generating'   // generating overview

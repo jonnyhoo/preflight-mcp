@@ -373,9 +373,12 @@ export async function extractBundleFacts(params: {
   // Extract facts
   const languages = detectLanguages(allFiles);
 
-  const entryPointsPromises = params.repos.map((r) =>
-    findEntryPoints(r.files, params.bundleRoot, r.repoId)
-  );
+  // Skip entry point detection for web sources (they don't have package.json, etc.)
+  const entryPointsPromises = params.repos
+    .filter((r) => !r.repoId.startsWith('web/'))
+    .map((r) =>
+      findEntryPoints(r.files, params.bundleRoot, r.repoId)
+    );
   const entryPointsArrays = await Promise.all(entryPointsPromises);
   const entryPoints = entryPointsArrays.flat();
 

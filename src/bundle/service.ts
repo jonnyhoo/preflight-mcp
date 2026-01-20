@@ -49,6 +49,8 @@ import {
   ingestLocalRepo,
   cloneAndIngestGitHubRepo,
 } from './repo-ingest.js';
+import { ingestWebSource } from './web-ingest.js';
+import { generateSafeId } from '../web/index.js';
 import {
   computeCreateInputFingerprint,
   updateDedupIndexBestEffort,
@@ -82,11 +84,15 @@ export type BundleSummary = {
   createdAt: string;
   updatedAt: string;
   repos: Array<{
-    kind: 'github' | 'local';
+    kind: 'github' | 'local' | 'web';
     id: string;
-    source?: 'git' | 'archive' | 'local';
+    source?: 'git' | 'archive' | 'local' | 'crawl';
     headSha?: string;
     notes?: string[];
+    // Web-specific fields
+    baseUrl?: string;
+    pageCount?: number;
+    usedLlmsTxt?: boolean;
   }>;
   /** User-facing warnings (e.g., git clone failed, used zip fallback) */
   warnings?: string[];
@@ -121,6 +127,9 @@ async function readBundleSummary(cfg: PreflightConfig, bundleId: string): Promis
       source: r.source,
       headSha: r.headSha,
       notes: r.notes,
+      baseUrl: r.baseUrl,
+      pageCount: r.pageCount,
+      usedLlmsTxt: r.usedLlmsTxt,
     })),
   };
 }
@@ -142,7 +151,13 @@ async function createBundleInternal(
   options?: CreateBundleOptions
 ): Promise<BundleSummary> {
   const fingerprint = computeCreateInputFingerprint(input);
-  const repoIds = input.repos.map((r) => r.repo);
+  // Extract IDs for display - for web sources, use the URL
+  const repoIds = input.repos.map((r) => {
+    if (r.kind === 'web') {
+      return `web:${r.url}`;
+    }
+    return r.repo;
+  });
   const onProgress = options?.onProgress;
   const tracker = getProgressTracker();
 
@@ -260,7 +275,7 @@ async function createBundleInternal(
           headSha,
           notes: [...notes, ...skipped].slice(0, 50),
         });
-      } else {
+      } else if (repoInput.kind === 'local') {
         // Local repository
         const { owner, repo } = parseOwnerRepo(repoInput.repo);
         reportProgress('ingesting', repoProgress, `[${repoIndex}/${totalRepos}] Ingesting local ${owner}/${repo}...`);
@@ -284,6 +299,35 @@ async function createBundleInternal(
           if (entry) allSkippedFiles.push(entry);
         }
         reposSummary.push({ kind: 'local', id: repoId, source: 'local', headSha, notes: skipped.slice(0, 50) });
+      } else if (repoInput.kind === 'web') {
+        // Web source - crawl documentation site
+        reportProgress('crawling', repoProgress, `[${repoIndex}/${totalRepos}] Crawling ${repoInput.url}...`);
+        tracker.updateProgress(taskId, 'crawling', repoProgress, `Crawling ${repoInput.url}...`);
+
+        const webResult = await ingestWebSource({
+          cfg,
+          bundleRoot: tmpPaths.rootDir,
+          url: repoInput.url,
+          config: repoInput.config,
+          onProgress: (msg) => {
+            reportProgress('crawling', repoProgress, `[${repoIndex}/${totalRepos}] ${msg}`);
+          },
+        });
+
+        allIngestedFiles.push(...webResult.files);
+        allSkippedFiles.push(...webResult.skipped);
+        allWarnings.push(...webResult.warnings);
+
+        reposSummary.push({
+          kind: 'web',
+          id: webResult.repoId,
+          source: 'crawl',
+          headSha: webResult.contentHash,
+          notes: webResult.notes.slice(0, 50),
+          baseUrl: webResult.baseUrl,
+          pageCount: webResult.pageCount,
+          usedLlmsTxt: webResult.usedLlmsTxt,
+        });
       }
     }
 
@@ -333,6 +377,12 @@ async function createBundleInternal(
         headSha: r.headSha,
         fetchedAt: createdAt,
         notes: r.notes,
+        // Web-specific fields (only included for web sources)
+        ...(r.kind === 'web' ? {
+          baseUrl: r.baseUrl,
+          pageCount: r.pageCount,
+          usedLlmsTxt: r.usedLlmsTxt,
+        } : {}),
       })),
       index: {
         backend: 'sqlite-fts5-lines',
@@ -387,7 +437,7 @@ async function createBundleInternal(
   tracker.updateProgress(taskId, 'generating', 80, 'Generating overview...');
   
   const perRepoOverviews = reposSummary
-    .filter((r) => r.kind === 'github' || r.kind === 'local')
+    .filter((r) => r.kind === 'github' || r.kind === 'local' || r.kind === 'web')
     .map((r) => {
       const repoId = r.id;
       const repoFiles = allIngestedFiles.filter((f) => f.repoId === repoId);
@@ -522,7 +572,7 @@ export async function checkForUpdates(cfg: PreflightConfig, bundleId: string): P
       if (changed) hasUpdates = true;
 
       details.push({ repoId, currentSha: prev?.headSha, remoteSha, changed });
-    } else {
+    } else if (repoInput.kind === 'local') {
       // Local: if this is a git repo, we can compare HEAD sha to avoid unnecessary updates.
       const { owner, repo } = parseOwnerRepo(repoInput.repo);
       const repoId = `${owner}/${repo}`;
@@ -539,6 +589,17 @@ export async function checkForUpdates(cfg: PreflightConfig, bundleId: string): P
       if (changed) hasUpdates = true;
 
       details.push({ repoId, currentSha: prev?.headSha, remoteSha: localSha, changed });
+    } else if (repoInput.kind === 'web') {
+      // Web: always mark as changed since we can't efficiently check remote content
+      const safeId = generateSafeId(repoInput.url);
+      const repoId = `web/${safeId}`;
+      const prev = manifest.repos.find((r) => r.id === repoId);
+
+      // For web sources, always suggest re-crawl (can't easily check if content changed)
+      const changed = true;
+      hasUpdates = true;
+
+      details.push({ repoId, currentSha: prev?.headSha, remoteSha: undefined, changed });
     }
   }
 
@@ -752,7 +813,7 @@ export async function repairBundle(cfg: PreflightConfig, bundleId: string, optio
   if (rebuildOverviewOpt && needsOverview) {
     const allFiles = scanned?.files ?? [];
     const perRepoOverviews = (manifest.repos ?? [])
-      .filter((r) => r.kind === 'github' || r.kind === 'local')
+      .filter((r) => r.kind === 'github' || r.kind === 'local' || r.kind === 'web')
       .map((r) => {
         const repoId = r.id;
         const repoFiles = allFiles.filter((f) => f.repoId === repoId);
@@ -883,7 +944,7 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
 
       allIngestedFiles.push(...files);
       reposSummary.push({ kind: 'github', id: repoId, source, headSha, notes: [...notes, ...skipped].slice(0, 50) });
-    } else {
+    } else if (repoInput.kind === 'local') {
       // Local repository
       const { owner, repo } = parseOwnerRepo(repoInput.repo);
       const repoId = `${owner}/${repo}`;
@@ -921,6 +982,37 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
         reposSummary.push({ kind: 'local', id: repoId, source: 'local', headSha, notes: skipped.slice(0, 50) });
         changed = true;
       }
+    } else if (repoInput.kind === 'web') {
+      // Web source - re-crawl
+      reportProgress('crawling', calcPercent(repoIndex - 1, totalRepos), `Re-crawling ${repoInput.url}...`, totalRepos);
+
+      const webResult = await ingestWebSource({
+        cfg,
+        bundleRoot: paths.rootDir,
+        url: repoInput.url,
+        config: repoInput.config,
+        onProgress: (msg) => {
+          reportProgress('crawling', calcPercent(repoIndex - 1, totalRepos), msg, totalRepos);
+        },
+      });
+
+      allIngestedFiles.push(...webResult.files);
+
+      const prev = manifest.repos.find((r) => r.id === webResult.repoId);
+      if (!prev || prev.headSha !== webResult.contentHash) {
+        changed = true;
+      }
+
+      reposSummary.push({
+        kind: 'web',
+        id: webResult.repoId,
+        source: 'crawl',
+        headSha: webResult.contentHash,
+        notes: webResult.notes.slice(0, 50),
+        baseUrl: webResult.baseUrl,
+        pageCount: webResult.pageCount,
+        usedLlmsTxt: webResult.usedLlmsTxt,
+      });
     }
   }
 

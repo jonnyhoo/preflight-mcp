@@ -15,6 +15,12 @@ export function autoDetectTags(params: {
   for (const repoId of params.repoIds) {
     const lowerRepo = repoId.toLowerCase();
 
+    // Web source detection
+    if (lowerRepo.startsWith('web/') || lowerRepo.startsWith('web:')) {
+      tags.add('documentation');
+      tags.add('web-source');
+    }
+
     // MCP related
     if (lowerRepo.includes('mcp') || lowerRepo.includes('model-context-protocol')) {
       tags.add('mcp');
@@ -146,6 +152,12 @@ export function autoDetectTags(params: {
   )) {
     tags.add('ci-cd');
     tags.add('devops');
+  }
+
+  // Web source documentation detection from file paths
+  if (fileNames.some((f) => f.startsWith('repos/web/'))) {
+    tags.add('documentation');
+    tags.add('web-source');
   }
 
   if (fileNames.some((f) => f.includes('readme') || f.includes('docs/'))) {

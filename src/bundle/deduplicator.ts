@@ -99,14 +99,36 @@ function normalizeList(values: string[] | undefined): string[] {
     .sort();
 }
 
+type CanonicalRepoInput =
+  | { kind: 'github'; repo: string; ref?: string }
+  | { kind: 'web'; url: string };
+
 function canonicalizeCreateInput(input: CreateBundleInput): {
   schemaVersion: 1;
-  repos: Array<{ kind: 'github'; repo: string; ref?: string }>;
+  repos: CanonicalRepoInput[];
   libraries: string[];
   topics: string[];
 } {
-  const repos = input.repos
-    .map((r) => {
+  const repos: CanonicalRepoInput[] = input.repos
+    .map((r): CanonicalRepoInput => {
+      if (r.kind === 'web') {
+        // Normalize web URL for deduplication
+        try {
+          const parsed = new URL(r.url);
+          // Normalize: lowercase host, remove trailing slash, remove fragment
+          const normalizedUrl = `${parsed.protocol}//${parsed.hostname.toLowerCase()}${parsed.pathname.replace(/\/$/, '')}`;
+          return {
+            kind: 'web' as const,
+            url: normalizedUrl,
+          };
+        } catch {
+          // If URL parsing fails, use as-is
+          return {
+            kind: 'web' as const,
+            url: r.url.toLowerCase(),
+          };
+        }
+      }
       // For de-duplication, treat local imports as equivalent to github imports of the same logical repo/ref.
       const { owner, repo } = parseOwnerRepo(r.repo);
       return {
@@ -116,8 +138,8 @@ function canonicalizeCreateInput(input: CreateBundleInput): {
       };
     })
     .sort((a, b) => {
-      const ka = `github:${a.repo}:${a.ref ?? ''}`;
-      const kb = `github:${b.repo}:${b.ref ?? ''}`;
+      const ka = a.kind === 'web' ? `web:${a.url}` : `github:${a.repo}:${a.ref ?? ''}`;
+      const kb = b.kind === 'web' ? `web:${b.url}` : `github:${b.repo}:${b.ref ?? ''}`;
       return ka.localeCompare(kb);
     });
 

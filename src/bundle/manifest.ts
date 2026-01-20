@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import type { WebCrawlConfig } from '../web/types.js';
 
 // =============================================================================
 // Manifest Cache - LRU cache to avoid repeated disk reads during listBundles
@@ -141,6 +142,15 @@ export type RepoInput =
       repo: string; // owner/repo (logical id)
       path: string; // local directory path
       ref?: string; // optional label for the local snapshot
+    }
+  | {
+      /**
+       * Import documentation from a website URL.
+       * Web sources are crawled and converted to markdown.
+       */
+      kind: 'web';
+      url: string; // base URL to crawl
+      config?: WebCrawlConfig; // optional crawl configuration
     };
 
 export type BundleIndexConfig = {
@@ -150,17 +160,22 @@ export type BundleIndexConfig = {
 };
 
 export type BundleRepo = {
-  kind: 'github' | 'local';
-  id: string; // owner/repo
+  kind: 'github' | 'local' | 'web';
+  id: string; // owner/repo for github/local, 'web/{safeId}' for web
   /**
    * Source of the snapshot for this repo.
    * - github: git shallow clone or GitHub archive (zipball) fallback
    * - local: local directory import
+   * - crawl: web crawl
    */
-  source?: 'git' | 'archive' | 'local';
-  headSha?: string;
+  source?: 'git' | 'archive' | 'local' | 'crawl';
+  headSha?: string; // for web: content fingerprint
   fetchedAt: string; // ISO
   notes?: string[];
+  // Web-specific fields
+  baseUrl?: string; // web: starting URL
+  pageCount?: number; // web: number of crawled pages
+  usedLlmsTxt?: boolean; // web: whether llms.txt fast path was used
 };
 
 /** @deprecated Context7 integration removed. Kept for backward compatibility with existing bundles. */
