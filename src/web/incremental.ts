@@ -35,7 +35,7 @@ export const INCREMENTAL_DEFAULTS = {
 
 /**
  * Perform conditional HTTP request with ETag/Last-Modified headers.
- * Tries HEAD first, falls back to GET if HEAD not supported.
+ * Tries HEAD first for 304 detection, falls back to GET if HEAD not supported (405/501).
  */
 export async function conditionalFetch(
   url: string,
@@ -58,8 +58,91 @@ export async function conditionalFetch(
     headers['If-Modified-Since'] = options.lastModified;
   }
 
+  // Try HEAD first if we have conditional headers (saves bandwidth on 304)
+  const hasConditionalHeaders = !!(options.etag || options.lastModified);
+  if (hasConditionalHeaders) {
+    const headResult = await tryHeadRequest(url, headers, options.timeout);
+    if (headResult.status === 'not_modified') {
+      return headResult;
+    }
+    if (headResult.status === 'removed') {
+      return headResult;
+    }
+    // HEAD returned 405/501 or modified - fall through to GET
+  }
+
+  // GET request for full content
+  return doGetRequest(url, headers, options.timeout);
+}
+
+/** HEAD request result - internal type */
+type HeadResult = 
+  | { status: 'not_modified' }
+  | { status: 'removed'; error?: string }
+  | { status: 'fallback_to_get' };
+
+/**
+ * Try HEAD request for quick 304 check.
+ * Returns 'fallback_to_get' if HEAD not supported.
+ */
+async function tryHeadRequest(
+  url: string,
+  headers: Record<string, string>,
+  timeout: number
+): Promise<HeadResult> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), options.timeout);
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const response = await fetch(url, {
+      method: 'HEAD',
+      signal: controller.signal,
+      headers,
+      redirect: 'follow',
+    });
+
+    clearTimeout(timeoutId);
+
+    // 304 Not Modified - success!
+    if (response.status === 304) {
+      return { status: 'not_modified' };
+    }
+
+    // HEAD not supported - fall back to GET
+    if (response.status === 405 || response.status === 501) {
+      return { status: 'fallback_to_get' };
+    }
+
+    // 404/410 - page removed
+    if (response.status === 404 || response.status === 410) {
+      return { status: 'removed' };
+    }
+
+    // Check content type change (HTML -> non-HTML = removed)
+    const contentType = response.headers.get('content-type');
+    if (contentType && !isHtmlContentType(contentType)) {
+      return { status: 'removed', error: `content-type changed: ${contentType}` };
+    }
+
+    // 200 OK or other - need GET for content
+    return { status: 'fallback_to_get' };
+  } catch {
+    clearTimeout(timeoutId);
+    // Network error on HEAD - try GET instead
+    return { status: 'fallback_to_get' };
+  }
+}
+
+/**
+ * Perform GET request to fetch full content.
+ */
+async function doGetRequest(
+  url: string,
+  headers: Record<string, string>,
+  timeout: number
+): Promise<ConditionalFetchResult> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
 
   try {
     const response = await fetch(url, {
