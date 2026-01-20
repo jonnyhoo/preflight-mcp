@@ -19,10 +19,10 @@ import {
 export const CheckInputSchema = {
   path: z.string().describe('Absolute path to file or directory to check'),
   checks: z
-    .array(z.enum(['duplicates', 'doccheck', 'deadcode', 'circular', 'complexity']))
+    .array(z.enum(['duplicates', 'doccheck', 'deadcode', 'circular', 'complexity', 'errorprone', 'security']))
     .optional()
-    .default(['duplicates', 'doccheck', 'deadcode', 'circular', 'complexity'])
-    .describe('Checks to run (default: all). Options: duplicates, doccheck, deadcode, circular, complexity'),
+    .default(['duplicates', 'doccheck', 'deadcode', 'circular', 'complexity', 'errorprone', 'security'])
+    .describe('Checks to run (default: all). Options: duplicates, doccheck, deadcode, circular, complexity, errorprone, security'),
 };
 
 export type CheckInput = {
@@ -45,10 +45,12 @@ export const checkToolDescription = `Run code quality checks on a project direct
 
 Available checks:
 - **duplicates**: Detect copy-paste code patterns (150+ languages via jscpd)
-- **doccheck**: Check documentation-code consistency (TypeScript, JavaScript, Python)
+- **doccheck**: Check documentation-code consistency (TypeScript, JavaScript, Python, Java)
 - **deadcode**: Detect unused/orphaned files and exports
 - **circular**: Detect circular import dependencies
 - **complexity**: Detect high complexity functions (long functions, deep nesting, many params)
+- **errorprone**: Detect error-prone patterns (null checks, type coercion, async issues)
+- **security**: Detect security vulnerabilities (hardcoded secrets, injection risks, unsafe patterns)
 
 Severity levels:
 - ❌ Error: Critical issues that should be fixed
@@ -58,7 +60,7 @@ Severity levels:
 Example usage:
 - Check all: path="/home/user/project"
 - Check specific: path="/home/user/project", checks=["deadcode", "circular"]
-- Check only duplicates: path="/home/user/project", checks=["duplicates"]`;
+- Security scan: path="/home/user/project", checks=["security", "errorprone"]`;
 
 // ============================================================================
 // Formatting
@@ -145,6 +147,10 @@ function getCheckIcon(checkType: CheckType): string {
       return '🔄';
     case 'complexity':
       return '🔥';
+    case 'errorprone':
+      return '⚠️';
+    case 'security':
+      return '🔒';
     default:
       return '🔍';
   }
@@ -165,6 +171,10 @@ function formatCheckName(checkType: CheckType): string {
       return 'Circular Dependencies';
     case 'complexity':
       return 'Complexity Hotspots';
+    case 'errorprone':
+      return 'Error-Prone Patterns';
+    case 'security':
+      return 'Security Issues';
     default:
       return checkType;
   }
