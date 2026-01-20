@@ -14,6 +14,13 @@ export type {
   CrawlResult,
   LlmsTxtResult,
   CrawlProgressCallback,
+  // Incremental update types
+  IncrementalConfig,
+  PageState,
+  PageStateFile,
+  ConditionalFetchResult,
+  IncrementalCrawlResult,
+  SitemapEntry,
 } from './types.js';
 
 // URL utilities
@@ -49,4 +56,30 @@ export {
 export {
   crawlWebsite,
   crawlUrls,
+  crawlWebsiteIncremental,
 } from './crawler.js';
+
+// Sitemap
+export {
+  fetchSitemap,
+  fetchSitemapWithIndex,
+  filterChangedBySitemap,
+} from './sitemap.js';
+
+// Incremental update
+export {
+  conditionalFetch,
+  quickCheckForChanges,
+  discoverUrls,
+  classifyUrls,
+  shouldDegradeToFull,
+  INCREMENTAL_DEFAULTS,
+} from './incremental.js';
+
+// Page state
+export {
+  loadPageState,
+  savePageState,
+  needsFullCrawl,
+  createPageState,
+} from './page-state.js';

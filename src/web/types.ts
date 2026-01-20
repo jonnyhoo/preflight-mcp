@@ -33,6 +33,8 @@ export interface WebCrawlConfig {
   skipLlmsTxt?: boolean;
   /** Respect robots.txt rules (default: true) */
   respectRobotsTxt?: boolean;
+  /** Incremental update settings */
+  incrementalConfig?: IncrementalConfig;
 }
 
 /**
@@ -100,8 +102,116 @@ export interface LlmsTxtResult {
  * Progress callback for reporting crawl progress.
  */
 export type CrawlProgressCallback = (params: {
-  phase: 'detecting' | 'crawling' | 'extracting';
+  phase: 'detecting' | 'checking' | 'crawling' | 'extracting';
   current: number;
   total: number;
   message: string;
 }) => void;
+
+// ============================================================================
+// Incremental Update Types
+// ============================================================================
+
+/**
+ * Incremental update configuration.
+ */
+export interface IncrementalConfig {
+  /** Ratio of changed pages that triggers full re-crawl (default: 0.5) */
+  changedRatioThreshold?: number;
+  /** Ratio of failed requests that triggers full re-crawl (default: 0.3) */
+  errorRatioThreshold?: number;
+  /** Days between forced full crawls for verification (default: 7, 0=disable) */
+  fullCrawlIntervalDays?: number;
+}
+
+/**
+ * Single page state for incremental updates.
+ */
+export interface PageState {
+  /** Original URL */
+  url: string;
+  /** Final URL after redirects (used for conditional requests) */
+  finalUrl?: string;
+  /** HTTP ETag header */
+  etag?: string;
+  /** HTTP Last-Modified header */
+  lastModified?: string;
+  /** sitemap.xml lastmod value (for debugging) */
+  sitemapLastmod?: string;
+  /** SHA256 of normalized markdown content */
+  contentHash: string;
+  /** ISO timestamp when fetched */
+  fetchedAt: string;
+}
+
+/**
+ * Top-level state file structure.
+ */
+export interface PageStateFile {
+  /** Schema version for forward compatibility */
+  schemaVersion: 1;
+  /** Site root URL */
+  siteRoot: string;
+  /** Last update timestamp */
+  generatedAt: string;
+  /** Last full crawl timestamp (for periodic verification) */
+  lastFullCrawlAt: string;
+  /** Page states keyed by normalized URL */
+  pages: Record<string, PageState>;
+}
+
+/**
+ * Result of a conditional HTTP request.
+ */
+export interface ConditionalFetchResult {
+  /** Request outcome */
+  status: 'modified' | 'not_modified' | 'removed' | 'error';
+  /** New ETag from response */
+  etag?: string;
+  /** New Last-Modified from response */
+  lastModified?: string;
+  /** HTML content (only if modified) */
+  html?: string;
+  /** Final URL after redirects */
+  finalUrl?: string;
+  /** Error message (only if error) */
+  error?: string;
+}
+
+/**
+ * Result of incremental crawl operation.
+ */
+export interface IncrementalCrawlResult {
+  /** Newly discovered pages */
+  added: CrawledPage[];
+  /** Pages with content changes */
+  updated: CrawledPage[];
+  /** URLs confirmed unchanged */
+  unchanged: string[];
+  /** URLs no longer present */
+  removed: string[];
+  /** Updated page state map */
+  newState: Map<string, PageState>;
+  /** Whether full crawl was triggered (degradation) */
+  degradedToFull: boolean;
+  /** Degradation reason if applicable */
+  degradeReason?: string;
+  /** Crawl statistics */
+  stats: {
+    totalUrls: number;
+    checked: number;
+    fetched: number;
+    errors: number;
+    timeMs: number;
+  };
+}
+
+/**
+ * Sitemap entry from sitemap.xml.
+ */
+export interface SitemapEntry {
+  /** Page URL */
+  url: string;
+  /** Last modification date (ISO format) */
+  lastmod?: string;
+}

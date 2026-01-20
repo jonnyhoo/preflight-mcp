@@ -11,10 +11,25 @@
  */
 
 import pLimit from 'p-limit';
-import type { WebCrawlConfig, CrawledPage, CrawlResult, CrawlProgressCallback } from './types.js';
+import type {
+  WebCrawlConfig,
+  CrawledPage,
+  CrawlResult,
+  CrawlProgressCallback,
+  PageState,
+  IncrementalCrawlResult,
+} from './types.js';
 import { validateWebUrl, normalizeUrl, matchesPatterns } from './normalizer.js';
 import { fetchAndParseLlmsTxt } from './llms-txt.js';
 import { extractPage, isHtmlContentType, shouldSkipContentType, cleanMarkdown } from './extractor.js';
+import { createPageState, needsFullCrawl } from './page-state.js';
+import {
+  conditionalFetch,
+  discoverUrls,
+  classifyUrls,
+  shouldDegradeToFull,
+  INCREMENTAL_DEFAULTS,
+} from './incremental.js';
 
 /** Default configuration values */
 const DEFAULTS = {
@@ -435,5 +450,312 @@ export async function crawlUrls(
       timeMs,
     },
     usedLlmsTxt: true, // crawlUrls is typically used after llms.txt detection
+  };
+}
+
+// ============================================================================
+// Incremental Crawl
+// ============================================================================
+
+/**
+ * Incremental crawl with multi-layer change detection.
+ *
+ * Layers:
+ * 1. Sitemap lastmod - skip unchanged URLs
+ * 2. HTTP conditional requests - 304 means unchanged
+ * 3. Content hash - final verification after extraction
+ *
+ * Degrades to full crawl if:
+ * - No previous state
+ * - Too many changes (>50%)
+ * - Too many errors (>30%)
+ * - Periodic full crawl interval exceeded
+ */
+export async function crawlWebsiteIncremental(
+  config: WebCrawlConfig,
+  previousState: Map<string, PageState>,
+  lastFullCrawlAt: string | null,
+  onProgress?: CrawlProgressCallback
+): Promise<IncrementalCrawlResult> {
+  const startTime = Date.now();
+
+  // Apply defaults
+  const cfg = {
+    baseUrl: config.baseUrl,
+    maxPages: config.maxPages ?? DEFAULTS.maxPages,
+    rateLimit: config.rateLimit ?? DEFAULTS.rateLimit,
+    concurrency: config.concurrency ?? DEFAULTS.concurrency,
+    timeout: config.timeout ?? DEFAULTS.timeout,
+    userAgent: config.userAgent ?? DEFAULTS.userAgent,
+    includePatterns: config.includePatterns,
+    excludePatterns: config.excludePatterns,
+    changedRatioThreshold:
+      config.incrementalConfig?.changedRatioThreshold ?? INCREMENTAL_DEFAULTS.changedRatioThreshold,
+    errorRatioThreshold:
+      config.incrementalConfig?.errorRatioThreshold ?? INCREMENTAL_DEFAULTS.errorRatioThreshold,
+    fullCrawlIntervalDays:
+      config.incrementalConfig?.fullCrawlIntervalDays ?? INCREMENTAL_DEFAULTS.fullCrawlIntervalDays,
+  };
+
+  validateWebUrl(cfg.baseUrl);
+
+  // Check if periodic full crawl is needed
+  if (needsFullCrawl(lastFullCrawlAt, cfg.fullCrawlIntervalDays)) {
+    return degradeToFullCrawl(config, onProgress, 'periodic_full_crawl_interval');
+  }
+
+  // Check if we have previous state
+  if (previousState.size === 0) {
+    return degradeToFullCrawl(config, onProgress, 'no_previous_state');
+  }
+
+  onProgress?.({ phase: 'checking', current: 0, total: 0, message: 'Discovering URLs...' });
+
+  // Discover current URLs
+  const { urls: currentUrls, sitemapEntries } = await discoverUrls(cfg.baseUrl, previousState, {
+    timeout: cfg.timeout,
+    userAgent: cfg.userAgent,
+  });
+
+  // Classify URLs
+  const { added, toCheck, sitemapUnchanged, removed } = classifyUrls(
+    currentUrls,
+    sitemapEntries,
+    previousState
+  );
+
+  onProgress?.({
+    phase: 'checking',
+    current: 0,
+    total: currentUrls.size,
+    message: `Found ${added.length} new, ${toCheck.length} to check, ${sitemapUnchanged.length} sitemap unchanged, ${removed.length} removed`,
+  });
+
+  // Results
+  const addedPages: CrawledPage[] = [];
+  const updatedPages: CrawledPage[] = [];
+  const unchangedUrls: string[] = [];
+  const newState = new Map<string, PageState>();
+  let errorCount = 0;
+  let fetchedCount = 0;
+
+  const limit = pLimit(cfg.concurrency);
+
+  // Process added URLs (full fetch)
+  const addedResults = await Promise.all(
+    added.slice(0, cfg.maxPages).map((url) =>
+      limit(async () => {
+        if (!matchesPatterns(url, { include: cfg.includePatterns, exclude: cfg.excludePatterns })) {
+          return { url, result: 'skipped' as const };
+        }
+
+        const fetchResult = await conditionalFetch(url, {
+          timeout: cfg.timeout,
+          userAgent: cfg.userAgent,
+        });
+
+        fetchedCount++;
+
+        if (fetchResult.status !== 'modified' || !fetchResult.html) {
+          if (fetchResult.status === 'error') errorCount++;
+          return { url, result: fetchResult.status };
+        }
+
+        try {
+          const page = extractPage(fetchResult.html, fetchResult.finalUrl ?? url);
+          page.content = cleanMarkdown(page.content);
+
+          const state = createPageState({
+            url,
+            finalUrl: fetchResult.finalUrl,
+            etag: fetchResult.etag,
+            lastModified: fetchResult.lastModified,
+            sitemapLastmod: sitemapEntries.get(url)?.lastmod,
+            contentHash: page.contentHash,
+          });
+
+          await sleep(cfg.rateLimit);
+          return { url, result: 'added' as const, page, state };
+        } catch {
+          errorCount++;
+          return { url, result: 'error' as const };
+        }
+      })
+    )
+  );
+
+  for (const r of addedResults) {
+    if (r.result === 'added' && r.page && r.state) {
+      addedPages.push(r.page);
+      newState.set(r.url, r.state);
+    }
+  }
+
+  // Process toCheck URLs (conditional fetch)
+  const checkResults = await Promise.all(
+    toCheck.map((url) =>
+      limit(async () => {
+        const prev = previousState.get(url)!;
+        const fetchResult = await conditionalFetch(prev.finalUrl ?? url, {
+          timeout: cfg.timeout,
+          userAgent: cfg.userAgent,
+          etag: prev.etag,
+          lastModified: prev.lastModified,
+        });
+
+        fetchedCount++;
+
+        if (fetchResult.status === 'not_modified') {
+          // Keep previous state, just update fetchedAt
+          newState.set(url, { ...prev, fetchedAt: new Date().toISOString() });
+          return { url, result: 'unchanged' as const };
+        }
+
+        if (fetchResult.status === 'removed') {
+          return { url, result: 'removed' as const };
+        }
+
+        if (fetchResult.status === 'error') {
+          errorCount++;
+          // Keep previous state on error
+          newState.set(url, prev);
+          return { url, result: 'error' as const };
+        }
+
+        // Modified - extract and compare hash
+        try {
+          const page = extractPage(fetchResult.html!, fetchResult.finalUrl ?? url);
+          page.content = cleanMarkdown(page.content);
+
+          const state = createPageState({
+            url,
+            finalUrl: fetchResult.finalUrl,
+            etag: fetchResult.etag,
+            lastModified: fetchResult.lastModified,
+            sitemapLastmod: sitemapEntries.get(url)?.lastmod,
+            contentHash: page.contentHash,
+          });
+
+          // Layer 3: Content hash comparison
+          if (page.contentHash === prev.contentHash) {
+            // Server said modified but content is same
+            newState.set(url, state);
+            return { url, result: 'unchanged' as const };
+          }
+
+          newState.set(url, state);
+          await sleep(cfg.rateLimit);
+          return { url, result: 'updated' as const, page, state };
+        } catch {
+          errorCount++;
+          newState.set(url, prev);
+          return { url, result: 'error' as const };
+        }
+      })
+    )
+  );
+
+  for (const r of checkResults) {
+    if (r.result === 'updated' && r.page) {
+      updatedPages.push(r.page);
+    } else if (r.result === 'unchanged') {
+      unchangedUrls.push(r.url);
+    }
+  }
+
+  // Process sitemapUnchanged URLs (verify with content hash)
+  // These are URLs where sitemap lastmod suggests no change.
+  // We trust the previous state and just carry it forward.
+  for (const url of sitemapUnchanged) {
+    const prev = previousState.get(url);
+    if (prev) {
+      newState.set(url, prev);
+      unchangedUrls.push(url);
+    }
+  }
+
+  // Check degradation thresholds
+  const totalUrls = currentUrls.size;
+  const changedCount = addedPages.length + updatedPages.length;
+
+  const degradeCheck = shouldDegradeToFull({
+    totalUrls,
+    changedCount,
+    errorCount,
+    changedRatioThreshold: cfg.changedRatioThreshold,
+    errorRatioThreshold: cfg.errorRatioThreshold,
+  });
+
+  if (degradeCheck.degrade) {
+    return degradeToFullCrawl(config, onProgress, degradeCheck.reason!);
+  }
+
+  const timeMs = Date.now() - startTime;
+
+  onProgress?.({
+    phase: 'crawling',
+    current: fetchedCount,
+    total: totalUrls,
+    message: `Done: ${addedPages.length} added, ${updatedPages.length} updated, ${unchangedUrls.length} unchanged, ${removed.length} removed`,
+  });
+
+  return {
+    added: addedPages,
+    updated: updatedPages,
+    unchanged: unchangedUrls,
+    removed,
+    newState,
+    degradedToFull: false,
+    stats: {
+      totalUrls,
+      checked: toCheck.length + sitemapUnchanged.length,
+      fetched: fetchedCount,
+      errors: errorCount,
+      timeMs,
+    },
+  };
+}
+
+/**
+ * Helper: degrade incremental to full crawl.
+ */
+async function degradeToFullCrawl(
+  config: WebCrawlConfig,
+  onProgress: CrawlProgressCallback | undefined,
+  reason: string
+): Promise<IncrementalCrawlResult> {
+  onProgress?.({
+    phase: 'crawling',
+    current: 0,
+    total: 0,
+    message: `Degrading to full crawl: ${reason}`,
+  });
+
+  const fullResult = await crawlWebsite(config, onProgress);
+
+  // Convert full crawl result to incremental format
+  const newState = new Map<string, PageState>();
+  for (const page of fullResult.pages) {
+    newState.set(normalizeUrl(page.url), createPageState({
+      url: page.url,
+      contentHash: page.contentHash,
+    }));
+  }
+
+  return {
+    added: fullResult.pages,
+    updated: [],
+    unchanged: [],
+    removed: [],
+    newState,
+    degradedToFull: true,
+    degradeReason: reason,
+    stats: {
+      totalUrls: fullResult.stats.totalUrls,
+      checked: 0,
+      fetched: fullResult.stats.crawled,
+      errors: fullResult.stats.skipped,
+      timeMs: fullResult.stats.timeMs,
+    },
   };
 }

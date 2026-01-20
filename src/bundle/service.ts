@@ -49,8 +49,27 @@ import {
   ingestLocalRepo,
   cloneAndIngestGitHubRepo,
 } from './repo-ingest.js';
-import { ingestWebSource } from './web-ingest.js';
-import { generateSafeId } from '../web/index.js';
+
+// Web module imports are dynamic to avoid loading jsdom in non-web contexts
+// This fixes Jest ESM compatibility issues
+type WebIngestModule = typeof import('./web-ingest.js');
+type WebIndexModule = typeof import('../web/index.js');
+let _webIngestModule: WebIngestModule | null = null;
+let _webIndexModule: WebIndexModule | null = null;
+
+async function getWebIngestModule(): Promise<WebIngestModule> {
+  if (!_webIngestModule) {
+    _webIngestModule = await import('./web-ingest.js');
+  }
+  return _webIngestModule;
+}
+
+async function getWebIndexModule(): Promise<WebIndexModule> {
+  if (!_webIndexModule) {
+    _webIndexModule = await import('../web/index.js');
+  }
+  return _webIndexModule;
+}
 import {
   computeCreateInputFingerprint,
   updateDedupIndexBestEffort,
@@ -304,6 +323,7 @@ async function createBundleInternal(
         reportProgress('crawling', repoProgress, `[${repoIndex}/${totalRepos}] Crawling ${repoInput.url}...`);
         tracker.updateProgress(taskId, 'crawling', repoProgress, `Crawling ${repoInput.url}...`);
 
+        const { ingestWebSource } = await getWebIngestModule();
         const webResult = await ingestWebSource({
           cfg,
           bundleRoot: tmpPaths.rootDir,
@@ -590,14 +610,32 @@ export async function checkForUpdates(cfg: PreflightConfig, bundleId: string): P
 
       details.push({ repoId, currentSha: prev?.headSha, remoteSha: localSha, changed });
     } else if (repoInput.kind === 'web') {
-      // Web: always mark as changed since we can't efficiently check remote content
+      // Web: use quickCheckForChanges for efficient detection
+      const { generateSafeId, quickCheckForChanges, loadPageState } = await getWebIndexModule();
       const safeId = generateSafeId(repoInput.url);
       const repoId = `web/${safeId}`;
       const prev = manifest.repos.find((r) => r.id === repoId);
 
-      // For web sources, always suggest re-crawl (can't easily check if content changed)
-      const changed = true;
-      hasUpdates = true;
+      // Load page state and check for changes
+      const stateFile = path.join(paths.rootDir, 'repos', 'web', safeId, 'page-state.json');
+      const { state: previousState } = await loadPageState(stateFile);
+
+      let changed = true; // Default to changed (conservative)
+      if (previousState.size > 0) {
+        try {
+          const checkResult = await quickCheckForChanges(repoInput.url, previousState, {
+            timeout: 30000,
+            userAgent: 'Preflight-Web-Crawler/1.0',
+          });
+          changed = checkResult.hasChanges;
+          logger.debug(`Web source ${repoInput.url} quick check: ${checkResult.reason}`);
+        } catch (err) {
+          // On error, assume changed (conservative)
+          logger.debug(`Web source ${repoInput.url} quick check failed, assuming changed`, err instanceof Error ? err : undefined);
+        }
+      }
+
+      if (changed) hasUpdates = true;
 
       details.push({ repoId, currentSha: prev?.headSha, remoteSha: undefined, changed });
     }
@@ -983,25 +1021,51 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
         changed = true;
       }
     } else if (repoInput.kind === 'web') {
-      // Web source - re-crawl
-      reportProgress('crawling', calcPercent(repoIndex - 1, totalRepos), `Re-crawling ${repoInput.url}...`, totalRepos);
+      // Web source - use incremental crawl when possible
+      reportProgress('crawling', calcPercent(repoIndex - 1, totalRepos), `Updating ${repoInput.url}...`, totalRepos);
 
-      const webResult = await ingestWebSource({
-        cfg,
-        bundleRoot: paths.rootDir,
-        url: repoInput.url,
-        config: repoInput.config,
-        onProgress: (msg) => {
-          reportProgress('crawling', calcPercent(repoIndex - 1, totalRepos), msg, totalRepos);
-        },
-      });
+      const { ingestWebSource, ingestWebSourceIncremental } = await getWebIngestModule();
+      const prev = manifest.repos.find((r) => r.id.startsWith('web/'));
+
+      // Use incremental if not forced and previous state exists
+      const useIncremental = !options?.force;
+
+      let webResult;
+      if (useIncremental) {
+        // Try incremental update
+        webResult = await ingestWebSourceIncremental({
+          cfg,
+          bundleRoot: paths.rootDir,
+          url: repoInput.url,
+          config: repoInput.config,
+          onProgress: (msg) => {
+            reportProgress('crawling', calcPercent(repoIndex - 1, totalRepos), msg, totalRepos);
+          },
+        });
+
+        // Check if content actually changed
+        const stats = webResult.incrementalStats;
+        if (stats.added > 0 || stats.updated > 0 || stats.removed > 0) {
+          changed = true;
+        }
+      } else {
+        // Force full crawl
+        webResult = await ingestWebSource({
+          cfg,
+          bundleRoot: paths.rootDir,
+          url: repoInput.url,
+          config: repoInput.config,
+          onProgress: (msg) => {
+            reportProgress('crawling', calcPercent(repoIndex - 1, totalRepos), msg, totalRepos);
+          },
+        });
+
+        if (!prev || prev.headSha !== webResult.contentHash) {
+          changed = true;
+        }
+      }
 
       allIngestedFiles.push(...webResult.files);
-
-      const prev = manifest.repos.find((r) => r.id === webResult.repoId);
-      if (!prev || prev.headSha !== webResult.contentHash) {
-        changed = true;
-      }
 
       reposSummary.push({
         kind: 'web',
