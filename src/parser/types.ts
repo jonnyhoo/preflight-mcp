@@ -360,8 +360,39 @@ export interface ParseOptions {
   /** Timeout in milliseconds */
   timeoutMs?: number;
   
+  /**
+   * Whether to enable smart analysis for academic papers.
+   * Uses position and font information to detect headings, formulas,
+   * code blocks, and tables with higher accuracy.
+   * @default false
+   */
+  smartAnalysis?: boolean;
+  
+  /**
+   * VLM configuration for fallback processing of low-confidence elements.
+   */
+  vlmConfig?: VLMConfigOptions;
+  
   /** Additional parser-specific options */
   extra?: Record<string, unknown>;
+}
+
+/**
+ * VLM configuration for fallback processing.
+ */
+export interface VLMConfigOptions {
+  /** API base URL */
+  apiBase?: string;
+  /** API key */
+  apiKey?: string;
+  /** Model name */
+  model?: string;
+  /** Maximum tokens for response */
+  maxTokens?: number;
+  /** Whether VLM fallback is enabled */
+  enabled?: boolean;
+  /** Confidence threshold for triggering VLM (default: 0.7) */
+  confidenceThreshold?: number;
 }
 
 /**
@@ -390,6 +421,21 @@ export interface PdfParseOptions extends ParseOptions {
    * @default true
    */
   enableOcr?: boolean;
+  
+  /**
+   * Whether to enable smart analysis for academic papers.
+   * Uses position and font information to detect headings, formulas,
+   * code blocks, and tables with higher accuracy.
+   * @default false
+   */
+  smartAnalysis?: boolean;
+  
+  /**
+   * VLM configuration for fallback processing of low-confidence elements.
+   * If provided and enabled, elements with confidence below threshold
+   * will be processed using a Vision-Language Model.
+   */
+  vlmConfig?: VLMConfigOptions;
 }
 
 /**

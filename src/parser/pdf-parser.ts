@@ -20,6 +20,25 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { getDocumentProxy, extractText, extractImages } from 'unpdf';
 
+/** Type for PDF document proxy from unpdf */
+type PDFDocumentProxy = Awaited<ReturnType<typeof getDocumentProxy>>;
+
+// Smart PDF analyzer for academic papers
+import {
+  groupIntoLines,
+  calculatePageStats,
+  classifyPageElements,
+  identifyLowConfidenceElements,
+  createVLMConfig,
+  processLowConfidenceElements,
+  processScannedPage,
+} from './pdf/index.js';
+import type {
+  AnalyzedElement,
+  RichTextItem,
+  VLMConfig,
+} from './pdf/types.js';
+
 import type {
   IDocumentParser,
   ParseResult,
@@ -174,6 +193,10 @@ export class PdfParser implements IDocumentParser {
       const maxPages = opts.maxPages ?? pageCount;
       const pagesToProcess = Math.min(endPage - startPage + 1, maxPages);
 
+      // Check if smart analysis is enabled (for academic papers)
+      const useSmartAnalysis = opts.smartAnalysis ?? false;
+      const vlmConfig = opts.vlmConfig ? createVLMConfig(opts.vlmConfig) : null;
+
       // Extract text content using unpdf (fast, native text extraction)
       const textResult = await extractText(freshData(), {
         mergePages: false,
@@ -204,10 +227,22 @@ export class PdfParser implements IDocumentParser {
           const pageText = pageTexts[pageIdx] ?? '';
           
           if (pageText.trim()) {
-            // Detect structure in page text
-            const pageContents = this.parsePageContent(pageText, pageIdx);
-            contents.push(...pageContents);
-            fullTextParts.push(pageText);
+            // Use smart analysis for academic papers if enabled
+            if (useSmartAnalysis) {
+              const smartContents = await this.smartAnalyzePage(
+                pdf,
+                pageIdx,
+                vlmConfig,
+                warnings
+              );
+              contents.push(...smartContents);
+              fullTextParts.push(pageText);
+            } else {
+              // Standard structure detection
+              const pageContents = this.parsePageContent(pageText, pageIdx);
+              contents.push(...pageContents);
+              fullTextParts.push(pageText);
+            }
           }
         } catch (pageError) {
           const errMsg = pageError instanceof Error ? pageError.message : String(pageError);
@@ -470,6 +505,131 @@ export class PdfParser implements IDocumentParser {
         subject: info.Subject,
       },
     };
+  }
+
+  /**
+   * Smart analyze a page using the academic paper analyzer.
+   * Detects headings, formulas, code blocks, and tables with higher accuracy.
+   */
+  private async smartAnalyzePage(
+    pdf: PDFDocumentProxy,
+    pageIndex: number,
+    vlmConfig: VLMConfig | null,
+    warnings: string[]
+  ): Promise<ParsedContent[]> {
+    try {
+      const page = await pdf.getPage(pageIndex + 1);
+      const viewport = page.getViewport({ scale: 1.0 });
+      const textContent = await page.getTextContent();
+      
+      // Convert to rich text items
+      const items: RichTextItem[] = [];
+      for (const item of textContent.items) {
+        if (!('str' in item) || !item.str.trim()) continue;
+        
+        const textItem = item as { str: string; transform: number[]; fontName?: string; width?: number; height?: number };
+        const transform = textItem.transform;
+        
+        items.push({
+          str: textItem.str,
+          x: transform[4] ?? 0,
+          y: transform[5] ?? 0,
+          fontSize: Math.abs(transform[0] ?? 0) || Math.abs(transform[3] ?? 0) || 10,
+          fontName: textItem.fontName ?? '',
+          width: textItem.width ?? 0,
+          height: textItem.height ?? Math.abs(transform[0] ?? 10),
+        });
+      }
+      
+      // Group into lines
+      const lines = groupIntoLines(items);
+      
+      // Calculate page stats
+      const stats = calculatePageStats(pageIndex, items, lines, viewport.width, viewport.height);
+      
+      // Check if scanned page
+      if (stats.isScanned && vlmConfig?.enabled) {
+        const vlmElements = await processScannedPage(pdf, pageIndex, vlmConfig);
+        return this.convertAnalyzedElements(vlmElements);
+      }
+      
+      // Classify elements
+      const elements = classifyPageElements(lines, stats);
+      
+      // Process low-confidence elements with VLM if enabled
+      if (vlmConfig?.enabled) {
+        const { highConfidence, lowConfidence } = identifyLowConfidenceElements(
+          elements,
+          vlmConfig.confidenceThreshold
+        );
+        
+        if (lowConfidence.length > 0) {
+          const improved = await processLowConfidenceElements(pdf, lowConfidence, vlmConfig);
+          return this.convertAnalyzedElements([...highConfidence, ...improved]);
+        }
+      }
+      
+      return this.convertAnalyzedElements(elements);
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      warnings.push(`Smart analysis failed for page ${pageIndex}: ${errMsg}`);
+      // Fallback to standard parsing
+      const page = await pdf.getPage(pageIndex + 1);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items
+        .filter((item: unknown): item is { str: string } => 
+          item !== null && typeof item === 'object' && 'str' in item
+        )
+        .map((item: { str: string }) => item.str)
+        .join(' ');
+      return this.parsePageContent(pageText, pageIndex);
+    }
+  }
+
+  /**
+   * Convert analyzed elements to ParsedContent format.
+   */
+  private convertAnalyzedElements(elements: AnalyzedElement[]): ParsedContent[] {
+    return elements.map(el => {
+      const base: ParsedContent = {
+        type: this.mapElementType(el.type),
+        content: el.content,
+        pageIndex: el.pageIndex,
+      };
+      
+      if (el.type === 'heading' && el.level) {
+        base.metadata = { level: el.level };
+      }
+      if (el.type === 'table' && el.columns) {
+        base.metadata = { columns: el.columns };
+      }
+      if (el.confidence < 0.8) {
+        base.metadata = { ...base.metadata, confidence: el.confidence };
+      }
+      if (el.vlmProcessed) {
+        base.metadata = { ...base.metadata, vlmProcessed: true };
+      }
+      
+      return base;
+    });
+  }
+
+  /**
+   * Map analyzed element type to ParsedContentType.
+   */
+  private mapElementType(type: AnalyzedElement['type']): ParsedContentType {
+    switch (type) {
+      case 'heading': return 'heading';
+      case 'paragraph': return 'text';
+      case 'formula': return 'equation'; // Map to equation type
+      case 'code': return 'code_block';
+      case 'table': return 'table';
+      case 'list': return 'list';
+      case 'image': return 'image';
+      case 'footnote': return 'footnote';
+      case 'caption': return 'caption';
+      default: return 'text';
+    }
   }
 
   /**
