@@ -13,7 +13,7 @@ Preflight MCP is a Model Context Protocol (MCP) server that transforms codebases
 ### Highlights
 - Sources: GitHub repos, local directories, PDF/DOCX/HTML
 - Paper + Code Pairing: search both sides jointly
-- Static Analysis: design patterns, architecture, test examples, configs, doc-code conflicts
+- Static Analysis: design patterns, architecture, test examples, configs
 - Hybrid Search: SQLite FTS5 + optional semantic search
 - LSP: code intelligence for Python/Go/Rust/TypeScript
 - Incremental indexing: re-index only changed files
@@ -25,7 +25,7 @@ MCP Server (resources + tools) → Bundle System (ingest, analyzers, search)
 ```
 
 - Ingest: repository/doc ingestion and normalization
-- Analyzers: GoF patterns, architectural, test examples, config, conflicts
+- Analyzers: GoF patterns, architectural, test examples, config
 - Search: FTS (always) + Semantic (optional)
 - LSP: external language servers (optional)
 
@@ -76,12 +76,11 @@ Bundles include static analysis results in `analysis/` directory:
 - `architectural.json` - architecture patterns
 - `test-examples.json` - extracted test examples
 - `config.json` - configuration analysis
-- `doc-conflicts.json` - documentation inconsistencies
 
 ## Bundle Layout
 ```
 OVERVIEW.md, START_HERE.md, AGENTS.md
-analysis/{gof-patterns.json, architectural.json, test-examples.json, config.json, doc-conflicts.json, SUMMARY.json}
+analysis/{gof-patterns.json, architectural.json, test-examples.json, config.json, SUMMARY.json}
 search.db, manifest.json, repos/*
 ```
 
@@ -214,7 +213,7 @@ Preflight MCP 是一个 MCP 服务器，把代码仓库、文档和论文转换�
 ### 特性
 - 多源支持：GitHub、本地目录、PDF/DOCX/HTML
 - 论文+代码配对检索
-- 静态分析：设计模式、架构、测试示例、配置、文档冲突
+- 静态分析：设计模式、架构、测试示例、配置
 - 混合检索：FTS + 语义搜索（可选）
 - LSP：Python/Go/Rust/TypeScript 代码智能
 - 增量索引：只重建变更文件
@@ -241,7 +240,6 @@ Bundle 包含 `analysis/` 目录下的静态分析结果：
 - `architectural.json` - 架构模式
 - `test-examples.json` - 测试示例
 - `config.json` - 配置分析
-- `doc-conflicts.json` - 文档冲突
 
 ## VLM 知识蒸馏（实验功能）
 

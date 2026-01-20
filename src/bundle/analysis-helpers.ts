@@ -131,7 +131,6 @@ export async function generateFactsBestEffort(params: {
  * - Architectural pattern detection  
  * - Test example extraction
  * - Configuration extraction
- * - Doc-code conflict detection
  * 
  * Results are written to analysis/*.json files.
  */
