@@ -94,7 +94,7 @@ export function extractImportsPython(root: Node): ImportRef[] {
 // Export Extraction
 // ============================================================================
 
-export function extractExportsPython(root: Node): string[] {
+function collectExplicitAllPython(root: Node): Set<string> {
   const out = new Set<string>();
   const addStringLiteral = (node: Node) => {
     const inner = node.namedChild(0);
@@ -129,22 +129,34 @@ export function extractExportsPython(root: Node): string[] {
     }
   }
 
-  if (out.size === 0) {
-    for (const fn of root.descendantsOfType('function_definition')) {
-      const name = fn.childForFieldName('name');
-      if (name && !name.text.startsWith('_')) {
-        out.add(name.text);
-      }
-    }
+  return out;
+}
 
-    for (const cls of root.descendantsOfType('class_definition')) {
-      const name = cls.childForFieldName('name');
-      if (name && !name.text.startsWith('_')) {
-        out.add(name.text);
-      }
+function collectPublicDefsPython(root: Node): Set<string> {
+  const out = new Set<string>();
+
+  for (const fn of root.descendantsOfType('function_definition')) {
+    const name = fn.childForFieldName('name');
+    if (name && !name.text.startsWith('_')) {
+      out.add(name.text);
     }
   }
 
+  for (const cls of root.descendantsOfType('class_definition')) {
+    const name = cls.childForFieldName('name');
+    if (name && !name.text.startsWith('_')) {
+      out.add(name.text);
+    }
+  }
+
+  return out;
+}
+
+export function extractExportsPython(root: Node): string[] {
+  const out = collectExplicitAllPython(root);
+  for (const name of collectPublicDefsPython(root)) {
+    out.add(name);
+  }
   return Array.from(out);
 }
 
@@ -208,7 +220,9 @@ function extractClassMethodsPython(classNode: Node): SymbolOutline[] {
 
 export function extractOutlinePython(root: Node): SymbolOutline[] {
   const outline: SymbolOutline[] = [];
-  const exportedNames = new Set(extractExportsPython(root));
+  const explicitAll = collectExplicitAllPython(root);
+  const exportedNames =
+    explicitAll.size > 0 ? explicitAll : collectPublicDefsPython(root);
 
   for (const child of root.namedChildren) {
     if (child.type === 'function_definition') {
