@@ -55,7 +55,7 @@ export type DocIssueSeverity = 'error' | 'warning' | 'info';
 /**
  * Supported languages for documentation checking.
  */
-export type DocCheckLanguage = 'typescript' | 'javascript' | 'python';
+export type DocCheckLanguage = 'typescript' | 'javascript' | 'python' | 'java';
 
 /**
  * Python docstring styles.

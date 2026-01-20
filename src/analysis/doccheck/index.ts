@@ -2,7 +2,7 @@
  * Documentation Check Module
  *
  * Provides tools for checking documentation-code consistency.
- * Supports TypeScript/JavaScript JSDoc and Python docstrings.
+ * Supports TypeScript/JavaScript JSDoc, Python docstrings, and Java Javadoc.
  *
  * @module analysis/doccheck
  */
@@ -35,6 +35,7 @@ export {
 
 export { TypeScriptDocChecker, createTypeScriptDocChecker } from './ts-checker.js';
 export { PythonDocChecker, createPythonDocChecker } from './python/index.js';
+export { JavaDocChecker, createJavaDocChecker } from './java/index.js';
 
 // ============================================================================
 // Unified Checker
@@ -46,6 +47,7 @@ import { minimatch } from 'minimatch';
 import { createModuleLogger } from '../../logging/logger.js';
 import { createTypeScriptDocChecker } from './ts-checker.js';
 import { createPythonDocChecker } from './python/index.js';
+import { createJavaDocChecker } from './java/index.js';
 import type { AnalysisContext } from '../cache/index.js';
 import type {
   DocCheckOptions,
@@ -72,6 +74,7 @@ const EXT_TO_LANGUAGE: Record<string, DocCheckLanguage> = {
   '.mjs': 'javascript',
   '.cjs': 'javascript',
   '.py': 'python',
+  '.java': 'java',
 };
 
 /**
@@ -92,6 +95,7 @@ export async function checkDocumentation(
   // Group files by language
   const tsFiles: string[] = [];
   const pyFiles: string[] = [];
+  const javaFiles: string[] = [];
 
   for (const file of files) {
     const ext = path.extname(file).toLowerCase();
@@ -101,6 +105,8 @@ export async function checkDocumentation(
       tsFiles.push(file);
     } else if (lang === 'python') {
       pyFiles.push(file);
+    } else if (lang === 'java') {
+      javaFiles.push(file);
     }
   }
 
@@ -119,6 +125,13 @@ export async function checkDocumentation(
     const pyChecker = createPythonDocChecker(opts, context);
     const pyResults = await pyChecker.checkFiles(pyFiles, context);
     allResults.push(...pyResults);
+  }
+
+  // Check Java files (with context for AST caching)
+  if (javaFiles.length > 0) {
+    const javaChecker = createJavaDocChecker(opts, context);
+    const javaResults = await javaChecker.checkFiles(javaFiles, context);
+    allResults.push(...javaResults);
   }
 
   // Aggregate results
@@ -249,6 +262,7 @@ function computeSummary(files: FileCheckResult[], issues: DocIssue[]): DocCheckS
     typescript: 0,
     javascript: 0,
     python: 0,
+    java: 0,
   };
 
   for (const issue of issues) {
