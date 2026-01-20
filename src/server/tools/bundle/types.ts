@@ -11,16 +11,16 @@ import * as z from 'zod';
 export const CreateRepoInputSchema = z.union([
   z.object({
     kind: z.literal('github'),
-    repo: z.string().describe('GitHub repo in owner/repo form (or github.com/owner/repo URL).'),
-    ref: z.string().optional().describe('Optional git ref (branch/tag).'),
+    repo: z.string().describe('GitHub repo in "owner/repo" format. Example: "facebook/react"'),
+    ref: z.string().optional().describe('Git branch or tag. Example: "main", "v18.0.0"'),
   }),
   z.object({
     kind: z.literal('local'),
     repo: z
       .string()
-      .describe('Logical repo id in owner/repo form (used for storage layout and de-dup).'),
-    path: z.string().describe('Local directory path containing the repository files.'),
-    ref: z.string().optional().describe('Optional label/ref for the local snapshot.'),
+      .describe('Logical identifier in "owner/repo" format for indexing. Example: "myteam/myproject"'),
+    path: z.string().describe('Absolute path to local directory. Example: "C:\\Projects\\myproject" or "/home/user/myproject"'),
+    ref: z.string().optional().describe('Optional version label. Example: "v1.0", "dev"'),
   }),
 ]);
 

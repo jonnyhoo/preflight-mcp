@@ -27,11 +27,13 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
     'preflight_create_bundle',
     {
       title: 'Create bundle',
-      description: 'Create a new bundle from GitHub repos, local directories, or document files (PDF/Office). ' +
-        '**Safe to call proactively** - use `ifExists: "returnExisting"` to avoid duplicates. ' +
-        'Bundle creation is a **read-only collection** operation (clones repo, builds index, generates guides). ' +
-        'When user asks to analyze/understand a project, create the bundle first if it does not exist. ' +
-        'Use when: "analyze this repo", "understand this codebase", "index project", "分析项目", "理解代码", "analyze PDF".',
+      description: 'Create a bundle from GitHub repos, local directories, or documents.\n\n' +
+        '**Examples:**\n' +
+        '- GitHub: `{"repos": [{"kind": "github", "repo": "owner/repo"}]}`\n' +
+        '- Local: `{"repos": [{"kind": "local", "repo": "my/project", "path": "C:\\\\path\\\\to\\\\dir"}]}`\n' +
+        '- With ref: `{"repos": [{"kind": "github", "repo": "owner/repo", "ref": "main"}]}`\n\n' +
+        '**Options:** `ifExists: "returnExisting"` to reuse existing bundle.\n' +
+        'Use when: "analyze repo", "index project", "分析项目", "理解代码".',
       inputSchema: CreateBundleInputSchema,
       outputSchema: {
         bundleId: z.string().optional(),
