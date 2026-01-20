@@ -8,6 +8,25 @@ import * as z from 'zod';
 // Input Schemas
 // ==========================================================================
 
+/**
+ * Web crawl configuration options.
+ * Controls how documentation sites are crawled.
+ */
+export const WebCrawlConfigSchema = z.object({
+  /** Maximum pages to crawl (default: 500) */
+  maxPages: z.number().int().min(1).max(5000).optional()
+    .describe('Max pages to crawl. Default: 500'),
+  /** Maximum crawl depth from baseUrl (default: 5) */
+  maxDepth: z.number().int().min(1).max(20).optional()
+    .describe('Max depth from base URL. Default: 5'),
+  /** URL patterns to include (e.g., ["/docs/", "/api/"]) */
+  includePatterns: z.array(z.string()).optional()
+    .describe('URL patterns to include. Example: ["/docs/", "/api/"]'),
+  /** URL patterns to exclude (e.g., ["/blog/", "/changelog/"]) */
+  excludePatterns: z.array(z.string()).optional()
+    .describe('URL patterns to exclude. Example: ["/blog/", "/changelog/"]'),
+}).strict().optional();
+
 export const CreateRepoInputSchema = z.union([
   z.object({
     kind: z.literal('github'),
@@ -21,6 +40,11 @@ export const CreateRepoInputSchema = z.union([
       .describe('Logical identifier in "owner/repo" format for indexing. Example: "myteam/myproject"'),
     path: z.string().describe('Absolute path to local directory. Example: "C:\\Projects\\myproject" or "/home/user/myproject"'),
     ref: z.string().optional().describe('Optional version label. Example: "v1.0", "dev"'),
+  }),
+  z.object({
+    kind: z.literal('web'),
+    url: z.string().url().describe('Documentation site URL to crawl. Example: "https://docs.example.com"'),
+    config: WebCrawlConfigSchema.describe('Optional crawl configuration'),
   }),
 ]);
 

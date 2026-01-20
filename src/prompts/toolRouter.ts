@@ -61,12 +61,12 @@ export const TOOL_REGISTRY: ToolInfo[] = [
   {
     name: 'preflight_create_bundle',
     category: 'bundle',
-    description: 'Create a new bundle from GitHub repos or local directories. This is the entry point for analyzing any project.',
-    keywords: ['create', 'bundle', 'index', 'ingest', 'new', 'add', 'analyze', 'learn'],
-    chineseKeywords: ['创建', '新建', '索引', '添加', '导入', '分析', '学习', '了解'],
+    description: 'Create a new bundle from GitHub repos, local directories, or web documentation sites. This is the entry point for analyzing any project or crawling documentation.',
+    keywords: ['create', 'bundle', 'index', 'ingest', 'new', 'add', 'analyze', 'learn', 'crawl', 'web', 'docs', 'documentation', 'website', 'site'],
+    chineseKeywords: ['创建', '新建', '索引', '添加', '导入', '分析', '学习', '了解', '爬取', '爬虫', '文档', '网站', '网页'],
     requires: 'none',
     mutating: true,
-    whenToUse: 'Use when user wants to analyze/learn/understand a new project (local or GitHub). This indexes the project for all subsequent analysis.',
+    whenToUse: 'Use when user wants to: (1) analyze a project (local/GitHub), (2) crawl web documentation site, (3) learn about any codebase or docs. Supports llms.txt fast path for optimized doc sites.',
     nextSteps: [
       'IMMEDIATELY after: use preflight_get_overview to understand the project',
       'For deep code analysis: use preflight_build_call_graph',
@@ -409,6 +409,18 @@ export function generateRoutingPrompt(categories?: ToolCategory[]): string {
   lines.push('Step 1: preflight_parse_document      → Extract content from file');
   lines.push('```');
   lines.push('');
+
+  // Workflow 5: Web Documentation Crawling
+  lines.push('### Workflow 5: Crawl Web Documentation ("爬取文档", "crawl docs", "index website")');
+  lines.push('```');
+  lines.push('Step 1: preflight_create_bundle       → kind="web", url="https://docs.example.com"');
+  lines.push('        Optional: config.includePatterns=["/api/"] to filter URLs');
+  lines.push('        Optional: config.maxPages=100 to limit crawl scope');
+  lines.push('Step 2: preflight_get_overview        → Read crawled documentation');
+  lines.push('Step 3: preflight_search_and_read     → Search within crawled docs');
+  lines.push('```');
+  lines.push('Note: Supports llms.txt standard for optimized crawling.');
+  lines.push('');
   
   // Decision Tree
   lines.push('## 🧠 Quick Decision Tree');
@@ -424,6 +436,7 @@ export function generateRoutingPrompt(categories?: ToolCategory[]): string {
   lines.push('- See module dependencies → `preflight_dependency_graph`');
   lines.push('- Read specific file → `preflight_read_file`');
   lines.push('- Parse document file → `preflight_parse_document`');
+  lines.push('- Crawl web documentation → `preflight_create_bundle` with kind="web"');
   lines.push('');
   
   // Tool Reference
@@ -518,7 +531,22 @@ export function suggestWorkflow(task: string): string[] {
     return steps;
   }
 
-  // === Priority 4: Document Parsing ===
+  // === Priority 4: Web Documentation Crawling ===
+  if (lower.includes('crawl') || lower.includes('爬取') || lower.includes('爬虫') || lower.includes('website') ||
+      lower.includes('网站') || lower.includes('网页') || lower.includes('docs site') || lower.includes('documentation site')) {
+    steps.push('1. `preflight_create_bundle` - Crawl the documentation site');
+    steps.push('   - kind: "web"');
+    steps.push('   - url: "https://docs.example.com"');
+    steps.push('   - Optional config.includePatterns: ["/api/", "/guide/"]');
+    steps.push('   - Optional config.maxPages: 100');
+    steps.push('2. `preflight_get_overview` - Read crawled documentation');
+    steps.push('3. `preflight_search_and_read` - Search within crawled docs');
+    steps.push('');
+    steps.push('💡 Supports llms.txt standard for faster crawling of compatible sites.');
+    return steps;
+  }
+
+  // === Priority 5: Document Parsing ===
   if (lower.includes('pdf') || lower.includes('document') || lower.includes('word') || lower.includes('excel') ||
       lower.includes('文档') || lower.includes('解析')) {
     steps.push('1. `preflight_parse_document` - Parse the document file');
@@ -527,14 +555,14 @@ export function suggestWorkflow(task: string): string[] {
     return steps;
   }
 
-  // === Priority 5: Search ===
+  // === Priority 6: Search ===
   if (lower.includes('search') || lower.includes('find') || lower.includes('查找') || lower.includes('搜索') || lower.includes('找')) {
     steps.push('1. `preflight_list_bundles` - Find the bundleId');
     steps.push('2. `preflight_search_and_read` - Search and read matching content');
     return steps;
   }
 
-  // === Priority 6: Architecture/Dependencies ===
+  // === Priority 7: Architecture/Dependencies ===
   if (lower.includes('architecture') || lower.includes('架构') || lower.includes('dependency') || lower.includes('依赖图') ||
       lower.includes('import') || lower.includes('module')) {
     steps.push('1. `preflight_list_bundles` - Find the bundleId');

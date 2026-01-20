@@ -27,13 +27,14 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
     'preflight_create_bundle',
     {
       title: 'Create bundle',
-      description: 'Create a bundle from GitHub repos, local directories, or documents.\n\n' +
+      description: 'Create a bundle from GitHub repos, local directories, documents, or web documentation sites.\n\n' +
         '**Examples:**\n' +
         '- GitHub: `{"repos": [{"kind": "github", "repo": "owner/repo"}]}`\n' +
         '- Local: `{"repos": [{"kind": "local", "repo": "my/project", "path": "C:\\\\path\\\\to\\\\dir"}]}`\n' +
-        '- With ref: `{"repos": [{"kind": "github", "repo": "owner/repo", "ref": "main"}]}`\n\n' +
+        '- Web docs: `{"repos": [{"kind": "web", "url": "https://docs.example.com"}]}`\n' +
+        '- Web with filter: `{"repos": [{"kind": "web", "url": "https://docs.example.com", "config": {"includePatterns": ["/api/"], "maxPages": 100}}]}`\n\n' +
         '**Options:** `ifExists: "returnExisting"` to reuse existing bundle.\n' +
-        'Use when: "analyze repo", "index project", "分析项目", "理解代码".',
+        'Use when: "analyze repo", "index project", "crawl docs", "分析项目", "理解代码", "爬取文档".',
       inputSchema: CreateBundleInputSchema,
       outputSchema: {
         bundleId: z.string().optional(),
@@ -47,11 +48,15 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
         }).optional(),
         repos: z.array(
           z.object({
-            kind: z.enum(['github', 'local']),
+            kind: z.enum(['github', 'local', 'web']),
             id: z.string(),
-            source: z.enum(['git', 'archive', 'local']).optional(),
+            source: z.enum(['git', 'archive', 'local', 'crawl']).optional(),
             headSha: z.string().optional(),
             notes: z.array(z.string()).optional(),
+            // Web-specific fields
+            baseUrl: z.string().optional(),
+            pageCount: z.number().optional(),
+            usedLlmsTxt: z.boolean().optional(),
           })
         ).optional(),
         warnings: z.array(z.string()).optional(),

@@ -2,6 +2,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { WebCrawlConfig } from '../web/types.js';
 
+/**
+ * Input configuration for web crawling (used in RepoInput).
+ * Excludes baseUrl since it's provided separately via the 'url' field.
+ */
+export type WebCrawlInputConfig = Omit<WebCrawlConfig, 'baseUrl'>;
+
 // =============================================================================
 // Manifest Cache - LRU cache to avoid repeated disk reads during listBundles
 // =============================================================================
@@ -150,7 +156,7 @@ export type RepoInput =
        */
       kind: 'web';
       url: string; // base URL to crawl
-      config?: WebCrawlConfig; // optional crawl configuration
+      config?: WebCrawlInputConfig; // optional crawl configuration (baseUrl is provided via 'url')
     };
 
 export type BundleIndexConfig = {
