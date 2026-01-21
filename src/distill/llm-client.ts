@@ -130,6 +130,10 @@ export function buildCardGenerationPrompt(ctx: {
   overview: string;
   architectureSummary?: string;
   designPatterns?: string[];
+  entryPoints?: string[];
+  coreTypes?: string[];
+  publicAPIs?: string[];
+  features?: Array<{ name: string; desc?: string }>;
   readme?: string;
 }): string {
   const parts = [
@@ -140,6 +144,16 @@ export function buildCardGenerationPrompt(ctx: {
   parts.push('\n--- OVERVIEW ---', ctx.overview);
   if (ctx.architectureSummary) parts.push('\n--- ARCHITECTURE ---', ctx.architectureSummary);
   if (ctx.designPatterns?.length) parts.push('\n--- PATTERNS ---', ctx.designPatterns.join(', '));
+
+  // Include structured extraction results for better keyAPIs generation
+  if (ctx.entryPoints?.length) parts.push('\n--- ENTRY POINTS ---', ctx.entryPoints.join(', '));
+  if (ctx.coreTypes?.length) parts.push('\n--- CORE TYPES ---', ctx.coreTypes.join(', '));
+  if (ctx.publicAPIs?.length) parts.push('\n--- PUBLIC APIs ---', ctx.publicAPIs.join(', '));
+  if (ctx.features?.length) {
+    const featureList = ctx.features.map(f => f.desc ? `${f.name}: ${f.desc}` : f.name);
+    parts.push('\n--- FEATURES/SKILLS ---', featureList.join('\n'));
+  }
+
   if (ctx.readme) parts.push('\n--- README ---', ctx.readme);
   parts.push('\nGenerate a knowledge card. For keyAPIs, list the main features/skills/commands users would search for (e.g., skill names, CLI commands, core functions).');
   return parts.join('\n');
