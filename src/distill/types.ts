@@ -94,6 +94,7 @@ export interface BundleContext {
   entryPoints?: string[];
   coreTypes?: string[];
   publicAPIs?: string[];
+  features?: string[]; // Extracted from skills/, commands/, plugins/ directories
   tags?: string[];
   readme?: string;
 }

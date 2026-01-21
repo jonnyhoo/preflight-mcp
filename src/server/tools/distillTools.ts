@@ -58,6 +58,9 @@ export function registerDistillTools({ server }: ToolDependencies): void {
         const exported = exportCardForRAG(result.card);
 
         // Build response based on format
+        const safeRepoId = result.card.repoId.replace(/\//g, '~');
+        const cardPath = `cards/${safeRepoId}/CARD.json`;
+
         let textResponse = '';
         if (result.saved) {
           textResponse = `✅ Card generated: ${result.card.name}\n`;
@@ -71,6 +74,8 @@ export function registerDistillTools({ server }: ToolDependencies): void {
             textResponse += `⚠️ Card may be stale - regenerate with \`regenerate: true\`\n`;
           }
         }
+        textResponse += `\n📁 Path: ${cardPath}\n`;
+        textResponse += `💡 Read with: preflight_read_file({bundleId: "${args.bundleId}", file: "${cardPath}"})`;
 
         if (format === 'markdown') {
           textResponse += '\n---\n' + exported.markdown;

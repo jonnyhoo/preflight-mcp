@@ -426,6 +426,9 @@ export async function runAllAnalyzers(
     });
   }
 
+  // Sync architectural patterns with FACTS.json for consistency
+  await syncArchitecturalWithFacts(bundleRoot, analyzerEntries);
+
   // Generate overall summary
   const overallSummary = generateOverallSummary(analyzerEntries);
 
@@ -450,6 +453,40 @@ export async function runAllAnalyzers(
   });
 
   return result;
+}
+
+/**
+ * Sync architectural patterns summary with FACTS.json for consistency.
+ * If FACTS.json has patterns but analyzer didn't detect any, update the summary.
+ */
+async function syncArchitecturalWithFacts(
+  bundleRoot: string,
+  entries: AnalyzerSummaryEntry[]
+): Promise<void> {
+  const factsPath = path.join(bundleRoot, 'analysis', 'FACTS.json');
+
+  try {
+    const content = await fs.readFile(factsPath, 'utf8');
+    const facts = JSON.parse(content) as { patterns?: string[] };
+
+    if (!facts.patterns || facts.patterns.length === 0) return;
+
+    const archEntry = entries.find((e) => e.analyzerName === 'Architectural Patterns');
+    if (!archEntry) return;
+
+    // If architectural analyzer didn't find patterns, use FACTS patterns
+    const noPatterns = archEntry.summary.toLowerCase().includes('no architectural patterns');
+    if (noPatterns) {
+      archEntry.summary = `Detected ${facts.patterns.length} architectural patterns: ${facts.patterns.join(', ')}.`;
+      archEntry.highlights = facts.patterns.map((p) => ({
+        type: 'architectural',
+        description: p,
+        confidence: 0.8,
+      }));
+    }
+  } catch {
+    // FACTS.json may not exist yet - that's fine
+  }
 }
 
 /**

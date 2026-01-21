@@ -133,7 +133,7 @@ const MAX_DOC_DEPTH = 3;
 
 /** Key section patterns (Chinese + English) */
 const KEY_SECTION_PATTERNS = [
-  /how.*work|feature|what.*inside|功能|特性/i,
+  /how.*work|workflow|feature|what.*inside|skills|功能|特性|工作流|技能/i,
   /install|usage|getting.*start|安装|使用|快速开始/i,
   /philosoph|design|principle|设计|原理|哲学/i,
 ];
@@ -305,9 +305,37 @@ function extractReadmeContent(
   let totalChars = 0;
   let sectionCount = 0;
 
-  // 1. Try to match key sections
+  // 0. Extract project description from intro or first # heading
+  let introContent: string | null = null;
+
+  // Try content before first heading
+  const intro = sections.find((s) => s.heading === '' && s.level === 0);
+  if (intro) {
+    introContent = cleanSectionContent(intro.lines);
+  }
+
+  // Fallback: first # level heading content (common pattern: # ProjectName + description)
+  if (!introContent) {
+    const firstH1 = sections.find((s) => s.level === 1);
+    if (firstH1) {
+      introContent = cleanSectionContent(firstH1.lines);
+    }
+  }
+
+  if (introContent) {
+    const truncated = truncateText(introContent, MAX_SECTION_CHARS);
+    results.push(truncated);
+    totalChars += truncated.length;
+    sectionCount++;
+  }
+
+  // 1. Try to match key sections (only top-level ## sections, not ### sub-sections)
   const keySections = sections.filter(
-    (s) => s.heading && isKeySection(s.heading) && !shouldSkipSection(s.heading)
+    (s) =>
+      s.heading &&
+      s.level <= 2 &&
+      isKeySection(s.heading) &&
+      !shouldSkipSection(s.heading)
   );
 
   for (const section of keySections) {

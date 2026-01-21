@@ -125,7 +125,7 @@ export async function extractBundleContext(
       bundleId,
       repoId: effectiveRepoId,
       name: manifest.displayName || effectiveRepoId,
-      language: manifest.primaryLanguage || facts.languages?.[0]?.language || 'Unknown',
+      language: facts.languages?.[0]?.language || manifest.primaryLanguage || 'Unknown',
       frameworks: facts.frameworks || [],
       overview: truncated.overview,
       architectureSummary: truncated.architectureSummary,
@@ -133,6 +133,7 @@ export async function extractBundleContext(
       entryPoints: entryPointFiles.length > 0 ? entryPointFiles : undefined,
       coreTypes: coreTypeNames.length > 0 ? coreTypeNames : undefined,
       publicAPIs: publicAPINames.length > 0 ? publicAPINames : undefined,
+      features: facts.features,
       tags: manifest.tags,
       readme: truncated.readme,
     },
@@ -225,6 +226,25 @@ export async function loadRepoCard(bundleId: string, repoId: string): Promise<Re
   } catch {
     return null;
   }
+}
+
+/**
+ * Merge LLM-generated keyAPIs with extracted features from directories.
+ * LLM keyAPIs come first (preserving importance order), then additional features.
+ */
+function mergeKeyAPIsWithFeatures(keyAPIs: string[], features?: string[]): string[] {
+  if (!features || features.length === 0) return keyAPIs;
+
+  // Combine and deduplicate (case-insensitive), preserving LLM order for existing items
+  const seen = new Set(keyAPIs.map((k) => k.toLowerCase()));
+  const merged = [...keyAPIs];
+
+  // Add features not already in keyAPIs (sorted for consistency)
+  const additionalFeatures = features
+    .filter((f) => !seen.has(f.toLowerCase()))
+    .sort();
+
+  return [...merged, ...additionalFeatures];
 }
 
 export function mergeCardUpdates(existing: RepoCard, updates: Partial<RepoCard>): RepoCard {
@@ -380,7 +400,7 @@ export async function generateRepoCard(
     designHighlights: base?.designHighlights ?? partial.designHighlights ?? [],
     limitations: base?.limitations ?? partial.limitations ?? [],
     quickStart: base?.quickStart ?? partial.quickStart ?? 'See README',
-    keyAPIs: base?.keyAPIs ?? partial.keyAPIs ?? [],
+    keyAPIs: mergeKeyAPIsWithFeatures(base?.keyAPIs ?? partial.keyAPIs ?? [], context.features),
     whyIChoseIt: existing?.whyIChoseIt,
     personalNotes: existing?.personalNotes,
     rating: existing?.rating,

@@ -23,6 +23,7 @@ export type BundleFacts = {
   dependencies: DependencyInfo;
   fileStructure: FileStructureInfo;
   frameworks: string[];
+  features?: string[]; // Extracted from skills/, commands/, plugins/ directories
   modules?: ModuleInfo[]; // Phase 2: Module analysis
   patterns?: string[]; // Phase 2: Architecture patterns
   techStack?: TechStackInfo; // Phase 2: Technology stack
@@ -484,6 +485,66 @@ function detectFrameworks(deps: DependencyInfo, files: IngestedFile[]): string[]
 }
 
 /**
+ * Detect AI agent platforms from directory structure and config files
+ */
+function detectAgentPlatforms(files: IngestedFile[]): string[] {
+  const platforms = new Set<string>();
+  const pathSet = new Set(files.map((f) => f.repoRelativePath.toLowerCase()));
+  const dirSet = new Set<string>();
+
+  for (const file of files) {
+    const parts = file.repoRelativePath.split('/');
+    if (parts.length > 0) {
+      dirSet.add(parts[0]!.toLowerCase());
+    }
+  }
+
+  // Claude Code: .claude-plugin/ directory
+  if (dirSet.has('.claude-plugin')) platforms.add('Claude Code');
+
+  // Codex: .codex/ directory
+  if (dirSet.has('.codex')) platforms.add('Codex');
+
+  // OpenCode: .opencode/ directory
+  if (dirSet.has('.opencode')) platforms.add('OpenCode');
+
+  // Cursor: .cursor/ directory or .cursorrules file
+  if (dirSet.has('.cursor') || pathSet.has('.cursorrules')) platforms.add('Cursor');
+
+  // Windsurf: .windsurfrules file
+  if (pathSet.has('.windsurfrules')) platforms.add('Windsurf');
+
+  return Array.from(platforms).sort();
+}
+
+/**
+ * Extract feature/skill names from well-known directories
+ */
+function extractFeatureNames(files: IngestedFile[]): string[] {
+  const features = new Set<string>();
+
+  // Well-known feature directories
+  const featureDirs = ['skills', 'commands', 'plugins', 'features', 'agents'];
+
+  for (const file of files) {
+    const parts = file.repoRelativePath.split('/');
+    // Need at least 3 parts: topDir/subDir/file (ensures subDir is a directory, not a file)
+    if (parts.length < 3) continue;
+
+    const topDir = parts[0]!.toLowerCase();
+    const subDir = parts[1]!;
+
+    // Check if top-level dir is a feature directory
+    if (featureDirs.includes(topDir) && subDir && !subDir.startsWith('.')) {
+      // Extract subdirectory name as feature (e.g., "brainstorming" from "skills/brainstorming/SKILL.md")
+      features.add(subDir);
+    }
+  }
+
+  return Array.from(features).sort();
+}
+
+/**
  * Extract all facts from a bundle
  */
 export async function extractBundleFacts(params: {
@@ -521,6 +582,15 @@ export async function extractBundleFacts(params: {
     const docFrameworks = detectDocFrameworks(allFiles);
     frameworks = [...new Set([...frameworks, ...docFrameworks])].sort();
   }
+
+  // Always detect AI agent platforms (lightweight check)
+  const agentPlatforms = detectAgentPlatforms(allFiles);
+  if (agentPlatforms.length > 0) {
+    frameworks = [...new Set([...frameworks, ...agentPlatforms])].sort();
+  }
+
+  // Extract feature/skill names from well-known directories
+  const features = extractFeatureNames(allFiles);
 
   // Phase 2: Module analysis (optional, more expensive)
   let modules: ModuleInfo[] | undefined;
@@ -609,6 +679,7 @@ export async function extractBundleFacts(params: {
     dependencies,
     fileStructure,
     frameworks,
+    features: features.length > 0 ? features : undefined,
     modules,
     patterns,
     techStack,

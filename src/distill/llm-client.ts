@@ -120,6 +120,8 @@ RULES:
 2. If uncertain, write "Unknown"
 3. NEVER include source code or secrets
 4. Focus on "what" and "why", not "how"
+5. keyAPIs: Extract core features, skills, commands, or API names that users would search for
+6. Look for supported platforms/tools in README (e.g., "works with X", "plugin for Y")
 
 Output format:
 {"oneLiner":"...","problemSolved":"...","useCases":[],"designHighlights":[],"limitations":[],"quickStart":"...","keyAPIs":[]}`;
@@ -142,7 +144,7 @@ export function buildCardGenerationPrompt(ctx: {
   if (ctx.architectureSummary) parts.push('\n--- ARCHITECTURE ---', ctx.architectureSummary);
   if (ctx.designPatterns?.length) parts.push('\n--- PATTERNS ---', ctx.designPatterns.join(', '));
   if (ctx.readme) parts.push('\n--- README ---', ctx.readme);
-  parts.push('\nGenerate a knowledge card for this repository.');
+  parts.push('\nGenerate a knowledge card. For keyAPIs, list the main features/skills/commands users would search for (e.g., skill names, CLI commands, core functions).');
   return parts.join('\n');
 }
 
