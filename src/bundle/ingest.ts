@@ -35,6 +35,11 @@ const DEFAULT_IGNORE = [
   'venv/',
   '.idea/',
   '.vscode/',
+  // Documentation tool outputs
+  'site/',        // MkDocs
+  '_site/',       // Jekyll
+  '_book/',       // GitBook
+  'public/',      // Hugo (common output)
 ];
 
 function toPosix(p: string): string {

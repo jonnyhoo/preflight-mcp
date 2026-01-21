@@ -86,12 +86,13 @@ export type TechStackInfo = {
 };
 
 /**
- * Detect programming languages from file extensions
+ * Detect languages from file extensions (includes both code and doc languages)
  */
 function detectLanguages(files: IngestedFile[]): LanguageStats[] {
-  const langMap = new Map<string, Set<string>>();
+  const langMap = new Map<string, { exts: Set<string>; kind: 'code' | 'doc' }>();
 
-  const extToLang: Record<string, string> = {
+  // Code language mappings
+  const codeExtToLang: Record<string, string> = {
     '.ts': 'TypeScript',
     '.tsx': 'TypeScript',
     '.js': 'JavaScript',
@@ -118,22 +119,45 @@ function detectLanguages(files: IngestedFile[]): LanguageStats[] {
     '.zsh': 'Shell',
   };
 
+  // Doc language mappings (aligned with detectDocTypes)
+  const docExtToLang: Record<string, string> = {
+    '.md': 'Markdown',
+    '.mdx': 'Markdown',
+    '.rst': 'reStructuredText',
+    '.adoc': 'AsciiDoc',
+    '.txt': 'Plain Text',
+  };
+
+  // Process code files
   for (const file of files) {
     if (file.kind !== 'code') continue;
     const ext = path.extname(file.repoRelativePath).toLowerCase();
-    const lang = extToLang[ext] || 'Other';
+    const lang = codeExtToLang[ext] || 'Other';
 
     if (!langMap.has(lang)) {
-      langMap.set(lang, new Set());
+      langMap.set(lang, { exts: new Set(), kind: 'code' });
     }
-    langMap.get(lang)!.add(ext);
+    langMap.get(lang)!.exts.add(ext);
+  }
+
+  // Process doc files (merge into languages for unified view)
+  for (const file of files) {
+    if (file.kind !== 'doc') continue;
+    const ext = path.extname(file.repoRelativePath).toLowerCase();
+    const lang = docExtToLang[ext];
+    if (!lang) continue;
+
+    if (!langMap.has(lang)) {
+      langMap.set(lang, { exts: new Set(), kind: 'doc' });
+    }
+    langMap.get(lang)!.exts.add(ext);
   }
 
   return Array.from(langMap.entries())
-    .map(([language, exts]) => ({
+    .map(([language, { exts, kind }]) => ({
       language,
       fileCount: files.filter(
-        (f) => f.kind === 'code' && exts.has(path.extname(f.repoRelativePath).toLowerCase())
+        (f) => f.kind === kind && exts.has(path.extname(f.repoRelativePath).toLowerCase())
       ).length,
       extensions: Array.from(exts).sort(),
     }))
