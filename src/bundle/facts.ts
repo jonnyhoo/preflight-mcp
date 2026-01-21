@@ -16,7 +16,9 @@ import {
 export type BundleFacts = {
   version: string;
   timestamp: string;
+  projectType?: 'code' | 'documentation' | 'mixed';
   languages: LanguageStats[];
+  docTypes?: Array<{ docType: string; fileCount: number; extensions: string[] }>;
   entryPoints: EntryPoint[];
   dependencies: DependencyInfo;
   fileStructure: FileStructureInfo;
@@ -111,6 +113,9 @@ function detectLanguages(files: IngestedFile[]): LanguageStats[] {
     '.swift': 'Swift',
     '.kt': 'Kotlin',
     '.scala': 'Scala',
+    '.sh': 'Shell',
+    '.bash': 'Shell',
+    '.zsh': 'Shell',
   };
 
   for (const file of files) {
@@ -328,6 +333,102 @@ function analyzeFileStructure(files: IngestedFile[]): FileStructureInfo {
 }
 
 /**
+ * Detect document types from files
+ */
+function detectDocTypes(files: IngestedFile[]): Array<{ docType: string; fileCount: number; extensions: string[] }> {
+  const docTypeMap = new Map<string, Set<string>>();
+
+  const extToDocType: Record<string, string> = {
+    '.md': 'Markdown',
+    '.mdx': 'Markdown',
+    '.rst': 'reStructuredText',
+    '.adoc': 'AsciiDoc',
+    '.txt': 'Plain Text',
+  };
+
+  for (const file of files) {
+    if (file.kind !== 'doc') continue;
+    const ext = path.extname(file.repoRelativePath).toLowerCase();
+    const docType = extToDocType[ext];
+    if (!docType) continue;
+
+    if (!docTypeMap.has(docType)) {
+      docTypeMap.set(docType, new Set());
+    }
+    docTypeMap.get(docType)!.add(ext);
+  }
+
+  return Array.from(docTypeMap.entries())
+    .map(([docType, exts]) => ({
+      docType,
+      fileCount: files.filter(
+        (f) => f.kind === 'doc' && exts.has(path.extname(f.repoRelativePath).toLowerCase())
+      ).length,
+      extensions: Array.from(exts).sort(),
+    }))
+    .sort((a, b) => b.fileCount - a.fileCount);
+}
+
+/**
+ * Detect project type based on code/doc ratio
+ */
+function detectProjectType(fileStructure: FileStructureInfo): 'code' | 'documentation' | 'mixed' {
+  const { totalCode, totalDocs } = fileStructure;
+
+  if (totalDocs === 0 && totalCode === 0) return 'mixed';
+  if (totalDocs > totalCode * 2) return 'documentation';
+  if (totalCode > totalDocs * 2) return 'code';
+  return 'mixed';
+}
+
+/**
+ * Detect documentation frameworks from file patterns
+ */
+function detectDocFrameworks(files: IngestedFile[]): string[] {
+  const frameworks = new Set<string>();
+  const pathSet = new Set(files.map((f) => f.repoRelativePath.toLowerCase()));
+  const dirSet = new Set<string>();
+
+  for (const file of files) {
+    const parts = file.repoRelativePath.split('/');
+    for (let i = 1; i <= parts.length; i++) {
+      dirSet.add(parts.slice(0, i).join('/').toLowerCase());
+    }
+  }
+
+  // MkDocs: mkdocs.yml
+  if (pathSet.has('mkdocs.yml') || pathSet.has('mkdocs.yaml')) {
+    frameworks.add('MkDocs');
+  }
+
+  // Docusaurus: docusaurus.config.*
+  if (
+    pathSet.has('docusaurus.config.js') ||
+    pathSet.has('docusaurus.config.ts') ||
+    pathSet.has('docusaurus.config.mjs')
+  ) {
+    frameworks.add('Docusaurus');
+  }
+
+  // Jekyll: _config.yml + _layouts/
+  if (pathSet.has('_config.yml') && dirSet.has('_layouts')) {
+    frameworks.add('Jekyll');
+  }
+
+  // VuePress: docs/.vuepress/
+  if (dirSet.has('docs/.vuepress') || dirSet.has('.vuepress')) {
+    frameworks.add('VuePress');
+  }
+
+  // GitBook: SUMMARY.md
+  if (pathSet.has('summary.md')) {
+    frameworks.add('GitBook');
+  }
+
+  return Array.from(frameworks).sort();
+}
+
+/**
  * Detect frameworks from dependencies and file patterns
  */
 function detectFrameworks(deps: DependencyInfo, files: IngestedFile[]): string[] {
@@ -365,13 +466,17 @@ export async function extractBundleFacts(params: {
   bundleRoot: string;
   repos: Array<{ repoId: string; files: IngestedFile[] }>;
   enablePhase2?: boolean; // Enable Phase 2 module analysis
-  enablePhase3?: boolean; // Enable Phase 3 extension point analysis
+  enableSemanticAnalysis?: boolean; // Enable ts-morph semantic analysis (code projects only)
+  enableFrameworkDetection?: boolean; // Enable framework detection (all projects)
 }): Promise<BundleFacts> {
   // Aggregate all files
   const allFiles = params.repos.flatMap((r) => r.files);
 
   // Extract facts
   const languages = detectLanguages(allFiles);
+  const docTypes = detectDocTypes(allFiles);
+  const fileStructure = analyzeFileStructure(allFiles);
+  const projectType = detectProjectType(fileStructure);
 
   // Skip entry point detection for web sources (they don't have package.json, etc.)
   const entryPointsPromises = params.repos
@@ -383,8 +488,15 @@ export async function extractBundleFacts(params: {
   const entryPoints = entryPointsArrays.flat();
 
   const dependencies = await extractDependencies(allFiles, params.bundleRoot);
-  const fileStructure = analyzeFileStructure(allFiles);
-  const frameworks = detectFrameworks(dependencies, allFiles);
+  
+  // Detect code frameworks from dependencies
+  let frameworks = detectFrameworks(dependencies, allFiles);
+  
+  // Detect doc frameworks if framework detection is enabled
+  if (params.enableFrameworkDetection) {
+    const docFrameworks = detectDocFrameworks(allFiles);
+    frameworks = [...new Set([...frameworks, ...docFrameworks])].sort();
+  }
 
   // Phase 2: Module analysis (optional, more expensive)
   let modules: ModuleInfo[] | undefined;
@@ -406,7 +518,7 @@ export async function extractBundleFacts(params: {
   // Supported extensions for Phase 3 (TypeScript + JavaScript + Python + Go + Rust)
   const phase3Extensions = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.rs']);
 
-  if (params.enablePhase3) {
+  if (params.enableSemanticAnalysis) {
     const analyzer = createUnifiedAnalyzer();
     
     // Prepare files for analysis (both TypeScript and JavaScript)
@@ -458,10 +570,17 @@ export async function extractBundleFacts(params: {
     });
   }
 
+  // Documentation project fallback: ensure patterns has at least "documentation"
+  if (projectType === 'documentation' && (!patterns || patterns.length === 0)) {
+    patterns = ['documentation'];
+  }
+
   return {
     version: '1.0',
     timestamp: new Date().toISOString(),
+    projectType,
     languages,
+    docTypes: docTypes.length > 0 ? docTypes : undefined,
     entryPoints,
     dependencies,
     fileStructure,

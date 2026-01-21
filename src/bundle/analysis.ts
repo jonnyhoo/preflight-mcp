@@ -12,21 +12,20 @@ export type AnalysisResult = {
   error?: string;
 };
 
-/** Supported extensions for Phase 3 semantic analysis */
-const PHASE3_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.rs']);
+/** Supported extensions for semantic analysis (ts-morph) */
+const SEMANTIC_ANALYSIS_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.rs']);
 
 /**
- * Check if project uses languages supported by Phase 3 analysis.
- * Supports: TypeScript, JavaScript, Python, Go, Rust
+ * Check if project is a code project (has enough code files for semantic analysis).
  * Triggers if >30% of code files are in supported languages.
  */
-function isPhase3SupportedProject(files: IngestedFile[]): boolean {
+function isCodeProject(files: IngestedFile[]): boolean {
   const codeFiles = files.filter((f) => f.kind === 'code');
   if (codeFiles.length === 0) return false;
   
   const supportedFiles = codeFiles.filter((f) => {
     const ext = path.extname(f.repoRelativePath).toLowerCase();
-    return PHASE3_EXTENSIONS.has(ext);
+    return SEMANTIC_ANALYSIS_EXTENSIONS.has(ext);
   });
   
   return supportedFiles.length / codeFiles.length > 0.3;
@@ -39,7 +38,8 @@ function isPhase3SupportedProject(files: IngestedFile[]): boolean {
  * - 'none': Skip all analysis
  * - 'quick': Phase 1 only (basic stats, fast)
  * - 'full': Phase 1 + Phase 2 + Phase 3 (complete analysis)
- *           Phase 3 (ts-morph) only runs for TypeScript projects
+ *           Semantic analysis (ts-morph) only runs for code projects
+ *           Framework detection runs for all projects
  */
 export async function analyzeBundleStatic(params: {
   bundleId: string;
@@ -53,13 +53,15 @@ export async function analyzeBundleStatic(params: {
 
   const allFiles = params.repos.flatMap((r) => r.files);
   const isFull = params.mode === 'full';
-  const isSupported = isPhase3SupportedProject(allFiles);
+  const codeProjectDetected = isCodeProject(allFiles);
   
-  // Phase 3 supports TypeScript, JavaScript, and Python
-  const enablePhase3 = isFull && isSupported;
+  // Semantic analysis (ts-morph) only for code projects
+  const enableSemanticAnalysis = isFull && codeProjectDetected;
+  // Framework detection for all projects
+  const enableFrameworkDetection = isFull;
   
-  if (enablePhase3) {
-    logger.info('Enabling Phase 3 semantic analysis (supported language detected)');
+  if (enableSemanticAnalysis) {
+    logger.info('Enabling semantic analysis (code project detected)');
   }
 
   try {
@@ -67,7 +69,8 @@ export async function analyzeBundleStatic(params: {
       bundleRoot: params.bundleRoot,
       repos: params.repos,
       enablePhase2: isFull,
-      enablePhase3,
+      enableSemanticAnalysis,
+      enableFrameworkDetection,
     });
 
     const factsPath = path.join(params.bundleRoot, 'analysis', 'FACTS.json');
