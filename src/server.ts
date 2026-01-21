@@ -38,6 +38,7 @@ import {
   registerSearchTools,
   registerLspTools,
   registerCheckTools,
+  registerDistillTools,
 } from './server/tools/index.js';
 
 // Read version from package.json at startup
@@ -208,6 +209,9 @@ export async function startServer(): Promise<void> {
 
   // Unified code quality check tool (1): duplicates, doccheck, deadcode, circular, complexity
   registerCheckTools(deps);
+
+  // Distill tools (1): generate_card
+  registerDistillTools(deps);
 
   // ==========================================================================
   // PROMPTS - Interactive guidance for users

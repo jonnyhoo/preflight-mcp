@@ -11,6 +11,10 @@ interface ConfigFile {
   vlmApiKey?: string;
   vlmModel?: string;
   vlmEnabled?: boolean;
+  llmApiBase?: string;
+  llmApiKey?: string;
+  llmModel?: string;
+  llmEnabled?: boolean;
   storageDir?: string;
   storageDirs?: string[];
   githubToken?: string;
@@ -166,6 +170,17 @@ export type PreflightConfig = {
   vlmModel: string;
   /** Enable VLM for PDF analysis (default: false, auto-enabled if API key set). */
   vlmEnabled: boolean;
+
+  // --- LLM (for Repo Card Distillation) ---
+
+  /** LLM API base URL (fallback to openaiBaseUrl). */
+  llmApiBase?: string;
+  /** LLM API key (fallback to openaiApiKey). */
+  llmApiKey?: string;
+  /** LLM model name (default: gpt-4o-mini). */
+  llmModel: string;
+  /** Enable LLM for card generation (auto-enabled if API key set). */
+  llmEnabled: boolean;
 };
 
 function envNumber(name: string, fallback: number): number {
@@ -316,5 +331,11 @@ export function getConfig(): PreflightConfig {
       idleMs: envNumber('PREFLIGHT_LSP_IDLE_MS', 300000),
       maxConcurrency: envNumber('PREFLIGHT_LSP_MAX_CONCURRENCY', 6),
     },
+
+    // LLM for Repo Card Distillation (fallback to OpenAI config)
+    llmApiBase: process.env.PREFLIGHT_LLM_API_BASE ?? loadConfigFile().llmApiBase ?? (process.env.PREFLIGHT_OPENAI_BASE_URL ?? process.env.OPENAI_BASE_URL),
+    llmApiKey: process.env.PREFLIGHT_LLM_API_KEY ?? loadConfigFile().llmApiKey ?? (process.env.PREFLIGHT_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY),
+    llmModel: (process.env.PREFLIGHT_LLM_MODEL ?? loadConfigFile().llmModel ?? 'gpt-4o-mini').trim(),
+    llmEnabled: envBoolean('PREFLIGHT_LLM_ENABLED', false) || Boolean(process.env.PREFLIGHT_LLM_API_KEY) || loadConfigFile().llmEnabled || Boolean(loadConfigFile().llmApiKey) || Boolean(process.env.PREFLIGHT_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY),
   };
 }

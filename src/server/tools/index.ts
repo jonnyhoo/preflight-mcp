@@ -8,6 +8,7 @@ export { registerSearchTools, type SearchToolsOptions } from './searchTools.js';
 export { registerSemanticTools } from './semanticTools.js';
 export { registerLspTools } from './lspTools.js';
 export { registerCheckTools } from './checkTools.js';
+export { registerDistillTools } from './distillTools.js';
 
 // Legacy exports (deprecated, use registerCheckTools instead)
 export { registerDocCheckTools } from './doccheckTools.js';
