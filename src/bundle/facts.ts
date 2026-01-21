@@ -530,8 +530,8 @@ function detectAgentPlatforms(files: IngestedFile[]): string[] {
  * Reads SKILL.md, README.md, or index.md to extract a short description.
  */
 async function extractFeatures(files: IngestedFile[]): Promise<FeatureInfo[]> {
-  // Well-known feature directories (commands excluded - typically just triggers for skills)
-  const featureDirs = ['skills', 'plugins', 'features', 'agents'];
+  // Well-known skill/capability directories (not code modules like features/)
+  const featureDirs = ['skills', 'plugins', 'agents'];
   // Files to look for description (in priority order)
   const descFiles = ['skill.md', 'readme.md', 'index.md'];
 
