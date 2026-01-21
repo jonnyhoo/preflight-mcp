@@ -479,15 +479,37 @@ function detectFrameworks(deps: DependencyInfo, files: IngestedFile[]): string[]
   if (allDeps.includes('fastify')) frameworks.add('Fastify');
   if (allDeps.includes('nestjs')) frameworks.add('NestJS');
 
-  // Python frameworks
+  // Python web frameworks
   if (allDeps.includes('django')) frameworks.add('Django');
   if (allDeps.includes('flask')) frameworks.add('Flask');
   if (allDeps.includes('fastapi')) frameworks.add('FastAPI');
+  if (allDeps.includes('starlette')) frameworks.add('Starlette');
+  if (allDeps.includes('uvicorn')) frameworks.add('Uvicorn');
+
+  // Python AI/LLM frameworks
+  if (allDeps.includes('anthropic')) frameworks.add('Anthropic');
+  if (allDeps.includes('openai')) frameworks.add('OpenAI');
+  if (allDeps.includes('langchain')) frameworks.add('LangChain');
+  if (allDeps.includes('mcp')) frameworks.add('MCP');
+
+  // Python data/scraping
+  if (allDeps.includes('beautifulsoup4')) frameworks.add('BeautifulSoup');
+  if (allDeps.includes('scrapy')) frameworks.add('Scrapy');
+  if (allDeps.includes('httpx')) frameworks.add('HTTPX');
+  if (allDeps.includes('requests')) frameworks.add('Requests');
+
+  // Python CLI
+  if (allDeps.includes('click')) frameworks.add('Click');
+  if (allDeps.includes('typer')) frameworks.add('Typer');
+
+  // Python data validation
+  if (allDeps.includes('pydantic')) frameworks.add('Pydantic');
 
   // Test frameworks
   if (allDeps.includes('jest')) frameworks.add('Jest');
   if (allDeps.includes('vitest')) frameworks.add('Vitest');
   if (allDeps.includes('pytest')) frameworks.add('Pytest');
+  if (allDeps.includes('unittest')) frameworks.add('unittest');
 
   return Array.from(frameworks).sort();
 }
