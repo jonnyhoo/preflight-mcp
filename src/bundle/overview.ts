@@ -121,6 +121,108 @@ function getRepoDocFiles(files: IngestedFile[]): IngestedFile[] {
     .sort((a, b) => a.repoRelativePath.localeCompare(b.repoRelativePath));
 }
 
+// README extraction limits
+const MAX_SECTION_CHARS = 500;
+const MAX_TOTAL_CHARS = 3000;
+const MAX_SECTIONS = 5;
+const MAX_FALLBACK_SECTIONS = 3;
+
+// Doc listing limits
+const MAX_DOC_ENTRIES = 30;
+const MAX_DOC_DEPTH = 3;
+
+/** Key section patterns (Chinese + English) */
+const KEY_SECTION_PATTERNS = [
+  /how.*work|feature|what.*inside|功能|特性/i,
+  /install|usage|getting.*start|安装|使用|快速开始/i,
+  /philosoph|design|principle|设计|原理|哲学/i,
+];
+
+/** Sections to skip */
+const SKIP_SECTION_PATTERNS = [
+  /^(table\s+of\s+contents?|toc|目录|contents?)$/i,
+  /^(license|licen[cs]e|许可|授权)$/i,
+  /^(contributing|贡献|参与)$/i,
+  /^(code\s+of\s+conduct|行为准则)$/i,
+  /^(acknowledgement|致谢|鸣谢)$/i,
+];
+
+/** Check if line is badge/image markdown */
+function isBadgeOrImageLine(line: string): boolean {
+  const trimmed = line.trim();
+  // ![...] or [![...]
+  return trimmed.startsWith('![') || trimmed.startsWith('[![');
+}
+
+/** Check if heading should be skipped */
+function shouldSkipSection(heading: string): boolean {
+  const text = heading.replace(/^#+\s*/, '').trim();
+  return SKIP_SECTION_PATTERNS.some((p) => p.test(text));
+}
+
+/** Check if heading matches key section patterns */
+function isKeySection(heading: string): boolean {
+  const text = heading.replace(/^#+\s*/, '').trim();
+  return KEY_SECTION_PATTERNS.some((p) => p.test(text));
+}
+
+/** Parse README into sections */
+function parseReadmeSections(
+  content: string
+): Array<{ heading: string; level: number; lines: string[] }> {
+  const rawLines = content.split(/\r?\n/);
+  const sections: Array<{ heading: string; level: number; lines: string[] }> = [];
+  let current: { heading: string; level: number; lines: string[] } | null = null;
+  let inCodeBlock = false;
+
+  for (const line of rawLines) {
+    // Track code fences
+    if (line.trim().startsWith('```')) {
+      inCodeBlock = !inCodeBlock;
+      continue; // Skip code fence lines
+    }
+    if (inCodeBlock) continue; // Skip content inside code blocks
+
+    // Skip badges/images
+    if (isBadgeOrImageLine(line)) continue;
+
+    // Detect headings
+    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      if (current) sections.push(current);
+      const level = headingMatch[1]!.length;
+      const heading = headingMatch[2]!.trim();
+      current = { heading, level, lines: [] };
+    } else if (current) {
+      current.lines.push(line);
+    } else {
+      // Content before first heading (intro)
+      if (!sections.length && !current) {
+        current = { heading: '', level: 0, lines: [] };
+      }
+      current?.lines.push(line);
+    }
+  }
+  if (current) sections.push(current);
+
+  return sections;
+}
+
+/** Truncate text to max chars */
+function truncateText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return text.slice(0, maxChars).replace(/\s+\S*$/, '') + '...';
+}
+
+/** Clean section content */
+function cleanSectionContent(lines: string[]): string {
+  return lines
+    .filter((l) => l.trim() && !isBadgeOrImageLine(l))
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 async function renderNodePackageFacts(files: IngestedFile[]): Promise<string[]> {
   const pkg = files.find((f) => f.repoRelativePath === 'package.json');
   if (!pkg) return [];
@@ -161,34 +263,115 @@ async function renderNodePackageFacts(files: IngestedFile[]): Promise<string[]> 
 }
 
 /**
- * Phase 3: Extract project purpose from README.md
+ * Find README file (supports README.*, prioritizes README.md)
+ */
+function findReadmeFile(files: IngestedFile[]): IngestedFile | null {
+  // Pattern: README.* at root level
+  const readmes = files.filter((f) => {
+    const name = path.basename(f.repoRelativePath).toLowerCase();
+    const dir = path.dirname(f.repoRelativePath);
+    return (dir === '.' || dir === '') && name.startsWith('readme.');
+  });
+
+  if (!readmes.length) return null;
+
+  // Prioritize README.md, then others
+  return (
+    readmes.find((f) => path.basename(f.repoRelativePath).toLowerCase() === 'readme.md') ||
+    readmes[0] ||
+    null
+  );
+}
+
+/**
+ * Find fallback doc files (docs/index.md, docs/README.md)
+ */
+function findFallbackDocFile(files: IngestedFile[]): IngestedFile | null {
+  const candidates = ['docs/index.md', 'docs/readme.md', 'doc/index.md', 'doc/readme.md'];
+  for (const cand of candidates) {
+    const found = files.find((f) => f.repoRelativePath.toLowerCase() === cand);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * Extract content from README sections
+ */
+function extractReadmeContent(
+  sections: Array<{ heading: string; level: number; lines: string[] }>
+): string {
+  const results: string[] = [];
+  let totalChars = 0;
+  let sectionCount = 0;
+
+  // 1. Try to match key sections
+  const keySections = sections.filter(
+    (s) => s.heading && isKeySection(s.heading) && !shouldSkipSection(s.heading)
+  );
+
+  for (const section of keySections) {
+    if (sectionCount >= MAX_SECTIONS) break;
+    if (totalChars >= MAX_TOTAL_CHARS) break;
+
+    const content = cleanSectionContent(section.lines);
+    if (!content) continue;
+
+    const truncated = truncateText(content, MAX_SECTION_CHARS);
+    const formatted = `**${section.heading}**: ${truncated}`;
+
+    if (totalChars + formatted.length > MAX_TOTAL_CHARS) break;
+
+    results.push(formatted);
+    totalChars += formatted.length;
+    sectionCount++;
+  }
+
+  // 2. Fallback: first N non-skip heading blocks
+  if (results.length === 0) {
+    const fallbackSections = sections
+      .filter((s) => !shouldSkipSection(s.heading))
+      .slice(0, MAX_FALLBACK_SECTIONS);
+
+    for (const section of fallbackSections) {
+      if (totalChars >= MAX_TOTAL_CHARS) break;
+
+      const content = cleanSectionContent(section.lines);
+      if (!content) continue;
+
+      const truncated = truncateText(content, MAX_SECTION_CHARS);
+      const formatted = section.heading ? `**${section.heading}**: ${truncated}` : truncated;
+
+      if (totalChars + formatted.length > MAX_TOTAL_CHARS) break;
+
+      results.push(formatted);
+      totalChars += formatted.length;
+    }
+  }
+
+  return results.join('\n\n');
+}
+
+/**
+ * Phase 3: Extract project purpose from README (enhanced)
  */
 async function extractProjectPurpose(files: IngestedFile[]): Promise<string | null> {
-  const readme = files.find(f => f.repoRelativePath.toLowerCase() === 'readme.md');
-  if (!readme) return null;
+  // Try README.* first
+  let docFile = findReadmeFile(files);
+
+  // Fallback to docs/index.md or docs/README.md
+  if (!docFile) {
+    docFile = findFallbackDocFile(files);
+  }
+
+  if (!docFile) return null;
 
   try {
-    const content = await fs.readFile(readme.bundleNormAbsPath, 'utf8');
-    const lines = content.split('\n');
-    
-    // Skip title (first h1)
-    let startIdx = 0;
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i]?.startsWith('# ')) {
-        startIdx = i + 1;
-        break;
-      }
-    }
+    const content = await fs.readFile(docFile.bundleNormAbsPath, 'utf8');
+    const sections = parseReadmeSections(content);
 
-    // Extract first paragraph (non-empty lines until empty line or next heading)
-    const paragraph: string[] = [];
-    for (let i = startIdx; i < Math.min(lines.length, startIdx + 20); i++) {
-      const line = lines[i]?.trim() || '';
-      if (!line || line.startsWith('#')) break;
-      paragraph.push(line);
-    }
-
-    return paragraph.join(' ').trim() || null;
+    const extracted = extractReadmeContent(sections);
+    return extracted || null;
   } catch {
     return null;
   }
@@ -214,6 +397,55 @@ function formatCoreModules(facts: BundleFacts): string[] {
     lines.push(`  - Exports: ${mod.exports.slice(0, 5).join(', ')}${mod.exports.length > 5 ? ` (+${mod.exports.length - 5} more)` : ''}`);
     lines.push(`  - Complexity: ${mod.complexity}, LOC: ${mod.loc}`);
     lines.push(`  - Evidence: ${mod.path}:1`);
+  }
+
+  return lines;
+}
+
+/**
+ * Format documentation structure grouped by directory
+ */
+function formatDocumentationStructure(files: IngestedFile[]): string[] {
+  const docFiles = files
+    .filter((f) => f.kind === 'doc')
+    .map((f) => f.repoRelativePath)
+    .sort();
+
+  if (!docFiles.length) return [];
+
+  // Group by directory (up to MAX_DOC_DEPTH)
+  const groups = new Map<string, string[]>();
+  for (const filePath of docFiles) {
+    const parts = filePath.split('/');
+    const depth = parts.length - 1;
+    const dir = depth > MAX_DOC_DEPTH ? parts.slice(0, MAX_DOC_DEPTH).join('/') + '/...' : parts.slice(0, -1).join('/') || '.';
+    if (!groups.has(dir)) groups.set(dir, []);
+    groups.get(dir)!.push(parts[parts.length - 1]!);
+  }
+
+  const lines: string[] = [];
+  let totalEntries = 0;
+
+  for (const [dir, fileNames] of groups.entries()) {
+    if (totalEntries >= MAX_DOC_ENTRIES) {
+      lines.push(`- ... and ${docFiles.length - totalEntries} more files`);
+      break;
+    }
+
+    const remaining = MAX_DOC_ENTRIES - totalEntries;
+    const displayDir = dir === '.' ? '(root)' : dir;
+
+    if (fileNames.length <= remaining && fileNames.length <= 5) {
+      // List individual files
+      for (const name of fileNames) {
+        lines.push(`- ${dir === '.' ? name : `${dir}/${name}`}`);
+        totalEntries++;
+      }
+    } else {
+      // Summarize directory
+      lines.push(`- **${displayDir}/** (${fileNames.length} files)`);
+      totalEntries++;
+    }
   }
 
   return lines;
@@ -254,19 +486,55 @@ export async function generateOverviewMarkdown(params: {
   const facts = await readFacts(factsPath);
 
   const sections: string[] = [];
+  const allFiles = params.repos.flatMap((r) => r.files);
+  const isDocProject = facts?.projectType === 'documentation';
 
   // Header
   sections.push(`# ${params.repos[0]?.repoId || 'Project'} - Overview\r\n`);
 
-  // Phase 3: What is this?
-  if (facts) {
-    sections.push('## What is this?\r\n');
-    
-    // Try to get project purpose from README
-    const allFiles = params.repos.flatMap(r => r.files);
+  if (facts && isDocProject) {
+    // === DOCUMENTATION PROJECT FORMAT ===
+    // README content comes first
     const purpose = await extractProjectPurpose(allFiles);
     if (purpose) {
-      sections.push(`**Purpose**: ${purpose}\r\n`);
+      sections.push('## About\r\n');
+      sections.push(`${purpose}\r\n`);
+      sections.push('');
+    }
+
+    // Document types statistics
+    if (facts.docTypes && facts.docTypes.length > 0) {
+      sections.push('## Document Types\r\n');
+      for (const dt of facts.docTypes) {
+        sections.push(`- **${dt.docType}**: ${dt.fileCount} files (${dt.extensions.join(', ')})\r\n`);
+      }
+      sections.push('');
+    }
+
+    // Frameworks (for docs, these are doc frameworks like MkDocs, Docusaurus)
+    if (facts.frameworks && facts.frameworks.length > 0) {
+      sections.push(`**Documentation Framework**: ${facts.frameworks.join(', ')}\r\n\r\n`);
+    }
+
+    // Documentation structure
+    const docStructure = formatDocumentationStructure(allFiles);
+    if (docStructure.length > 0) {
+      sections.push('## Documentation Structure\r\n');
+      sections.push(...docStructure.map((l) => l + '\r\n'));
+      sections.push('');
+    }
+
+    return sections.join('\n') + '\n';
+  }
+
+  // === CODE PROJECT FORMAT (existing behavior) ===
+  if (facts) {
+    sections.push('## What is this?\r\n');
+
+    // Try to get project purpose from README
+    const purpose = await extractProjectPurpose(allFiles);
+    if (purpose) {
+      sections.push(`${purpose}\r\n`);
     }
 
     // Primary language and frameworks
@@ -294,8 +562,8 @@ export async function generateOverviewMarkdown(params: {
     sections.push('');
   }
 
-  // Phase 3: Architecture
-  if (facts) {
+  // Architecture section (code projects only)
+  if (facts && !isDocProject) {
     sections.push('## Architecture\r\n');
 
     // Entry points
@@ -321,13 +589,13 @@ export async function generateOverviewMarkdown(params: {
     const coreModuleLines = formatCoreModules(facts);
     if (coreModuleLines.length > 0) {
       sections.push('### Core Modules\r\n');
-      sections.push(...coreModuleLines.map(l => l + '\r\n'));
+      sections.push(...coreModuleLines.map((l) => l + '\r\n'));
       sections.push('');
     }
   }
 
-  // Dependencies
-  if (facts && (facts.dependencies.runtime.length > 0 || facts.dependencies.dev.length > 0)) {
+  // Dependencies (code projects only)
+  if (facts && !isDocProject && (facts.dependencies.runtime.length > 0 || facts.dependencies.dev.length > 0)) {
     sections.push('## Dependencies\r\n');
 
     if (facts.dependencies.runtime.length > 0) {
@@ -353,14 +621,14 @@ export async function generateOverviewMarkdown(params: {
     }
   }
 
-  // Phase 3: How to Reuse
-  if (facts) {
+  // How to Reuse (code projects only)
+  if (facts && !isDocProject) {
     const standaloneLines = formatStandaloneModules(facts);
     if (standaloneLines.length > 0) {
       sections.push('## How to Reuse\r\n');
       sections.push('### Standalone Modules\r\n');
       sections.push('These modules can be extracted and used independently:\r\n\r\n');
-      sections.push(...standaloneLines.map(l => l + '\r\n'));
+      sections.push(...standaloneLines.map((l) => l + '\r\n'));
       sections.push('');
     }
 
@@ -368,7 +636,7 @@ export async function generateOverviewMarkdown(params: {
     const analysisSummary = await loadAnalysisSummary(params.bundleRootDir);
     if (analysisSummary) {
       sections.push('## Code Analysis Summary\r\n');
-      
+
       // Overall summary
       if (analysisSummary.overall) {
         sections.push(analysisSummary.overall + '\r\n\r\n');
@@ -378,7 +646,7 @@ export async function generateOverviewMarkdown(params: {
       for (const analyzer of analysisSummary.analyzers) {
         sections.push(`### ${analyzer.analyzerName}\r\n`);
         sections.push(`${analyzer.summary}\r\n`);
-        
+
         // Show highlights if available
         if (analyzer.highlights && analyzer.highlights.length > 0) {
           sections.push('\r\n**Key Findings:**\r\n');
@@ -390,8 +658,13 @@ export async function generateOverviewMarkdown(params: {
         sections.push('');
       }
     }
-    
+
     // Return Phase 3 format directly
+    return sections.join('\n') + '\n';
+  }
+
+  // Return if we have facts (mixed project or other cases)
+  if (facts) {
     return sections.join('\n') + '\n';
   }
 
