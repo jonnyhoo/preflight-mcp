@@ -17,7 +17,6 @@ export interface LLMConfig {
   apiBase: string;
   apiKey: string;
   model: string;
-  maxTokens: number;
   enabled: boolean;
 }
 
@@ -45,7 +44,6 @@ export function getLLMConfig(): LLMConfig {
     apiBase: cfg.llmApiBase || 'https://api.openai.com/v1',
     apiKey: cfg.llmApiKey || '',
     model: cfg.llmModel || 'gpt-4o-mini',
-    maxTokens: 2000,
     enabled: cfg.llmEnabled,
   };
 }
@@ -72,7 +70,6 @@ export async function callLLM(prompt: string, systemPrompt?: string): Promise<LL
     body: JSON.stringify({
       model: config.model,
       messages,
-      max_tokens: config.maxTokens,
       temperature: 0.3,
     }),
   });
@@ -149,33 +146,21 @@ export function buildCardGenerationPrompt(ctx: {
 }
 
 // ============================================================================
-// Context Truncation
+// Context Truncation (pass-through, no limits)
 // ============================================================================
-
-const LIMITS = { overview: 2000, readme: 1500, arch: 1000, total: 8000 };
 
 export function truncateContext(ctx: {
   overview: string;
   readme?: string;
   architectureSummary?: string;
 }): { overview: string; readme?: string; architectureSummary?: string; truncated: boolean } {
-  let truncated = false;
-  const cut = (s: string, max: number) => {
-    if (s.length <= max) return s;
-    truncated = true;
-    return s.slice(0, max) + '...';
+  // No truncation - modern LLMs have large context windows (128k+)
+  // Card generation is low-frequency, cost is negligible
+  // LLM will extract key points itself
+  return {
+    overview: ctx.overview,
+    readme: ctx.readme,
+    architectureSummary: ctx.architectureSummary,
+    truncated: false,
   };
-
-  const overview = cut(ctx.overview, LIMITS.overview);
-  let readme = ctx.readme ? cut(ctx.readme, LIMITS.readme) : undefined;
-  const architectureSummary = ctx.architectureSummary ? cut(ctx.architectureSummary, LIMITS.arch) : undefined;
-
-  // Drop readme if over total limit
-  const total = overview.length + (readme?.length || 0) + (architectureSummary?.length || 0);
-  if (total > LIMITS.total && readme) {
-    readme = undefined;
-    truncated = true;
-  }
-
-  return { overview, readme, architectureSummary, truncated };
 }
