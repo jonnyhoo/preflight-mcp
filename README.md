@@ -117,6 +117,8 @@ Preflight supports three AI model types, all configured in a single config file:
 | **LLM** | Language Model | Repo Card generation (distillation) |
 | **Embedding** | Text Embedding | Semantic search |
 
+> ⚠️ **Important**: Do NOT use "thinking" models (e.g., `o1`, `DeepSeek-R1`, `*-Thinking-*`) for LLM. These models output reasoning in `reasoning_content` instead of `content`, which is incompatible with structured JSON output. Use standard chat models like `gpt-4o-mini`, `claude-3-haiku`, `qwen-plus`, etc.
+
 **Priority**: Environment variables > config.json > defaults
 
 ## VLM Distillation (Experimental)
