@@ -39,7 +39,8 @@ export type ToolCategory =
   | 'quality'       // Code quality checks (duplicates, deadcode, complexity, etc.)
   | 'trace'         // Trace links
   | 'modal'         // Multimodal content
-  | 'navigation';   // Navigation and discovery
+  | 'navigation'    // Navigation and discovery
+  | 'distill';      // Knowledge distillation (card generation)
 
 // ============================================================================
 // Tool Registry
@@ -299,6 +300,23 @@ export const TOOL_REGISTRY: ToolInfo[] = [
     mutating: true,
     whenToUse: 'Use to create new trace links between code and tests/docs.',
   },
+
+  // === Knowledge Distillation Tools ===
+  {
+    name: 'preflight_generate_card',
+    category: 'distill',
+    description: 'Generate knowledge card from bundle. Extracts "what is this project" and "why is it valuable" for RAG retrieval.',
+    keywords: ['card', 'distill', 'knowledge', 'extract', 'summary', 'rag', 'save', 'curate'],
+    chineseKeywords: ['卡片', '蒸馏', '知识', '提取', '摘要', '收藏', '精选', '保存'],
+    requires: 'bundleId',
+    mutating: true,
+    whenToUse: 'Use when user wants to save/curate a project for later reference, or extract knowledge summary for RAG.',
+    nextSteps: [
+      'Card saved in <bundle>/cards/<repoId>/CARD.json',
+      'Read card with preflight_read_file',
+      'Use format="markdown" for human-readable output',
+    ],
+  },
 ];
 
 // ============================================================================
@@ -437,6 +455,7 @@ export function generateRoutingPrompt(categories?: ToolCategory[]): string {
   lines.push('- Read specific file → `preflight_read_file`');
   lines.push('- Parse document file → `preflight_parse_document`');
   lines.push('- Crawl web documentation → `preflight_create_bundle` with kind="web"');
+  lines.push('- Save/curate project knowledge → `preflight_generate_card`');
   lines.push('');
   
   // Tool Reference
@@ -453,9 +472,10 @@ export function generateRoutingPrompt(categories?: ToolCategory[]): string {
     document: '📄 Document Processing',
     modal: '🖼️ Multimodal Content',
     trace: '🔗 Trace Links',
+    distill: '💎 Knowledge Distillation',
   };
   
-  const categoryOrder: ToolCategory[] = ['bundle', 'callgraph', 'analysis', 'quality', 'search', 'navigation', 'document', 'modal', 'trace'];
+  const categoryOrder: ToolCategory[] = ['bundle', 'callgraph', 'analysis', 'quality', 'search', 'navigation', 'document', 'modal', 'trace', 'distill'];
   
   const filteredTools = categories
     ? TOOL_REGISTRY.filter(t => categories.includes(t.category))
@@ -569,6 +589,19 @@ export function suggestWorkflow(task: string): string[] {
     steps.push('2. `preflight_dependency_graph` - Generate module dependency graph');
     steps.push('');
     steps.push('💡 For function-level analysis, use `preflight_build_call_graph` instead.');
+    return steps;
+  }
+
+  // === Priority 8: Knowledge Distillation / Curation ===
+  if (lower.includes('card') || lower.includes('卡片') || lower.includes('distill') || lower.includes('蒸馏') ||
+      lower.includes('curate') || lower.includes('收藏') || lower.includes('save project') || lower.includes('保存项目') ||
+      lower.includes('knowledge') || lower.includes('知识') || lower.includes('rag')) {
+    steps.push('1. `preflight_list_bundles` - Find the bundleId');
+    steps.push('2. `preflight_generate_card` - Generate knowledge card');
+    steps.push('   - regenerate: true to force refresh');
+    steps.push('   - format: "markdown" for human-readable output');
+    steps.push('');
+    steps.push('💡 Cards capture "what this project is" and "why it\'s valuable" for later retrieval.');
     return steps;
   }
 
