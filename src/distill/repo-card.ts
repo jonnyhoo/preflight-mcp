@@ -20,6 +20,8 @@ import {
   type LLMCardResponse, type CardExport, type GenerateCardResult,
   type FieldEvidence, toSafeRepoId,
 } from './types.js';
+import type { BundleFacts } from '../bundle/facts.js';
+import type { ArchitectureSummary } from '../analysis/architecture-summary.js';
 import {
   getLLMConfig, callLLMWithJSON,
   CARD_GENERATION_SYSTEM_PROMPT, buildCardGenerationPrompt, truncateContext,
@@ -71,21 +73,21 @@ export async function extractBundleContext(
   const effectiveRepoId = repoId || manifest.repos[0]?.id;
   if (!effectiveRepoId) throw new Error('No repos found in bundle');
 
-  // Read sources
+  // Read OVERVIEW.md
   const overview = await readUtf8OrNull(paths.overviewPath) || '';
   if (overview) evidence.push({ field: 'overview', sources: [{ path: 'OVERVIEW.md' }] });
   else warnings.push('facts_incomplete');
 
+  // Read FACTS.json (contains architectureSummary in Phase 4)
   const factsStr = await readUtf8OrNull(path.join(paths.rootDir, 'analysis', 'FACTS.json'));
-  let facts: Record<string, unknown> = {};
+  let facts: Partial<BundleFacts> = {};
   if (factsStr) {
     try { facts = JSON.parse(factsStr); evidence.push({ field: 'facts', sources: [{ path: 'analysis/FACTS.json' }] }); }
     catch { warnings.push('facts_incomplete'); }
   } else warnings.push('facts_incomplete');
 
-  const archStr = await readUtf8OrNull(path.join(paths.rootDir, 'analysis', 'architecture-summary.json'));
-  let arch: Record<string, unknown> = {};
-  if (archStr) try { arch = JSON.parse(archStr); } catch { /* ignore */ }
+  // Extract architectureSummary from FACTS.json (not separate file)
+  const arch = facts.architectureSummary as ArchitectureSummary | undefined;
 
   // README
   const parts = effectiveRepoId.includes('/') ? effectiveRepoId.split('/') : ['', effectiveRepoId];
@@ -96,26 +98,37 @@ export async function extractBundleContext(
   if (readme) evidence.push({ field: 'readme', sources: [{ path: `repos/${effectiveRepoId}/norm/README.md` }] });
   else warnings.push('missing_readme');
 
+  // Serialize architectureSummary stats for LLM context (not the full object)
+  const archSummaryStr = arch?.stats
+    ? `Modules: ${arch.stats.totalModules}, Interfaces: ${arch.stats.totalInterfaces}, Core types: ${arch.stats.totalCoreTypes}, Public APIs: ${arch.stats.totalPublicAPIs}`
+    : undefined;
+
   const truncated = truncateContext({
     overview,
     readme: readme || undefined,
-    architectureSummary: arch?.architectureSummary as string | undefined,
+    architectureSummary: archSummaryStr,
   });
   if (truncated.truncated) warnings.push('context_truncated');
+
+  // Map entryPoints (objects) to file strings
+  const entryPointFiles = facts.entryPoints?.map(ep => ep.file) || [];
+  // Map coreTypes/publicAPI to name strings
+  const coreTypeNames = arch?.coreTypes?.map(ct => ct.name) || [];
+  const publicAPINames = arch?.publicAPI?.map(api => api.name) || [];
 
   return {
     context: {
       bundleId,
       repoId: effectiveRepoId,
       name: manifest.displayName || effectiveRepoId,
-      language: manifest.primaryLanguage || (facts.primaryLanguage as string) || 'Unknown',
-      frameworks: (facts.frameworks as string[]) || [],
+      language: manifest.primaryLanguage || 'Unknown',
+      frameworks: facts.frameworks || [],
       overview: truncated.overview,
       architectureSummary: truncated.architectureSummary,
-      designPatterns: (facts.patterns as string[]) || (arch?.designPatterns as string[]),
-      entryPoints: facts.entryPoints as string[] | undefined,
-      coreTypes: arch?.coreTypes as string[] | undefined,
-      publicAPIs: arch?.publicAPIs as string[] | undefined,
+      designPatterns: facts.patterns,
+      entryPoints: entryPointFiles.length > 0 ? entryPointFiles : undefined,
+      coreTypes: coreTypeNames.length > 0 ? coreTypeNames : undefined,
+      publicAPIs: publicAPINames.length > 0 ? publicAPINames : undefined,
       tags: manifest.tags,
       readme: truncated.readme,
     },
@@ -129,6 +142,13 @@ export async function extractBundleContext(
 // ============================================================================
 
 const AUTO_FIELDS = ['oneLiner', 'problemSolved', 'useCases', 'designHighlights', 'limitations', 'quickStart', 'keyAPIs'] as const;
+
+/** Map robustJsonParse method to GenerationMeta parseMethod */
+function mapParseMethod(method: string): 'json' | 'regex' | 'fallback' {
+  if (method === 'direct' || method === 'cleanup' || method === 'quote_fix') return 'json';
+  if (method === 'regex_fallback') return 'regex';
+  return 'fallback';
+}
 
 export async function generateCardWithLLM(
   ctx: BundleContext,
@@ -277,13 +297,14 @@ export async function generateRepoCard(
   if (existing && !opts?.regenerate) {
     const paths = await getBundlePaths2(bundleId);
     const fp = await computeFingerprint(paths);
-    if (existing.sourceFingerprint !== fp) warnings.push('low_confidence');
-    return { card: existing, llmUsed: false, warnings: existing.warnings, saved: false };
+    const existingWarnings = [...existing.warnings];
+    if (existing.sourceFingerprint !== fp) existingWarnings.push('low_confidence');
+    return { card: existing, llmUsed: false, warnings: existingWarnings, saved: false };
   }
 
   // Generate
   let partial: Partial<RepoCard>;
-  let parseMethod = 'fallback';
+  let parseMethod: 'json' | 'regex' | 'fallback' = 'fallback';
   let needsReview: string[] = [];
   let generatedBy: 'llm' | 'fallback' = 'fallback';
 
@@ -291,15 +312,15 @@ export async function generateRepoCard(
     try {
       const r = await generateCardWithLLM(context, existing || undefined);
       partial = r.card;
-      parseMethod = r.parseMethod;
+      parseMethod = mapParseMethod(r.parseMethod);
       generatedBy = 'llm';
     } catch (e) {
       logger.warn(`LLM failed: ${e instanceof Error ? e.message : e}`);
       warnings.push('llm_failed');
+      warnings.push('parse_failed');
       const fb = generateCardFallback(context);
       partial = fb.card;
       needsReview = fb.needsReview;
-      warnings.push('llm_disabled');
     }
   } else {
     warnings.push('llm_disabled');
@@ -322,8 +343,8 @@ export async function generateRepoCard(
     generatedAt: new Date().toISOString(),
     generatedBy,
     generationMeta: {
-      model: llmCfg.model,
-      parseMethod: parseMethod as 'json' | 'regex' | 'fallback',
+      model: generatedBy === 'llm' ? llmCfg.model : undefined,
+      parseMethod,
       durationMs: Date.now() - start,
     },
     sourceFingerprint: fp,

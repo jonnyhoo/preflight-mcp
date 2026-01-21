@@ -38,7 +38,7 @@ export interface RepoCard {
   schemaVersion: 1;
   cardId: string;          // sha256(bundleId+repoId)
   bundleId: string;
-  repoId: string;          // owner~repo format
+  repoId: string;          // owner/repo format (use toSafeRepoId for paths)
   version: number;
   generatedAt: string;
   generatedBy: 'llm' | 'fallback' | 'manual';
