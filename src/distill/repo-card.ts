@@ -89,13 +89,17 @@ export async function extractBundleContext(
   // Extract architectureSummary from FACTS.json (not separate file)
   const arch = facts.architectureSummary as ArchitectureSummary | undefined;
 
-  // README
+  // README (track actual filename for evidence)
   const parts = effectiveRepoId.includes('/') ? effectiveRepoId.split('/') : ['', effectiveRepoId];
   const owner = parts[0] ?? '';
   const repo = parts[1] ?? effectiveRepoId;
   let readme = await readUtf8OrNull(path.join(paths.reposDir, owner, repo, 'norm', 'README.md'));
-  if (!readme) readme = await readUtf8OrNull(path.join(paths.reposDir, owner, repo, 'norm', 'readme.md'));
-  if (readme) evidence.push({ field: 'readme', sources: [{ path: `repos/${effectiveRepoId}/norm/README.md` }] });
+  let readmeFile = 'README.md';
+  if (!readme) {
+    readme = await readUtf8OrNull(path.join(paths.reposDir, owner, repo, 'norm', 'readme.md'));
+    readmeFile = 'readme.md';
+  }
+  if (readme) evidence.push({ field: 'readme', sources: [{ path: `repos/${effectiveRepoId}/norm/${readmeFile}` }] });
   else warnings.push('missing_readme');
 
   // Serialize architectureSummary stats for LLM context (not the full object)
@@ -121,7 +125,7 @@ export async function extractBundleContext(
       bundleId,
       repoId: effectiveRepoId,
       name: manifest.displayName || effectiveRepoId,
-      language: manifest.primaryLanguage || 'Unknown',
+      language: manifest.primaryLanguage || facts.languages?.[0]?.language || 'Unknown',
       frameworks: facts.frameworks || [],
       overview: truncated.overview,
       architectureSummary: truncated.architectureSummary,
@@ -226,16 +230,35 @@ export async function loadRepoCard(bundleId: string, repoId: string): Promise<Re
 export function mergeCardUpdates(existing: RepoCard, updates: Partial<RepoCard>): RepoCard {
   const merged = { ...existing };
   const locked = new Set(existing.lockedFields || []);
+  let hasChanges = false;
 
   for (const f of AUTO_FIELDS) {
-    if (!locked.has(f) && updates[f] !== undefined) (merged as any)[f] = updates[f];
+    if (!locked.has(f) && updates[f] !== undefined) {
+      const oldVal = JSON.stringify((existing as any)[f]);
+      const newVal = JSON.stringify(updates[f]);
+      if (oldVal !== newVal) {
+        (merged as any)[f] = updates[f];
+        hasChanges = true;
+      }
+    }
   }
-  if (updates.whyIChoseIt !== undefined) merged.whyIChoseIt = updates.whyIChoseIt;
-  if (updates.personalNotes !== undefined) merged.personalNotes = updates.personalNotes;
-  if (updates.rating !== undefined) merged.rating = updates.rating;
+  if (updates.whyIChoseIt !== undefined && updates.whyIChoseIt !== existing.whyIChoseIt) {
+    merged.whyIChoseIt = updates.whyIChoseIt;
+    hasChanges = true;
+  }
+  if (updates.personalNotes !== undefined && updates.personalNotes !== existing.personalNotes) {
+    merged.personalNotes = updates.personalNotes;
+    hasChanges = true;
+  }
+  if (updates.rating !== undefined && updates.rating !== existing.rating) {
+    merged.rating = updates.rating;
+    hasChanges = true;
+  }
 
-  merged.version = existing.version + 1;
-  merged.lastUpdatedAt = new Date().toISOString();
+  if (hasChanges) {
+    merged.version = existing.version + 1;
+    merged.lastUpdatedAt = new Date().toISOString();
+  }
   return merged;
 }
 
@@ -368,7 +391,7 @@ export async function generateRepoCard(
     needsReview,
     lockedFields: existing?.lockedFields ?? [],
     warnings,
-    lastUpdatedBy: generatedBy === 'llm' ? 'llm' : undefined,
+    lastUpdatedBy: generatedBy,
     lastUpdatedAt: new Date().toISOString(),
   };
 
