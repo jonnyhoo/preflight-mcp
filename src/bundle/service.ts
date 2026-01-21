@@ -198,7 +198,7 @@ async function createBundleInternal(
         const { summary } = await updateBundle(cfg, existing);
         return summary;
       }
-      throw new Error(`Bundle already exists for these inputs: ${existing}`);
+      throw new Error(`Bundle already exists for these inputs: ${existing}. Use ifExists: "returnExisting" to reuse, "updateExisting" to update, or "createNew" to bypass.`);
     }
   }
 

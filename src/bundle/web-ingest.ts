@@ -157,6 +157,13 @@ export async function ingestWebSource(params: {
 
   onProgress?.(`Crawl complete: ${crawlResult.pages.length} pages, ${crawlResult.skipped.length} skipped`);
 
+  // Validate that we got some content
+  if (crawlResult.pages.length === 0) {
+    throw new Error(
+      `No pages crawled from ${url}. The URL may be invalid, return 404, or have no crawlable content.`
+    );
+  }
+
   // Prepare output directories
   // Structure: repos/web/{safeId}/norm/
   const webRepoDir = path.join(bundleRoot, 'repos', 'web', safeId);
@@ -447,6 +454,13 @@ export async function ingestWebSourceIncremental(params: {
   for (const url of result.removed) {
     await removePage(url, normDir);
     notes.push(`Removed: ${url}`);
+  }
+
+  // Validate that we have some content
+  if (files.length === 0 && result.newState.size === 0) {
+    throw new Error(
+      `No pages crawled from ${url}. The URL may be invalid, return 404, or have no crawlable content.`
+    );
   }
 
   // Compute content hash

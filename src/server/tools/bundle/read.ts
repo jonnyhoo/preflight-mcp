@@ -30,22 +30,17 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
     {
       title: 'Read bundle file(s)',
       description:
-        'Read file(s) from bundle. Two modes: ' +
-        '(1) Omit "file" param → returns ALL key files in one call. ' +
-        '(2) Provide "file" param → returns that specific file. ' +
-        'Use when: "查看bundle", "show bundle", "read overview", "bundle概览", "项目信息", "读取依赖图".\n\n' +
-        '⭐ **Evidence Citation Support:**\n' +
-        '- Use `withLineNumbers: true` to get output in `N|line` format for precise citations\n' +
-        '- Use `ranges: ["20-80", "100-120"]` to read only specific line ranges\n' +
-        '- Combine both for efficient evidence gathering: `{ file: "src/main.ts", withLineNumbers: true, ranges: ["50-100"] }`\n' +
-        '- Citation format: `repos/owner/repo/norm/src/main.ts:50-100`\n\n' +
-        '⭐ **Recommended Reading Order (AI-optimized summaries are better than raw README):**\n' +
-        '1. `OVERVIEW.md` - Project structure & architecture summary (START HERE)\n' +
-        '2. `START_HERE.md` - Key entry points & critical paths\n' +
-        '3. `AGENTS.md` - AI agent usage guide\n' +
-        '4. `analysis/FACTS.json` - Static analysis data (dependencies, exports, etc.)\n' +
-        '5. `deps/dependency-graph.json` - Import relationships (if generated)\n' +
-        '6. `repos/{owner}/{repo}/norm/README.md` - Original README (only if you need raw docs)',
+        'Read specific file(s) from a bundle.\n\n' +
+        '**Common usage:**\n' +
+        '- Read a file: `{bundleId, file: "repos/owner/repo/norm/src/main.ts"}`\n' +
+        '- Read specific lines: `{bundleId, file: "...", ranges: ["50-100"]}`\n' +
+        '- Get file outline: `{bundleId, file: "...", outline: true}`\n\n' +
+        '**When to use:**\n' +
+        '- You know the exact file path (from search results or tree)\n' +
+        '- You need to read specific line ranges for evidence\n\n' +
+        '**Use `preflight_get_overview` instead if:** you want project summary\n' +
+        '**Use `preflight_search_and_read` instead if:** you need to find code first\n\n' +
+        'Triggers: "读取文件", "查看代码", "read file", "show source"',
       inputSchema: {
         bundleId: z.string().describe('Bundle ID to read.'),
         file: z.string().optional().describe('Specific file to read (e.g., "deps/dependency-graph.json"). If omitted, uses mode-based batch reading.'),

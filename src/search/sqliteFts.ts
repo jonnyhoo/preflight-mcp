@@ -299,7 +299,7 @@ export async function rebuildIndex(
       `INSERT INTO lines (content, path, repo, kind, lineNo) VALUES (?, ?, ?, ?, ?)`
     );
     const insertMeta = db.prepare(
-      `INSERT INTO file_meta (path, sha256, indexed_at) VALUES (?, ?, ?)`
+      `INSERT OR REPLACE INTO file_meta (path, sha256, indexed_at) VALUES (?, ?, ?)`
     );
 
     const insertMany = db.transaction((fileList: IngestedFile[]) => {
