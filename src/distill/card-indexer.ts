@@ -29,6 +29,7 @@ const logger = createModuleLogger('card-indexer');
  */
 export type CardChunkKind =
   | 'summary'      // oneLiner + problemSolved combined
+  | 'tech_stack'   // language + frameworks for tech-based search
   | 'use_case'     // individual use case
   | 'design'       // individual design highlight
   | 'limitation'   // individual limitation
@@ -126,6 +127,7 @@ function buildEmbeddingContent(
 ): string {
   const typeLabels: Record<CardChunkKind, string> = {
     summary: '[Project Summary]',
+    tech_stack: '[Tech Stack]',
     use_case: '[Use Case]',
     design: '[Design Highlight]',
     limitation: '[Limitation]',
@@ -191,6 +193,27 @@ export function repoCardToChunks(
       content: buildEmbeddingContent(card.name, 'summary', summaryContent, card.tags || []),
       index: 0,
     });
+  }
+
+  // Tech stack chunk: language + frameworks for technology-based search
+  if (card.language || card.frameworks?.length) {
+    const techParts: string[] = [];
+    if (card.language && card.language !== 'Unknown') {
+      techParts.push(`Language: ${card.language}`);
+    }
+    if (card.frameworks?.length) {
+      techParts.push(`Frameworks: ${card.frameworks.join(', ')}`);
+    }
+
+    if (techParts.length > 0) {
+      chunks.push({
+        ...baseProps,
+        id: generateChunkId(card.cardId, 'tech_stack', 0),
+        kind: 'tech_stack',
+        content: buildEmbeddingContent(card.name, 'tech_stack', techParts.join('\n'), card.tags || []),
+        index: 0,
+      });
+    }
   }
 
   // Use case chunks
@@ -315,6 +338,7 @@ export async function indexRepoCard(
   const warnings: string[] = [];
   const byKind: Record<CardChunkKind, number> = {
     summary: 0,
+    tech_stack: 0,
     use_case: 0,
     design: 0,
     limitation: 0,
