@@ -471,6 +471,32 @@ async function createBundleInternal(
   });
   await writeOverviewFile(tmpPaths.overviewPath, overviewMd);
 
+  // Re-compute tags with FACTS.json data (frameworks, dependencies) for better detection
+  const factsPath = path.join(tmpPaths.rootDir, 'analysis', 'FACTS.json');
+  const factsJson = await readUtf8OrNull(factsPath);
+  if (factsJson) {
+    try {
+      const facts = JSON.parse(factsJson);
+      const updatedTags = autoDetectTags({
+        repoIds,
+        files: allIngestedFiles,
+        facts,
+      });
+      const updatedDescription = generateDescription({
+        repoIds,
+        tags: updatedTags,
+        facts,
+      });
+      // Update manifest with enriched tags and description
+      manifest.tags = updatedTags;
+      manifest.description = updatedDescription;
+      await writeManifest(tmpPaths.manifestPath, manifest);
+      logger.debug(`Tags updated with FACTS.json data: ${updatedTags.join(', ')}`);
+    } catch {
+      // Ignore parse errors - keep original tags
+    }
+  }
+
     // CRITICAL: Validate bundle completeness BEFORE atomic move
     const validation = await validateBundleCompleteness(tmpPaths.rootDir);
 

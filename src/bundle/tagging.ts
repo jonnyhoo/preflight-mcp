@@ -87,8 +87,35 @@ export function autoDetectTags(params: {
         tags.add('python');
       }
 
+      if (lowerFw.includes('starlette') || lowerFw.includes('uvicorn')) {
+        tags.add('backend');
+        tags.add('python');
+      }
+
       if (lowerFw.includes('jest') || lowerFw.includes('vitest') || lowerFw.includes('pytest')) {
         tags.add('testing');
+      }
+
+      // AI/LLM frameworks
+      if (lowerFw.includes('anthropic') || lowerFw.includes('openai') || lowerFw.includes('langchain')) {
+        tags.add('ai');
+        tags.add('llm');
+      }
+
+      // MCP framework detection
+      if (lowerFw === 'mcp') {
+        tags.add('mcp');
+        tags.add('ai-tools');
+      }
+
+      // CLI frameworks
+      if (lowerFw.includes('click') || lowerFw.includes('typer')) {
+        tags.add('cli');
+      }
+
+      // Web scraping frameworks
+      if (lowerFw.includes('beautifulsoup') || lowerFw.includes('scrapy')) {
+        tags.add('web-scraping');
       }
     }
 
@@ -162,6 +189,22 @@ export function autoDetectTags(params: {
 
   if (fileNames.some((f) => f.includes('readme') || f.includes('docs/'))) {
     tags.add('documented');
+  }
+
+  // MCP detection by file structure (mcp/ directory or server.py/server.ts pattern)
+  if (fileNames.some((f) => 
+    f.includes('/mcp/') || 
+    f.includes('mcp_server') || 
+    f.includes('mcp-server') ||
+    (f.includes('/mcp') && (f.endsWith('server.py') || f.endsWith('server.ts')))
+  )) {
+    tags.add('mcp');
+    tags.add('ai-tools');
+  }
+
+  // CLI detection by file structure (cli/ directory)
+  if (fileNames.some((f) => f.includes('/cli/') || f.includes('cli.py') || f.includes('cli.ts'))) {
+    tags.add('cli');
   }
 
   return Array.from(tags).sort();
