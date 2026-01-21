@@ -23,7 +23,7 @@ export type BundleFacts = {
   dependencies: DependencyInfo;
   fileStructure: FileStructureInfo;
   frameworks: string[];
-  features?: string[]; // Extracted from skills/, commands/, plugins/ directories
+  features?: FeatureInfo[]; // Extracted from skills/, commands/, plugins/ directories
   modules?: ModuleInfo[]; // Phase 2: Module analysis
   patterns?: string[]; // Phase 2: Architecture patterns
   techStack?: TechStackInfo; // Phase 2: Technology stack
@@ -84,6 +84,14 @@ export type TechStackInfo = {
   packageManager?: string; // e.g., "npm", "pip"
   buildTools?: string[]; // e.g., ["TypeScript", "Webpack"]
   testFrameworks?: string[]; // e.g., ["Jest", "Pytest"]
+};
+
+/**
+ * Feature/skill information extracted from well-known directories
+ */
+export type FeatureInfo = {
+  name: string; // Feature/skill name (directory name)
+  desc?: string; // Short description extracted from SKILL.md, README.md, etc.
 };
 
 /**
@@ -518,30 +526,104 @@ function detectAgentPlatforms(files: IngestedFile[]): string[] {
 }
 
 /**
- * Extract feature/skill names from well-known directories
+ * Extract feature/skill information from well-known directories.
+ * Reads SKILL.md, README.md, or index.md to extract a short description.
  */
-function extractFeatureNames(files: IngestedFile[]): string[] {
-  const features = new Set<string>();
-
+async function extractFeatures(files: IngestedFile[]): Promise<FeatureInfo[]> {
   // Well-known feature directories
   const featureDirs = ['skills', 'commands', 'plugins', 'features', 'agents'];
+  // Files to look for description (in priority order)
+  const descFiles = ['skill.md', 'readme.md', 'index.md'];
+
+  // Group files by feature directory
+  const featureFiles = new Map<string, IngestedFile[]>();
 
   for (const file of files) {
     const parts = file.repoRelativePath.split('/');
-    // Need at least 3 parts: topDir/subDir/file (ensures subDir is a directory, not a file)
+    // Need at least 3 parts: topDir/subDir/file
     if (parts.length < 3) continue;
 
     const topDir = parts[0]!.toLowerCase();
     const subDir = parts[1]!;
 
-    // Check if top-level dir is a feature directory
     if (featureDirs.includes(topDir) && subDir && !subDir.startsWith('.')) {
-      // Extract subdirectory name as feature (e.g., "brainstorming" from "skills/brainstorming/SKILL.md")
-      features.add(subDir);
+      const key = `${topDir}/${subDir}`;
+      if (!featureFiles.has(key)) {
+        featureFiles.set(key, []);
+      }
+      featureFiles.get(key)!.push(file);
     }
   }
 
-  return Array.from(features).sort();
+  // Extract features with descriptions
+  const features: FeatureInfo[] = [];
+
+  for (const [key, fileList] of featureFiles) {
+    const name = key.split('/')[1]!;
+    let desc: string | undefined;
+
+    // Find description file
+    for (const descFileName of descFiles) {
+      const descFile = fileList.find(
+        (f) => f.repoRelativePath.split('/').pop()?.toLowerCase() === descFileName
+      );
+      if (descFile) {
+        desc = await extractFirstParagraph(descFile.bundleNormAbsPath);
+        if (desc) break;
+      }
+    }
+
+    features.push({ name, desc });
+  }
+
+  return features.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Extract first meaningful paragraph from a markdown file.
+ * Skips frontmatter, headings, and badges.
+ */
+async function extractFirstParagraph(filePath: string): Promise<string | undefined> {
+  try {
+    const content = await fs.readFile(filePath, 'utf8');
+    const lines = content.split(/\r?\n/);
+
+    let inFrontmatter = false;
+    let foundHeading = false;
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+
+      // Skip frontmatter
+      if (trimmed === '---') {
+        inFrontmatter = !inFrontmatter;
+        continue;
+      }
+      if (inFrontmatter) continue;
+
+      // Skip empty lines
+      if (!trimmed) continue;
+
+      // Skip headings but mark that we passed one
+      if (trimmed.startsWith('#')) {
+        foundHeading = true;
+        continue;
+      }
+
+      // Skip badges/images
+      if (trimmed.startsWith('![') || trimmed.startsWith('[![')) continue;
+
+      // Found a content line - take first sentence or up to 150 chars
+      const firstSentence = trimmed.match(/^[^.!?]+[.!?]/);
+      if (firstSentence) {
+        return firstSentence[0].slice(0, 150);
+      }
+      return trimmed.slice(0, 150);
+    }
+  } catch {
+    // File read error - return undefined
+  }
+  return undefined;
 }
 
 /**
@@ -589,8 +671,8 @@ export async function extractBundleFacts(params: {
     frameworks = [...new Set([...frameworks, ...agentPlatforms])].sort();
   }
 
-  // Extract feature/skill names from well-known directories
-  const features = extractFeatureNames(allFiles);
+  // Extract feature/skill information from well-known directories
+  const features = await extractFeatures(allFiles);
 
   // Phase 2: Module analysis (optional, more expensive)
   let modules: ModuleInfo[] | undefined;

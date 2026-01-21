@@ -230,19 +230,24 @@ export async function loadRepoCard(bundleId: string, repoId: string): Promise<Re
 
 /**
  * Merge LLM-generated keyAPIs with extracted features from directories.
- * LLM keyAPIs come first (preserving importance order), then additional features.
+ * LLM keyAPIs come first (preserving importance order), then additional features with descriptions.
  */
-function mergeKeyAPIsWithFeatures(keyAPIs: string[], features?: string[]): string[] {
+function mergeKeyAPIsWithFeatures(
+  keyAPIs: string[],
+  features?: Array<{ name: string; desc?: string }>
+): string[] {
   if (!features || features.length === 0) return keyAPIs;
 
   // Combine and deduplicate (case-insensitive), preserving LLM order for existing items
   const seen = new Set(keyAPIs.map((k) => k.toLowerCase()));
   const merged = [...keyAPIs];
 
-  // Add features not already in keyAPIs (sorted for consistency)
+  // Add features not already in keyAPIs (sorted by name for consistency)
+  // Format: "name - description" if description exists, otherwise just "name"
   const additionalFeatures = features
-    .filter((f) => !seen.has(f.toLowerCase()))
-    .sort();
+    .filter((f) => !seen.has(f.name.toLowerCase()))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((f) => (f.desc ? `${f.name} - ${f.desc}` : f.name));
 
   return [...merged, ...additionalFeatures];
 }
