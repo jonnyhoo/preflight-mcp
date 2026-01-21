@@ -18,7 +18,12 @@ interface ConfigFile {
   storageDir?: string;
   storageDirs?: string[];
   githubToken?: string;
-  // Add more as needed
+  // Embedding configuration
+  embeddingEnabled?: boolean;
+  embeddingProvider?: 'ollama' | 'openai';
+  embeddingApiBase?: string;
+  embeddingApiKey?: string;
+  embeddingModel?: string;
 }
 
 let cachedConfigFile: ConfigFile | null = null;
@@ -299,15 +304,17 @@ export function getConfig(): PreflightConfig {
     manifestCacheMaxSize: envNumber('PREFLIGHT_MANIFEST_CACHE_MAX_SIZE', 100),
 
     // Semantic search (optional, disabled by default)
-    semanticSearchEnabled: envBoolean('PREFLIGHT_SEMANTIC_SEARCH', false),
-    embeddingProvider: parseEmbeddingProvider(process.env.PREFLIGHT_EMBEDDING_PROVIDER),
-    ollamaHost: (process.env.PREFLIGHT_OLLAMA_HOST ?? 'http://localhost:11434').trim(),
-    ollamaModel: (process.env.PREFLIGHT_OLLAMA_MODEL ?? 'nomic-embed-text').trim(),
+    // Priority: env > config file > default
+    semanticSearchEnabled: envBoolean('PREFLIGHT_SEMANTIC_SEARCH', false) || loadConfigFile().embeddingEnabled || Boolean(loadConfigFile().embeddingApiKey),
+    embeddingProvider: parseEmbeddingProvider(process.env.PREFLIGHT_EMBEDDING_PROVIDER ?? loadConfigFile().embeddingProvider),
+    ollamaHost: (process.env.PREFLIGHT_OLLAMA_HOST ?? loadConfigFile().embeddingApiBase ?? 'http://localhost:11434').trim(),
+    ollamaModel: (process.env.PREFLIGHT_OLLAMA_MODEL ?? loadConfigFile().embeddingModel ?? 'nomic-embed-text').trim(),
 
     // OpenAI-compatible (incl Azure) embedding config
-    openaiApiKey: process.env.PREFLIGHT_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY,
-    openaiModel: (process.env.PREFLIGHT_OPENAI_MODEL ?? 'text-embedding-3-small').trim(),
-    openaiBaseUrl: process.env.PREFLIGHT_OPENAI_BASE_URL ?? process.env.OPENAI_BASE_URL,
+    // Priority: env > config file > default
+    openaiApiKey: process.env.PREFLIGHT_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY ?? loadConfigFile().embeddingApiKey,
+    openaiModel: (process.env.PREFLIGHT_OPENAI_MODEL ?? loadConfigFile().embeddingModel ?? 'text-embedding-3-small').trim(),
+    openaiBaseUrl: process.env.PREFLIGHT_OPENAI_BASE_URL ?? process.env.OPENAI_BASE_URL ?? loadConfigFile().embeddingApiBase,
     openaiEmbeddingsUrl: process.env.PREFLIGHT_OPENAI_EMBEDDINGS_URL,
     openaiAuthMode: parseOpenAIAuthMode(process.env.PREFLIGHT_OPENAI_AUTH_MODE),
 

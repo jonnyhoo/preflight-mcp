@@ -84,20 +84,44 @@ analysis/{gof-patterns.json, architectural.json, test-examples.json, config.json
 search.db, manifest.json, repos/*
 ```
 
+## AI Configuration
+
+Preflight supports three AI model types, all configured in a single config file:
+
+- **Windows**: `C:\Users\<username>\.preflight\config.json`
+- **macOS/Linux**: `~/.preflight/config.json`
+
+```json
+{
+  "vlmEnabled": true,
+  "vlmApiBase": "https://your-vlm-api/v1",
+  "vlmApiKey": "your-vlm-key",
+  "vlmModel": "qwen3-vl-plus",
+
+  "llmEnabled": true,
+  "llmApiBase": "https://api.openai.com/v1",
+  "llmApiKey": "sk-xxx",
+  "llmModel": "gpt-4o-mini",
+
+  "embeddingEnabled": true,
+  "embeddingProvider": "openai",
+  "embeddingApiBase": "https://api.openai.com/v1",
+  "embeddingApiKey": "sk-xxx",
+  "embeddingModel": "text-embedding-3-small"
+}
+```
+
+| Model | Purpose | Required For |
+|-------|---------|-------------|
+| **VLM** | Vision-Language Model | PDF extraction (formulas, tables) |
+| **LLM** | Language Model | Repo Card generation (distillation) |
+| **Embedding** | Text Embedding | Semantic search |
+
+**Priority**: Environment variables > config.json > defaults
+
 ## VLM Distillation (Experimental)
 
 Extract structured content (formulas, tables, code) from PDFs using Vision-Language Models.
-
-### Setup
-Create `~/.preflight/config.json`:
-```json
-{
-  "vlmApiBase": "https://your-vlm-api/v1",
-  "vlmApiKey": "your-api-key",
-  "vlmModel": "qwen3-vl-plus",
-  "vlmEnabled": true
-}
-```
 
 ### Usage
 ```bash
@@ -241,20 +265,44 @@ Bundle 包含 `analysis/` 目录下的静态分析结果：
 - `test-examples.json` - 测试示例
 - `config.json` - 配置分析
 
+## AI 配置
+
+Preflight 支持三种 AI 模型，统一在配置文件中设置：
+
+- **Windows**: `C:\Users\<用户名>\.preflight\config.json`
+- **macOS/Linux**: `~/.preflight/config.json`
+
+```json
+{
+  "vlmEnabled": true,
+  "vlmApiBase": "https://your-vlm-api/v1",
+  "vlmApiKey": "your-vlm-key",
+  "vlmModel": "qwen3-vl-plus",
+
+  "llmEnabled": true,
+  "llmApiBase": "https://api.openai.com/v1",
+  "llmApiKey": "sk-xxx",
+  "llmModel": "gpt-4o-mini",
+
+  "embeddingEnabled": true,
+  "embeddingProvider": "openai",
+  "embeddingApiBase": "https://api.openai.com/v1",
+  "embeddingApiKey": "sk-xxx",
+  "embeddingModel": "text-embedding-3-small"
+}
+```
+
+| 模型 | 用途 | 使用场景 |
+|------|------|----------|
+| **VLM** | 视觉语言模型 | PDF 提取（公式、表格） |
+| **LLM** | 大语言模型 | 仓库卡片生成（蒸馏） |
+| **Embedding** | 文本嵌入 | 语义搜索 |
+
+**优先级**：环境变量 > config.json > 默认值
+
 ## VLM 知识蒸馏（实验功能）
 
 使用视觉语言模型从 PDF 中提取结构化内容（公式、表格、代码）。
-
-### 配置
-创建 `~/.preflight/config.json`：
-```json
-{
-  "vlmApiBase": "https://your-vlm-api/v1",
-  "vlmApiKey": "your-api-key",
-  "vlmModel": "qwen3-vl-plus",
-  "vlmEnabled": true
-}
-```
 
 ### 用法
 ```bash

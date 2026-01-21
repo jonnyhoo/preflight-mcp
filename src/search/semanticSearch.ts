@@ -22,11 +22,30 @@ export type SemanticIndexConfig = {
   authMode?: string;
 };
 
+/**
+ * Modal content types for filtering semantic search.
+ */
+export type ModalContentKind = 'formula' | 'table' | 'code_block' | 'image' | 'diagram';
+
+/**
+ * Card content types for filtering semantic search.
+ */
+export type CardContentKind = 'summary' | 'use_case' | 'design' | 'limitation' | 'quickstart' | 'api' | 'annotation';
+
 export type SemanticSearchOptions = {
   limit: number;
   threshold?: number;
-  kind?: 'doc' | 'code' | 'all';
+  /** Filter by content kind: doc, code, modal, card, or all */
+  kind?: 'doc' | 'code' | 'modal' | 'card' | 'all';
   fileTypeFilters?: string[];
+  /** Filter modal content by specific types (only when kind='modal') */
+  modalTypes?: ModalContentKind[];
+  /** Include modal content in results when kind='all' (default: true) */
+  includeModal?: boolean;
+  /** Filter card content by specific types (only when kind='card') */
+  cardTypes?: CardContentKind[];
+  /** Include card content in results when kind='all' (default: true) */
+  includeCard?: boolean;
 };
 
 function cosineSimilarity(a: number[], b: number[]): number {
@@ -203,9 +222,51 @@ export class SemanticSearchIndex {
     const conditions: string[] = [];
     const params: unknown[] = [];
 
+    // Handle kind filtering with modal/card support
     if (options.kind && options.kind !== 'all') {
-      conditions.push('kind = ?');
-      params.push(options.kind);
+      if (options.kind === 'modal') {
+        // Filter for modal content (kind starts with 'modal_')
+        if (options.modalTypes && options.modalTypes.length > 0) {
+          // Filter specific modal types
+          const modalConditions = options.modalTypes.map(() => 'kind = ?');
+          conditions.push(`(${modalConditions.join(' OR ')})`);
+          for (const modalType of options.modalTypes) {
+            params.push(`modal_${modalType}`);
+          }
+        } else {
+          // All modal content
+          conditions.push("kind LIKE 'modal_%'");
+        }
+      } else if (options.kind === 'card') {
+        // Filter for card content (kind starts with 'card_')
+        if (options.cardTypes && options.cardTypes.length > 0) {
+          // Filter specific card types
+          const cardConditions = options.cardTypes.map(() => 'kind = ?');
+          conditions.push(`(${cardConditions.join(' OR ')})`);
+          for (const cardType of options.cardTypes) {
+            params.push(`card_${cardType}`);
+          }
+        } else {
+          // All card content
+          conditions.push("kind LIKE 'card_%'");
+        }
+      } else {
+        // Regular doc/code filter
+        conditions.push('kind = ?');
+        params.push(options.kind);
+      }
+    } else if (options.kind === 'all') {
+      // Handle exclusions for 'all' mode
+      const exclusions: string[] = [];
+      if (options.includeModal === false) {
+        exclusions.push("kind NOT LIKE 'modal_%'");
+      }
+      if (options.includeCard === false) {
+        exclusions.push("kind NOT LIKE 'card_%'");
+      }
+      if (exclusions.length > 0) {
+        conditions.push(`(${exclusions.join(' AND ')})`);
+      }
     }
 
     if (options.fileTypeFilters && options.fileTypeFilters.length > 0) {
