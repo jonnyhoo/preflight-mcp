@@ -307,6 +307,7 @@ function extractReadmeContent(
 
   // 0. Extract project description from intro or first # heading
   let introContent: string | null = null;
+  let usedFirstH1 = false;
 
   // Try content before first heading
   const intro = sections.find((s) => s.heading === '' && s.level === 0);
@@ -315,11 +316,10 @@ function extractReadmeContent(
   }
 
   // Fallback: first # level heading content (common pattern: # ProjectName + description)
-  if (!introContent) {
-    const firstH1 = sections.find((s) => s.level === 1);
-    if (firstH1) {
-      introContent = cleanSectionContent(firstH1.lines);
-    }
+  const firstH1 = sections.find((s) => s.level === 1);
+  if (!introContent && firstH1) {
+    introContent = cleanSectionContent(firstH1.lines);
+    usedFirstH1 = true;
   }
 
   if (introContent) {
@@ -330,12 +330,14 @@ function extractReadmeContent(
   }
 
   // 1. Try to match key sections (only top-level ## sections, not ### sub-sections)
+  // Skip firstH1 if it was used as intro to avoid duplication
   const keySections = sections.filter(
     (s) =>
       s.heading &&
       s.level <= 2 &&
       isKeySection(s.heading) &&
-      !shouldSkipSection(s.heading)
+      !shouldSkipSection(s.heading) &&
+      !(usedFirstH1 && s === firstH1)
   );
 
   for (const section of keySections) {

@@ -475,7 +475,8 @@ async function syncArchitecturalWithFacts(
     if (!archEntry) return;
 
     // If architectural analyzer didn't find patterns, use FACTS patterns
-    const noPatterns = archEntry.summary.toLowerCase().includes('no architectural patterns');
+    // Check highlights array instead of string matching (more robust)
+    const noPatterns = !archEntry.highlights || archEntry.highlights.length === 0;
     if (noPatterns) {
       archEntry.summary = `Detected ${facts.patterns.length} architectural patterns: ${facts.patterns.join(', ')}.`;
       archEntry.highlights = facts.patterns.map((p) => ({
