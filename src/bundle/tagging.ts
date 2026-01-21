@@ -108,9 +108,25 @@ export function autoDetectTags(params: {
         tags.add('ai-tools');
       }
 
-      // CLI frameworks
+      // CLI frameworks (Python)
       if (lowerFw.includes('click') || lowerFw.includes('typer')) {
         tags.add('cli');
+      }
+
+      // CLI frameworks (JS/TS)
+      if (lowerFw.includes('commander') || lowerFw.includes('yargs') || lowerFw.includes('inquirer')) {
+        tags.add('cli');
+      }
+
+      // Terminal UI frameworks
+      if (lowerFw === 'ink') {
+        tags.add('cli');
+        tags.add('terminal-ui');
+      }
+
+      // Schema validation
+      if (lowerFw === 'zod' || lowerFw === 'pydantic') {
+        tags.add('validation');
       }
 
       // Web scraping frameworks

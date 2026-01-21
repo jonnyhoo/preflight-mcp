@@ -469,7 +469,7 @@ function detectFrameworks(deps: DependencyInfo, files: IngestedFile[]): string[]
 
   const allDeps = [...deps.runtime, ...deps.dev].map((d) => d.name.toLowerCase());
 
-  // JavaScript/TypeScript frameworks
+  // JavaScript/TypeScript web frameworks
   if (allDeps.includes('react')) frameworks.add('React');
   if (allDeps.includes('vue')) frameworks.add('Vue');
   if (allDeps.includes('angular')) frameworks.add('Angular');
@@ -477,7 +477,20 @@ function detectFrameworks(deps: DependencyInfo, files: IngestedFile[]): string[]
   if (allDeps.includes('nuxt')) frameworks.add('Nuxt');
   if (allDeps.includes('express')) frameworks.add('Express');
   if (allDeps.includes('fastify')) frameworks.add('Fastify');
-  if (allDeps.includes('nestjs')) frameworks.add('NestJS');
+  if (allDeps.includes('nestjs') || allDeps.includes('@nestjs/core')) frameworks.add('NestJS');
+
+  // JavaScript/TypeScript AI/LLM SDKs (scoped packages)
+  if (allDeps.some((d) => d.startsWith('@anthropic-ai/'))) frameworks.add('Anthropic');
+  if (allDeps.some((d) => d.startsWith('@modelcontextprotocol/'))) frameworks.add('MCP');
+
+  // JavaScript/TypeScript CLI frameworks
+  if (allDeps.includes('commander')) frameworks.add('Commander');
+  if (allDeps.includes('yargs')) frameworks.add('Yargs');
+  if (allDeps.includes('ink')) frameworks.add('Ink');
+  if (allDeps.includes('inquirer') || allDeps.includes('@inquirer/prompts')) frameworks.add('Inquirer');
+
+  // JavaScript/TypeScript validation
+  if (allDeps.includes('zod')) frameworks.add('Zod');
 
   // Python web frameworks
   if (allDeps.includes('django')) frameworks.add('Django');
