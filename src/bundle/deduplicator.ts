@@ -109,7 +109,8 @@ type CanonicalWebConfig = {
 
 type CanonicalRepoInput =
   | { kind: 'github'; repo: string; ref?: string }
-  | { kind: 'web'; url: string; config?: CanonicalWebConfig };
+  | { kind: 'web'; url: string; config?: CanonicalWebConfig }
+  | { kind: 'pdf'; url: string };
 
 /**
  * Normalize web URL for consistent fingerprinting.
@@ -171,6 +172,14 @@ function canonicalizeCreateInput(input: CreateBundleInput): {
           config: canonicalConfig && Object.keys(canonicalConfig).length > 0 ? canonicalConfig : undefined,
         };
       }
+      if (r.kind === 'pdf') {
+        // PDF sources - normalize URL for fingerprinting
+        const normalizedUrl = normalizeWebUrlForFingerprint(r.url);
+        return {
+          kind: 'pdf' as const,
+          url: normalizedUrl,
+        };
+      }
       // For de-duplication, treat local imports as equivalent to github imports of the same logical repo/ref.
       const { owner, repo } = parseOwnerRepo(r.repo);
       return {
@@ -180,8 +189,12 @@ function canonicalizeCreateInput(input: CreateBundleInput): {
       };
     })
     .sort((a, b) => {
-      const ka = a.kind === 'web' ? `web:${a.url}:${JSON.stringify(a.config ?? {})}` : `github:${a.repo}:${a.ref ?? ''}`;
-      const kb = b.kind === 'web' ? `web:${b.url}:${JSON.stringify(b.config ?? {})}` : `github:${b.repo}:${b.ref ?? ''}`;
+      const ka = a.kind === 'web' ? `web:${a.url}:${JSON.stringify(a.config ?? {})}` :
+                 a.kind === 'pdf' ? `pdf:${a.url}` :
+                 `github:${a.repo}:${a.ref ?? ''}`;
+      const kb = b.kind === 'web' ? `web:${b.url}:${JSON.stringify(b.config ?? {})}` :
+                 b.kind === 'pdf' ? `pdf:${b.url}` :
+                 `github:${b.repo}:${b.ref ?? ''}`;
       return ka.localeCompare(kb);
     });
 
@@ -236,6 +249,7 @@ export async function writeDedupIndex(storageDir: string, idx: DedupIndexV1): Pr
   await ensureDir(path.dirname(p));
 
   // Use atomic write (write to temp file, then rename) to prevent corruption
+  // preflight-ignore insecure-random (non-security: temp filename uniqueness)
   const tmpPath = `${p}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
   try {
     await fs.writeFile(tmpPath, JSON.stringify(idx, null, 2) + '\n', 'utf8');

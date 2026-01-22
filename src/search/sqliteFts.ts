@@ -25,24 +25,6 @@ export type {
   SearchCacheEntry,
 } from './types.js';
 
-// Re-export claim verification (backward compatibility)
-export type { EvidenceType, EvidenceHit, VerificationResult } from './claim-verification.js';
-export { verifyClaimInIndex } from './claim-verification.js';
-
-// Re-export modal search (backward compatibility)
-export type {
-  ModalContentKind,
-  ModalSearchScope,
-  ModalIndexItem,
-  ModalSearchHit,
-} from './modal-search.js';
-export {
-  ensureModalTables,
-  indexModalContent,
-  searchModalContent,
-  searchModalByKeywords,
-  getModalContentStats,
-} from './modal-search.js';
 
 async function ensureDir(p: string): Promise<void> {
   await fs.mkdir(p, { recursive: true });
@@ -773,6 +755,7 @@ export function searchIndexAdvanced(
       const groupedTokens = grouped.length * 80;
       const savings = Math.round((1 - groupedTokens / ungroupedTokens) * 100);
       if (savings > 0) {
+        // preflight-ignore hardcoded-credentials ("token" here means LLM token, not auth credential)
         tokenBudgetHint = `groupByFile saves ~${savings}% tokens (${grouped.length} files vs ${rows.length} hits)`;
       }
     }

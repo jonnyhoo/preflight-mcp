@@ -98,6 +98,7 @@ export async function writeDedupIndex(storageDir: string, idx: DedupIndexV1): Pr
   await ensureDir(path.dirname(p));
   
   // Use atomic write (write to temp file, then rename) to prevent corruption
+  // preflight-ignore insecure-random (non-security: temp filename uniqueness)
   const tmpPath = `${p}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
   try {
     await fs.writeFile(tmpPath, JSON.stringify(idx, null, 2) + '\n', 'utf8');
