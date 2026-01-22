@@ -10,8 +10,4 @@ export { registerLspTools } from './lspTools.js';
 export { registerCheckTools } from './checkTools.js';
 export { registerDistillTools } from './distillTools.js';
 
-// Legacy exports (deprecated, use registerCheckTools instead)
-export { registerDocCheckTools } from './doccheckTools.js';
-export { registerDuplicatesTools } from './duplicatesTools.js';
-
 export type { ToolDependencies, ToolResponse } from './types.js';

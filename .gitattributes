@@ -1,0 +1,19 @@
+# Normalize line endings to LF on checkout
+* text=auto eol=lf
+
+# Explicitly set file types
+*.ts text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+
+# Preserve binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.wasm binary
+*.node binary
