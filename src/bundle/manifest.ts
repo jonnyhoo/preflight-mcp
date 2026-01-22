@@ -157,6 +157,17 @@ export type RepoInput =
       kind: 'web';
       url: string; // base URL to crawl
       config?: WebCrawlInputConfig; // optional crawl configuration (baseUrl is provided via 'url')
+    }
+  | {
+      /**
+       * Import a PDF document from URL or local path.
+       * For URLs: PDF is downloaded and parsed for text extraction.
+       * For local paths: PDF is parsed directly.
+       */
+      kind: 'pdf';
+      url?: string; // PDF URL to download (optional if path is provided)
+      path?: string; // Local file path to PDF (optional if url is provided)
+      name?: string; // optional display name for the document
     };
 
 export type BundleIndexConfig = {
@@ -166,22 +177,27 @@ export type BundleIndexConfig = {
 };
 
 export type BundleRepo = {
-  kind: 'github' | 'local' | 'web';
-  id: string; // owner/repo for github/local, 'web/{safeId}' for web
+  kind: 'github' | 'local' | 'web' | 'pdf';
+  id: string; // owner/repo for github/local, 'web/{safeId}' for web, 'pdf/{safeId}' for pdf
   /**
    * Source of the snapshot for this repo.
    * - github: git shallow clone or GitHub archive (zipball) fallback
    * - local: local directory import
    * - crawl: web crawl
+   * - download: remote PDF download
    */
-  source?: 'git' | 'archive' | 'local' | 'crawl';
-  headSha?: string; // for web: content fingerprint
+  source?: 'git' | 'archive' | 'local' | 'crawl' | 'download';
+  headSha?: string; // for web/pdf: content fingerprint
   fetchedAt: string; // ISO
   notes?: string[];
   // Web-specific fields
   baseUrl?: string; // web: starting URL
   pageCount?: number; // web: number of crawled pages
   usedLlmsTxt?: boolean; // web: whether llms.txt fast path was used
+  // PDF-specific fields
+  pdfUrl?: string; // pdf: original URL
+  localPath?: string; // pdf: local file path after download
+  fileSize?: number; // pdf: file size in bytes
 };
 
 /** @deprecated Context7 integration removed. Kept for backward compatibility with existing bundles. */

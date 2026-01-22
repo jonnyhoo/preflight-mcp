@@ -60,6 +60,12 @@ export function autoDetectTags(params: {
       tags.add('code-analysis');
       tags.add('dev-tools');
     }
+
+    // Claude Code plugin detection (by repo name)
+    if (lowerRepo.includes('claude') && lowerRepo.includes('plugin')) {
+      tags.add('claude-code');
+      tags.add('plugins');
+    }
   }
 
   // 2. Detect by frameworks (if facts available)
@@ -173,6 +179,30 @@ export function autoDetectTags(params: {
   // 3. Detect by file patterns
   const fileNames = params.files.map((f) => f.repoRelativePath.toLowerCase());
 
+  // Claude Code plugin detection (by file structure)
+  // Detects: .claude-plugin/ directory, plugin.json, commands/, agents/, skills/ directories
+  const hasClaudePluginDir = fileNames.some((f) => f.includes('.claude-plugin/'));
+  const hasPluginJson = fileNames.some((f) => f.endsWith('.claude-plugin/plugin.json'));
+  const hasPluginStructure = fileNames.some((f) =>
+    f.includes('/commands/') ||
+    f.includes('/agents/') ||
+    f.includes('/skills/') ||
+    f.includes('/hooks/')
+  );
+  
+  if (hasClaudePluginDir || hasPluginJson) {
+    tags.add('claude-code');
+    tags.add('plugins');
+    // If it has multiple plugin directories, it's likely a plugin marketplace/directory
+    const pluginDirCount = fileNames.filter((f) => f.endsWith('.claude-plugin/plugin.json')).length;
+    if (pluginDirCount > 3) {
+      tags.add('marketplace');
+    }
+  } else if (hasPluginStructure) {
+    // Has plugin-like structure but no .claude-plugin/ - might be plugin-related
+    tags.add('extensible');
+  }
+
   if (fileNames.some((f) => f.includes('dockerfile') || f.includes('docker-compose'))) {
     tags.add('docker');
     tags.add('devops');
@@ -279,7 +309,9 @@ export function generateDescription(params: {
   }
 
   // Special categories
-  if (params.tags.includes('mcp')) {
+  if (params.tags.includes('claude-code')) {
+    parts.push('(Claude Code Plugin)');
+  } else if (params.tags.includes('mcp')) {
     parts.push('(MCP Server)');
   } else if (params.tags.includes('agents')) {
     parts.push('(AI Agent)');
@@ -299,6 +331,7 @@ export function generateDescription(params: {
  */
 export function getCategoryFromTags(tags: string[]): string {
   // Priority order for categorization
+  if (tags.includes('claude-code')) return 'claude-code-plugins';
   if (tags.includes('mcp')) return 'mcp-servers';
   if (tags.includes('agents')) return 'ai-agents';
   if (tags.includes('web-scraping')) return 'web-scraping';

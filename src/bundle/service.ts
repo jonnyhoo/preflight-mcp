@@ -49,6 +49,7 @@ import {
   ingestLocalRepo,
   cloneAndIngestGitHubRepo,
 } from './repo-ingest.js';
+import { downloadPdfToLocal } from './pdf-download.js';
 
 // Web module imports are dynamic to avoid loading jsdom in non-web contexts
 // This fixes Jest ESM compatibility issues
@@ -103,15 +104,19 @@ export type BundleSummary = {
   createdAt: string;
   updatedAt: string;
   repos: Array<{
-    kind: 'github' | 'local' | 'web';
+    kind: 'github' | 'local' | 'web' | 'pdf';
     id: string;
-    source?: 'git' | 'archive' | 'local' | 'crawl';
+    source?: 'git' | 'archive' | 'local' | 'crawl' | 'download';
     headSha?: string;
     notes?: string[];
     // Web-specific fields
     baseUrl?: string;
     pageCount?: number;
     usedLlmsTxt?: boolean;
+    // PDF-specific fields
+    pdfUrl?: string;
+    localPath?: string;
+    fileSize?: number;
   }>;
   /** User-facing warnings (e.g., git clone failed, used zip fallback) */
   warnings?: string[];
@@ -170,10 +175,17 @@ async function createBundleInternal(
   options?: CreateBundleOptions
 ): Promise<BundleSummary> {
   const fingerprint = computeCreateInputFingerprint(input);
-  // Extract IDs for display - for web sources, use the URL
+  const isPdfOnly = input.repos.length > 0
+    && input.repos.every((r) => r.kind === 'pdf')
+    && (!input.libraries || input.libraries.length === 0)
+    && (!input.topics || input.topics.length === 0);
+  // Extract IDs for display - for web/pdf sources, use the URL
   const repoIds = input.repos.map((r) => {
     if (r.kind === 'web') {
       return `web:${r.url}`;
+    }
+    if (r.kind === 'pdf') {
+      return `pdf:${r.name ?? r.url ?? r.path ?? 'unknown'}`;
     }
     return r.repo;
   });
@@ -239,6 +251,11 @@ async function createBundleInternal(
   
   const tmpPaths = getBundlePaths(tmpBundlesDir, bundleId);
   await ensureDir(tmpPaths.rootDir);
+
+  const docsDir = isPdfOnly ? undefined : path.join(tmpPaths.rootDir, 'docs');
+  if (docsDir) {
+    await ensureDir(docsDir);
+  }
   
   const finalPaths = getBundlePaths(effectiveStorageDir, bundleId);
 
@@ -348,6 +365,186 @@ async function createBundleInternal(
           pageCount: webResult.pageCount,
           usedLlmsTxt: webResult.usedLlmsTxt,
         });
+      } else if (repoInput.kind === 'pdf') {
+        // PDF source - download from URL or use local path
+        let localPdfPath: string | undefined;
+        let pdfUrl: string | undefined;
+        let fileSize: number | undefined;
+        let contentHash: string | undefined;
+        let isLocalFile = false;
+        
+        if (repoInput.path) {
+          // Local PDF file - use directly
+          isLocalFile = true;
+          localPdfPath = path.resolve(repoInput.path);
+          pdfUrl = undefined;
+          
+          reportProgress('ingesting', repoProgress, `[${repoIndex}/${totalRepos}] Reading local PDF ${repoInput.path}...`);
+          tracker.updateProgress(taskId, 'ingesting', repoProgress, `Reading local PDF...`);
+          
+          // Verify file exists and get size
+          try {
+            const stat = await fs.stat(localPdfPath);
+            if (!stat.isFile()) {
+              throw new Error('Path is not a file');
+            }
+            fileSize = stat.size;
+            // Compute content hash
+            const fileBuffer = await fs.readFile(localPdfPath);
+            contentHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+          } catch (err) {
+            const errorNote = `Local PDF not accessible: ${(err as Error).message}`;
+            allWarnings.push(errorNote);
+            logger.warn(`Local PDF not accessible: ${localPdfPath}: ${(err as Error).message}`);
+            
+            const pathHash = crypto.createHash('sha256').update(localPdfPath).digest('hex').slice(0, 12);
+            const nameSlug = (repoInput.name ?? '').trim().replace(/[^a-zA-Z0-9._-]/g, '_');
+            const pdfSlug = nameSlug ? `${nameSlug}_${pathHash}` : pathHash;
+            const pdfRepoId = `pdf/${pdfSlug}`;
+            
+            reposSummary.push({
+              kind: 'pdf',
+              id: pdfRepoId,
+              source: 'local' as const,
+              notes: [errorNote],
+              localPath: localPdfPath,
+            });
+            continue;
+          }
+        } else if (repoInput.url) {
+          // Remote PDF URL - download first
+          pdfUrl = repoInput.url;
+          reportProgress('downloading', repoProgress, `[${repoIndex}/${totalRepos}] Downloading PDF ${repoInput.url}...`);
+          tracker.updateProgress(taskId, 'downloading', repoProgress, `Downloading PDF...`);
+
+          const downloadResult = await downloadPdfToLocal(repoInput.url, cfg.downloadsDir);
+          
+          if (!downloadResult.success || !downloadResult.localPath) {
+            const errorNote = `PDF download failed: ${downloadResult.error ?? 'Unknown error'}`;
+            allWarnings.push(errorNote);
+            logger.warn(`PDF download failed for ${repoInput.url}: ${downloadResult.error}`);
+            
+            const urlHash = crypto.createHash('sha256').update(repoInput.url).digest('hex').slice(0, 12);
+            const nameSlug = (repoInput.name ?? '').trim().replace(/[^a-zA-Z0-9._-]/g, '_');
+            const pdfSlug = nameSlug ? `${nameSlug}_${urlHash}` : urlHash;
+            const pdfRepoId = `pdf/${pdfSlug}`;
+            
+            reposSummary.push({
+              kind: 'pdf',
+              id: pdfRepoId,
+              source: 'download',
+              notes: [errorNote],
+              pdfUrl: repoInput.url,
+            });
+            continue;
+          }
+          
+          localPdfPath = downloadResult.localPath;
+          fileSize = downloadResult.fileSize;
+          contentHash = downloadResult.contentHash;
+        } else {
+          // Neither url nor path provided - shouldn't happen due to schema validation
+          const errorNote = 'PDF input requires either url or path';
+          allWarnings.push(errorNote);
+          logger.warn(errorNote);
+          continue;
+        }
+
+        reportProgress('ingesting', repoProgress + 10, `[${repoIndex}/${totalRepos}] Parsing PDF...`);
+        tracker.updateProgress(taskId, 'ingesting', repoProgress + 10, 'Parsing PDF...');
+
+        // Create stable PDF repo ID and docs output path
+        const idSource = pdfUrl ?? localPdfPath ?? 'unknown';
+        const sourceHash = crypto.createHash('sha256').update(idSource).digest('hex').slice(0, 12);
+        const nameSlug = (repoInput.name ?? '').trim().replace(/[^a-zA-Z0-9._-]/g, '_');
+        const pdfSlug = nameSlug ? `${nameSlug}_${sourceHash}` : sourceHash;
+        const pdfRepoId = `pdf/${pdfSlug}`;
+        const pdfDocsDir = isPdfOnly
+          ? tmpPaths.rootDir
+          : path.join(docsDir!, 'pdf', pdfSlug);
+        await ensureDir(pdfDocsDir);
+
+        // Parse PDF document
+        const parseResult = await ingestDocument(localPdfPath!, {
+          extractImages: true,
+          extractTables: true,
+          extractEquations: true,
+          outputDir: pdfDocsDir,
+          vlmConfig: cfg.vlmEnabled && cfg.vlmApiKey ? {
+            apiBase: cfg.vlmApiBase ?? '',
+            apiKey: cfg.vlmApiKey,
+            model: cfg.vlmModel,
+          } : undefined,
+        });
+
+        const notes: string[] = [];
+        if (!parseResult.success) {
+          notes.push(`Parse warning: ${parseResult.error}`);
+        }
+        if (parseResult.warnings) {
+          notes.push(...parseResult.warnings.slice(0, 10));
+        }
+        if (isLocalFile) {
+          notes.push('Local file');
+        }
+        notes.push(`File size: ${fileSize ?? 0} bytes`);
+        if (parseResult.pageCount) {
+          notes.push(`Pages: ${parseResult.pageCount}`);
+        }
+
+        // Convert parsed content to IngestedFile format
+        if (parseResult.success && parseResult.fullText) {
+          // Create a markdown file with the extracted text
+          const mdBaseName = nameSlug || 'document';
+          const mdFilename = isPdfOnly
+            ? `pdf_${pdfSlug}.md`
+            : `${mdBaseName}.md`;
+          const mdPath = path.join(pdfDocsDir, mdFilename);
+          
+          // Build markdown content with metadata
+          const sourceInfo = pdfUrl ? `Source: ${pdfUrl}` : `Source: ${localPdfPath}`;
+          const mdContent = [
+            `# ${repoInput.name ?? 'PDF Document'}`,
+            '',
+            `> ${sourceInfo}`,
+            parseResult.pageCount ? `> Pages: ${parseResult.pageCount}` : '',
+            '',
+            '---',
+            '',
+            parseResult.fullText,
+          ].filter(Boolean).join('\n');
+          
+          await fs.writeFile(mdPath, mdContent, 'utf8');
+          
+          // Compute content hash
+          const mdContentHash = sha256Text(mdContent);
+          
+          // Add to ingested files (match IngestedFile type)
+          const bundleRelPath = isPdfOnly
+            ? mdFilename
+            : `docs/pdf/${pdfSlug}/${mdFilename}`;
+          const ingestedFile: IngestedFile = {
+            repoId: pdfRepoId,
+            kind: 'doc',
+            repoRelativePath: mdFilename,
+            bundleNormRelativePath: bundleRelPath,
+            bundleNormAbsPath: mdPath,
+            sha256: mdContentHash,
+            bytes: Buffer.byteLength(mdContent, 'utf8'),
+          };
+          allIngestedFiles.push(ingestedFile);
+        }
+
+        reposSummary.push({
+          kind: 'pdf',
+          id: pdfRepoId,
+          source: isLocalFile ? 'local' as const : 'download',
+          headSha: contentHash,
+          notes: notes.slice(0, 50),
+          pdfUrl: pdfUrl,
+          localPath: localPdfPath,
+          fileSize: fileSize,
+        });
       }
     }
 
@@ -355,10 +552,11 @@ async function createBundleInternal(
   reportProgress('indexing', 50, `Building search index (${allIngestedFiles.length} files)...`);
   tracker.updateProgress(taskId, 'indexing', 50, `Building search index (${allIngestedFiles.length} files)...`);
   
-  await rebuildIndex(tmpPaths.searchDbPath, allIngestedFiles, {
+  const indexConfig = {
     includeDocs: true,
-    includeCode: true,
-  });
+    includeCode: !isPdfOnly,
+  };
+  await rebuildIndex(tmpPaths.searchDbPath, allIngestedFiles, indexConfig);
 
     // Auto-generate metadata (displayName, tags, description)
     const repoIds = reposSummary.map((r) => r.id);
@@ -385,6 +583,7 @@ async function createBundleInternal(
       description,
       tags,
       primaryLanguage,
+      type: isPdfOnly ? 'document' : undefined,
       inputs: {
         repos: input.repos,
         libraries: input.libraries,
@@ -403,11 +602,17 @@ async function createBundleInternal(
           pageCount: r.pageCount,
           usedLlmsTxt: r.usedLlmsTxt,
         } : {}),
+        // PDF-specific fields (only included for pdf sources)
+        ...(r.kind === 'pdf' ? {
+          pdfUrl: r.pdfUrl,
+          localPath: r.localPath,
+          fileSize: r.fileSize,
+        } : {}),
       })),
       index: {
         backend: 'sqlite-fts5-lines',
-        includeDocs: true,
-        includeCode: true,
+        includeDocs: indexConfig.includeDocs,
+        includeCode: indexConfig.includeCode,
       },
       // Store skipped files for transparency (limit to 200 entries to avoid bloat)
       skippedFiles: allSkippedFiles.length > 0 ? allSkippedFiles.slice(0, 200) : undefined,
@@ -415,144 +620,146 @@ async function createBundleInternal(
 
   await writeManifest(tmpPaths.manifestPath, manifest);
 
-  // Guides.
-  await writeAgentsMd({
-    targetPath: tmpPaths.agentsPath,
-    bundleId,
-    bundleRootDir: tmpPaths.rootDir,
-    repos: reposSummary.map((r) => ({ id: r.id, headSha: r.headSha })),
-  });
-  await writeStartHereMd({
-    targetPath: tmpPaths.startHerePath,
-    bundleId,
-    bundleRootDir: tmpPaths.rootDir,
-    repos: reposSummary.map((r) => ({ id: r.id, headSha: r.headSha })),
-  });
-
-  // Generate static facts (FACTS.json) FIRST. This is intentionally non-LLM and safe to keep inside bundles.
-  reportProgress('analyzing', 70, 'Analyzing code structure...');
-  tracker.updateProgress(taskId, 'analyzing', 70, 'Analyzing code structure...');
-  
-  await generateFactsBestEffort({
-    bundleId,
-    bundleRoot: tmpPaths.rootDir,
-    files: allIngestedFiles,
-    mode: cfg.analysisMode,
-  });
-
-  // Run advanced analyzers (GoF patterns, architectural patterns, etc.) AFTER FACTS.json
-  reportProgress('analyzing', 75, 'Running advanced analyzers...');
-  tracker.updateProgress(taskId, 'analyzing', 75, 'Running advanced analyzers (patterns, config, tests)...');
-
-  await runAdvancedAnalyzersBestEffort({
-    bundleId,
-    bundleRoot: tmpPaths.rootDir,
-    files: allIngestedFiles,
-    manifest,
-    mode: cfg.analysisMode,
-  });
-
-  // Overview (S2: factual-only with evidence pointers) - generated AFTER FACTS.json
-  reportProgress('generating', 80, 'Generating overview...');
-  tracker.updateProgress(taskId, 'generating', 80, 'Generating overview...');
-  
-  const perRepoOverviews = reposSummary
-    .filter((r) => r.kind === 'github' || r.kind === 'local' || r.kind === 'web')
-    .map((r) => {
-      const repoId = r.id;
-      const repoFiles = allIngestedFiles.filter((f) => f.repoId === repoId);
-      return { repoId, headSha: r.headSha, files: repoFiles };
+  if (!isPdfOnly) {
+    // Guides.
+    await writeAgentsMd({
+      targetPath: tmpPaths.agentsPath,
+      bundleId,
+      bundleRootDir: tmpPaths.rootDir,
+      repos: reposSummary.map((r) => ({ id: r.id, headSha: r.headSha })),
+    });
+    await writeStartHereMd({
+      targetPath: tmpPaths.startHerePath,
+      bundleId,
+      bundleRootDir: tmpPaths.rootDir,
+      repos: reposSummary.map((r) => ({ id: r.id, headSha: r.headSha })),
     });
 
-  const overviewMd = await generateOverviewMarkdown({
-    bundleId,
-    bundleRootDir: tmpPaths.rootDir,
-    repos: perRepoOverviews,
-  });
-  await writeOverviewFile(tmpPaths.overviewPath, overviewMd);
+    // Generate static facts (FACTS.json) FIRST. This is intentionally non-LLM and safe to keep inside bundles.
+    reportProgress('analyzing', 70, 'Analyzing code structure...');
+    tracker.updateProgress(taskId, 'analyzing', 70, 'Analyzing code structure...');
+    
+    await generateFactsBestEffort({
+      bundleId,
+      bundleRoot: tmpPaths.rootDir,
+      files: allIngestedFiles,
+      mode: cfg.analysisMode,
+    });
 
-  // Re-compute tags with FACTS.json data (frameworks, dependencies) for better detection
-  const factsPath = path.join(tmpPaths.rootDir, 'analysis', 'FACTS.json');
-  const factsJson = await readUtf8OrNull(factsPath);
-  if (factsJson) {
-    try {
-      const facts = JSON.parse(factsJson);
-      const updatedTags = autoDetectTags({
-        repoIds,
-        files: allIngestedFiles,
-        facts,
+    // Run advanced analyzers (GoF patterns, architectural patterns, etc.) AFTER FACTS.json
+    reportProgress('analyzing', 75, 'Running advanced analyzers...');
+    tracker.updateProgress(taskId, 'analyzing', 75, 'Running advanced analyzers (patterns, config, tests)...');
+
+    await runAdvancedAnalyzersBestEffort({
+      bundleId,
+      bundleRoot: tmpPaths.rootDir,
+      files: allIngestedFiles,
+      manifest,
+      mode: cfg.analysisMode,
+    });
+
+    // Overview (S2: factual-only with evidence pointers) - generated AFTER FACTS.json
+    reportProgress('generating', 80, 'Generating overview...');
+    tracker.updateProgress(taskId, 'generating', 80, 'Generating overview...');
+    
+    const perRepoOverviews = reposSummary
+      .filter((r) => r.kind === 'github' || r.kind === 'local' || r.kind === 'web' || r.kind === 'pdf')
+      .map((r) => {
+        const repoId = r.id;
+        const repoFiles = allIngestedFiles.filter((f) => f.repoId === repoId);
+        return { repoId, headSha: r.headSha, files: repoFiles };
       });
-      const updatedDescription = generateDescription({
-        repoIds,
-        tags: updatedTags,
-        facts,
-      });
-      // Update manifest with enriched tags and description
-      manifest.tags = updatedTags;
-      manifest.description = updatedDescription;
-      await writeManifest(tmpPaths.manifestPath, manifest);
-      logger.debug(`Tags updated with FACTS.json data: ${updatedTags.join(', ')}`);
-    } catch {
-      // Ignore parse errors - keep original tags
+
+    const overviewMd = await generateOverviewMarkdown({
+      bundleId,
+      bundleRootDir: tmpPaths.rootDir,
+      repos: perRepoOverviews,
+    });
+    await writeOverviewFile(tmpPaths.overviewPath, overviewMd);
+
+    // Re-compute tags with FACTS.json data (frameworks, dependencies) for better detection
+    const factsPath = path.join(tmpPaths.rootDir, 'analysis', 'FACTS.json');
+    const factsJson = await readUtf8OrNull(factsPath);
+    if (factsJson) {
+      try {
+        const facts = JSON.parse(factsJson);
+        const updatedTags = autoDetectTags({
+          repoIds,
+          files: allIngestedFiles,
+          facts,
+        });
+        const updatedDescription = generateDescription({
+          repoIds,
+          tags: updatedTags,
+          facts,
+        });
+        // Update manifest with enriched tags and description
+        manifest.tags = updatedTags;
+        manifest.description = updatedDescription;
+        await writeManifest(tmpPaths.manifestPath, manifest);
+        logger.debug(`Tags updated with FACTS.json data: ${updatedTags.join(', ')}`);
+      } catch {
+        // Ignore parse errors - keep original tags
+      }
     }
   }
 
-    // CRITICAL: Validate bundle completeness BEFORE atomic move
-    const validation = await validateBundleCompleteness(tmpPaths.rootDir);
+  // CRITICAL: Validate bundle completeness BEFORE atomic move
+  const validation = await validateBundleCompleteness(tmpPaths.rootDir);
 
-    if (!validation.isValid) {
-      const errorMsg = `Bundle creation incomplete. Missing: ${validation.missingComponents.join(', ')}`;
-      logger.error(errorMsg);
-      throw new Error(errorMsg);
+  if (!validation.isValid) {
+    const errorMsg = `Bundle creation incomplete. Missing: ${validation.missingComponents.join(', ')}`;
+    logger.error(errorMsg);
+    throw new Error(errorMsg);
+  }
+
+  // ATOMIC OPERATION: Move from temp to final location
+  // This is atomic on most filesystems - bundle becomes visible only when complete
+  reportProgress('finalizing', 90, 'Finalizing bundle...');
+  tracker.updateProgress(taskId, 'finalizing', 90, 'Finalizing bundle...');
+  
+  logger.info(`Moving bundle ${bundleId} from temp to final location (atomic)`);
+  await ensureDir(effectiveStorageDir);
+  
+  try {
+    // Try rename first (atomic, but only works on same filesystem)
+    await fs.rename(tmpPaths.rootDir, finalPaths.rootDir);
+    logger.info(`Bundle ${bundleId} moved atomically to ${finalPaths.rootDir}`);
+  } catch (renameErr) {
+    // Rename failed - likely cross-filesystem. Fall back to copy+delete
+    const errCode = (renameErr as NodeJS.ErrnoException).code;
+    if (errCode === 'EXDEV') {
+      logger.warn(`Cross-filesystem move detected for ${bundleId}, falling back to copy`);
+      await copyDir(tmpPaths.rootDir, finalPaths.rootDir);
+      await rmIfExists(tmpPaths.rootDir);
+      logger.info(`Bundle ${bundleId} copied to ${finalPaths.rootDir}`);
+    } else {
+      // Some other error, rethrow
+      throw renameErr;
     }
+  }
 
-    // ATOMIC OPERATION: Move from temp to final location
-    // This is atomic on most filesystems - bundle becomes visible only when complete
-    reportProgress('finalizing', 90, 'Finalizing bundle...');
-    tracker.updateProgress(taskId, 'finalizing', 90, 'Finalizing bundle...');
-    
-    logger.info(`Moving bundle ${bundleId} from temp to final location (atomic)`);
-    await ensureDir(effectiveStorageDir);
-    
-    try {
-      // Try rename first (atomic, but only works on same filesystem)
-      await fs.rename(tmpPaths.rootDir, finalPaths.rootDir);
-      logger.info(`Bundle ${bundleId} moved atomically to ${finalPaths.rootDir}`);
-    } catch (renameErr) {
-      // Rename failed - likely cross-filesystem. Fall back to copy+delete
-      const errCode = (renameErr as NodeJS.ErrnoException).code;
-      if (errCode === 'EXDEV') {
-        logger.warn(`Cross-filesystem move detected for ${bundleId}, falling back to copy`);
-        await copyDir(tmpPaths.rootDir, finalPaths.rootDir);
-        await rmIfExists(tmpPaths.rootDir);
-        logger.info(`Bundle ${bundleId} copied to ${finalPaths.rootDir}`);
-      } else {
-        // Some other error, rethrow
-        throw renameErr;
-      }
-    }
+  // Mirror to backup storage directories (non-blocking on failures)
+  if (cfg.storageDirs.length > 1) {
+    await mirrorBundleToBackups(effectiveStorageDir, cfg.storageDirs, bundleId);
+  }
 
-    // Mirror to backup storage directories (non-blocking on failures)
-    if (cfg.storageDirs.length > 1) {
-      await mirrorBundleToBackups(effectiveStorageDir, cfg.storageDirs, bundleId);
-    }
+  // Update de-duplication index (best-effort). This is intentionally after atomic move.
+  await updateDedupIndexBestEffort(cfg, fingerprint, bundleId, createdAt, 'complete');
 
-    // Update de-duplication index (best-effort). This is intentionally after atomic move.
-    await updateDedupIndexBestEffort(cfg, fingerprint, bundleId, createdAt, 'complete');
+  // Mark task complete
+  reportProgress('complete', 100, `Bundle created: ${bundleId}`);
+  tracker.completeTask(taskId, bundleId);
 
-    // Mark task complete
-    reportProgress('complete', 100, `Bundle created: ${bundleId}`);
-    tracker.completeTask(taskId, bundleId);
+  const summary: BundleSummary = {
+    bundleId,
+    createdAt,
+    updatedAt: createdAt,
+    repos: reposSummary,
+    warnings: allWarnings.length > 0 ? allWarnings : undefined,
+  };
 
-    const summary: BundleSummary = {
-      bundleId,
-      createdAt,
-      updatedAt: createdAt,
-      repos: reposSummary,
-      warnings: allWarnings.length > 0 ? allWarnings : undefined,
-    };
-
-    return summary;
+  return summary;
 
   } catch (err) {
     // Clean up temp directory on failure
@@ -775,6 +982,65 @@ async function scanBundleIndexableFiles(params: {
     }
   } catch {
     // ignore missing repos dir
+  }
+
+  // 2) docs/** (document artifacts, e.g., PDFs)
+  const deriveDocRepo = (relPosix: string): { repoId: string; repoRelativePath: string } => {
+    const parts = relPosix.split('/');
+    if (parts[0] === 'pdf' && parts.length >= 2) {
+      const slug = parts[1] ?? '';
+      const repoId = `pdf/${slug}`;
+      const repoRelativePath = parts.slice(2).join('/') || parts.slice(1).join('/');
+      return { repoId, repoRelativePath };
+    }
+    return { repoId: 'document', repoRelativePath: relPosix };
+  };
+
+  try {
+    const docsDir = path.join(params.bundleRootDir, 'docs');
+    const docsSt = await statOrNull(docsDir);
+    if (docsSt?.isDirectory()) {
+      for await (const wf of walkFilesNoIgnore(docsDir)) {
+        const relPosix = wf.relPosix;
+        const { repoId, repoRelativePath } = deriveDocRepo(relPosix);
+        const kind = classifyIngestedFileKind(repoRelativePath);
+        const bundleRel = `docs/${relPosix}`;
+        await pushFile({
+          repoId,
+          kind,
+          repoRelativePath,
+          bundleRelPosix: bundleRel,
+          absPath: wf.absPath,
+        });
+      }
+    }
+  } catch {
+    // ignore missing docs dir
+  }
+
+  // 3) root-level pdf_*.md (pdf-only bundles)
+  try {
+    const entries = await fs.readdir(params.bundleRootDir, { withFileTypes: true });
+    for (const ent of entries) {
+      if (!ent.isFile()) continue;
+      const name = ent.name;
+      const lower = name.toLowerCase();
+      if (!lower.endsWith('.md')) continue;
+      if (!lower.startsWith('pdf_')) continue;
+      const slug = name.slice(4, -3);
+      if (!slug) continue;
+      const repoId = `pdf/${slug}`;
+      const absPath = path.join(params.bundleRootDir, name);
+      await pushFile({
+        repoId,
+        kind: 'doc',
+        repoRelativePath: name,
+        bundleRelPosix: name,
+        absPath,
+      });
+    }
+  } catch {
+    // ignore missing root files
   }
 
   return { files, totalBytes, skipped };

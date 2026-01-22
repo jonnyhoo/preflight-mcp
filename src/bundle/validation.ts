@@ -31,6 +31,10 @@ const REQUIRED_FILES = [
   'OVERVIEW.md',
 ];
 
+const DOCUMENT_REQUIRED_FILES = [
+  'manifest.json',
+];
+
 /**
  * Validate bundle completeness after creation.
  * Ensures all critical files exist and have meaningful content.
@@ -38,8 +42,21 @@ const REQUIRED_FILES = [
 export async function validateBundleCompleteness(bundleRoot: string): Promise<ValidationResult> {
   const missingComponents: string[] = [];
 
+  // Detect bundle type from manifest (best-effort)
+  let manifestType: 'repository' | 'document' | undefined;
+  try {
+    const manifestPath = path.join(bundleRoot, 'manifest.json');
+    const raw = await fs.readFile(manifestPath, 'utf8');
+    const parsed = JSON.parse(raw) as { type?: 'repository' | 'document' };
+    manifestType = parsed?.type;
+  } catch {
+    // Ignore manifest read errors here; will be caught by required files check
+  }
+
+  const requiredFiles = manifestType === 'document' ? DOCUMENT_REQUIRED_FILES : REQUIRED_FILES;
+
   // Check required files
-  for (const file of REQUIRED_FILES) {
+  for (const file of requiredFiles) {
     const filePath = path.join(bundleRoot, file);
     try {
       const stats = await fs.stat(filePath);

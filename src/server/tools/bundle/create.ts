@@ -41,22 +41,27 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
         createdAt: z.string().optional(),
         updatedAt: z.string().optional(),
         resources: z.object({
-          startHere: z.string(),
-          agents: z.string(),
-          overview: z.string(),
-          manifest: z.string(),
+          startHere: z.string().optional(),
+          agents: z.string().optional(),
+          overview: z.string().optional(),
+          manifest: z.string().optional(),
+          documents: z.array(z.string()).optional(),
         }).optional(),
         repos: z.array(
           z.object({
-            kind: z.enum(['github', 'local', 'web']),
+            kind: z.enum(['github', 'local', 'web', 'pdf']),
             id: z.string(),
-            source: z.enum(['git', 'archive', 'local', 'crawl']).optional(),
+            source: z.enum(['git', 'archive', 'local', 'crawl', 'download']).optional(),
             headSha: z.string().optional(),
             notes: z.array(z.string()).optional(),
             // Web-specific fields
             baseUrl: z.string().optional(),
             pageCount: z.number().optional(),
             usedLlmsTxt: z.boolean().optional(),
+            // PDF-specific fields
+            pdfUrl: z.string().optional(),
+            localPath: z.string().optional(),
+            fileSize: z.number().optional(),
           })
         ).optional(),
         warnings: z.array(z.string()).optional(),
@@ -101,9 +106,6 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
           });
           
           const resources = {
-            startHere: toBundleFileUri({ bundleId: docResult.bundleId, relativePath: 'START_HERE.md' }),
-            agents: toBundleFileUri({ bundleId: docResult.bundleId, relativePath: 'AGENTS.md' }),
-            overview: toBundleFileUri({ bundleId: docResult.bundleId, relativePath: 'OVERVIEW.md' }),
             manifest: toBundleFileUri({ bundleId: docResult.bundleId, relativePath: 'manifest.json' }),
           };
           
@@ -134,12 +136,20 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
           { ifExists: args.ifExists }
         );
 
-        const resources = {
-          startHere: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'START_HERE.md' }),
-          agents: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'AGENTS.md' }),
-          overview: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'OVERVIEW.md' }),
-          manifest: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'manifest.json' }),
-        };
+        const isPdfOnly = args.repos.length > 0 && args.repos.every((r: any) => r.kind === 'pdf');
+        const resources = isPdfOnly
+          ? {
+              manifest: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'manifest.json' }),
+              documents: summary.repos
+                .filter((r) => r.kind === 'pdf')
+                .map((r) => toBundleFileUri({ bundleId: summary.bundleId, relativePath: `pdf_${r.id.replace(/^pdf\//, '')}.md` })),
+            }
+          : {
+              startHere: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'START_HERE.md' }),
+              agents: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'AGENTS.md' }),
+              overview: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'OVERVIEW.md' }),
+              manifest: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'manifest.json' }),
+            };
 
         server.sendResourceListChanged();
 
@@ -157,11 +167,7 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
           textResponse += '\n';
         }
         textResponse += `✅ Bundle created: ${summary.bundleId}\n`;
-        textResponse += `Repos: ${summary.repos.map(r => `${r.id} (${r.source})`).join(', ')}\n\n`;
-        textResponse += `📊 **Recommended next steps:**\n`;
-        textResponse += `Would you like me to generate a **global dependency graph** for deeper code analysis? ` +
-          `This will analyze import relationships across all files.\n`;
-        textResponse += `(Call \`preflight_evidence_dependency_graph\` with this bundleId to generate)`;
+        textResponse += `Repos: ${summary.repos.map(r => `${r.id} (${r.source})`).join(', ')}\n`;
 
         return {
           content: [{ type: 'text', text: textResponse }],

@@ -84,6 +84,8 @@ export type PreflightConfig = {
   storageDir: string;
   /** All storage directories for mirror backup (writes go to all available paths). */
   storageDirs: string[];
+  /** Directory for downloaded files (PDFs, etc.). */
+  downloadsDir: string;
   tmpDir: string;
 
   /** LSP integration configuration. */
@@ -260,6 +262,9 @@ export function getConfig(): PreflightConfig {
   const storageDirs = parseStorageDirs();
   const storageDir = storageDirs[0]!; // Primary for new bundles (always at least one from default)
 
+  // Downloads directory (for remote PDFs, etc.) - inside bundle storage area
+  const downloadsDir = process.env.PREFLIGHT_DOWNLOADS_DIR ?? path.join(storageDir, 'downloads');
+
   const tmpDir = process.env.PREFLIGHT_TMP_DIR ?? path.join(os.tmpdir(), 'preflight-mcp');
 
   const analysisMode = parseAnalysisMode(process.env.PREFLIGHT_ANALYSIS_MODE);
@@ -271,6 +276,7 @@ export function getConfig(): PreflightConfig {
   return {
     storageDir,
     storageDirs,
+    downloadsDir,
     tmpDir,
 
     githubToken: process.env.GITHUB_TOKEN,

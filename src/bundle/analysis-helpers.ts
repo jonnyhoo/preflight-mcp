@@ -196,7 +196,7 @@ export type { RunAllAnalyzersOptions, AllAnalyzersResult };
 
 /**
  * Scan a bundle for indexable files.
- * Returns files from repos/.
+ * Returns files from repos/ and docs/.
  */
 export async function scanBundleIndexableFiles(params: {
   cfg: PreflightConfig;
@@ -282,6 +282,65 @@ export async function scanBundleIndexableFiles(params: {
     }
   } catch {
     // ignore missing repos dir
+  }
+
+  // 2) docs/** (document artifacts, e.g., PDFs)
+  const deriveDocRepo = (relPosix: string): { repoId: string; repoRelativePath: string } => {
+    const parts = relPosix.split('/');
+    if (parts[0] === 'pdf' && parts.length >= 2) {
+      const slug = parts[1] ?? '';
+      const repoId = `pdf/${slug}`;
+      const repoRelativePath = parts.slice(2).join('/') || parts.slice(1).join('/');
+      return { repoId, repoRelativePath };
+    }
+    return { repoId: 'document', repoRelativePath: relPosix };
+  };
+
+  try {
+    const docsDir = path.join(params.bundleRootDir, 'docs');
+    const docsSt = await statOrNull(docsDir);
+    if (docsSt?.isDirectory()) {
+      for await (const wf of walkFilesNoIgnore(docsDir)) {
+        const relPosix = wf.relPosix;
+        const { repoId, repoRelativePath } = deriveDocRepo(relPosix);
+        const kind = classifyIngestedFileKind(repoRelativePath);
+        const bundleRel = `docs/${relPosix}`;
+        await pushFile({
+          repoId,
+          kind,
+          repoRelativePath,
+          bundleRelPosix: bundleRel,
+          absPath: wf.absPath,
+        });
+      }
+    }
+  } catch {
+    // ignore missing docs dir
+  }
+
+  // 3) root-level pdf_*.md (pdf-only bundles)
+  try {
+    const entries = await fs.readdir(params.bundleRootDir, { withFileTypes: true });
+    for (const ent of entries) {
+      if (!ent.isFile()) continue;
+      const name = ent.name;
+      const lower = name.toLowerCase();
+      if (!lower.endsWith('.md')) continue;
+      if (!lower.startsWith('pdf_')) continue;
+      const slug = name.slice(4, -3);
+      if (!slug) continue;
+      const repoId = `pdf/${slug}`;
+      const absPath = path.join(params.bundleRootDir, name);
+      await pushFile({
+        repoId,
+        kind: 'doc',
+        repoRelativePath: name,
+        bundleRelPosix: name,
+        absPath,
+      });
+    }
+  } catch {
+    // ignore missing root files
   }
 
   return { files, totalBytes, skipped };

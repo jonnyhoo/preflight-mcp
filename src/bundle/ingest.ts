@@ -40,6 +40,10 @@ const DEFAULT_IGNORE = [
   '_site/',       // Jekyll
   '_book/',       // GitBook
   'public/',      // Hugo (common output)
+  // Claude Code runtime data (session checkpoints, cache)
+  // Use ** to match in nested directories (v2/.claude/checkpoints/, etc.)
+  '**/.claude/checkpoints/',
+  '**/.claude/cache/',
 ];
 
 function toPosix(p: string): string {

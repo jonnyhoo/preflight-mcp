@@ -46,6 +46,15 @@ export const CreateRepoInputSchema = z.union([
     url: z.string().url().describe('Documentation site URL to crawl. Example: "https://docs.example.com"'),
     config: WebCrawlConfigSchema.describe('Optional crawl configuration'),
   }),
+  z.object({
+    kind: z.literal('pdf'),
+    url: z.string().url().optional().describe('PDF URL to download and parse. Example: "https://arxiv.org/pdf/2512.14982"'),
+    path: z.string().optional().describe('Local file path to PDF. Example: "C:\\\\docs\\\\paper.pdf" or "/home/user/paper.pdf"'),
+    name: z.string().optional().describe('Display name for the document. Example: "Prompt Repetition Paper"'),
+  }).refine(
+    (data) => data.url || data.path,
+    { message: 'Either url or path must be provided for PDF input' }
+  ),
 ]);
 
 export const CreateBundleInputSchema = {

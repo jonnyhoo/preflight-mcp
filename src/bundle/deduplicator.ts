@@ -110,7 +110,7 @@ type CanonicalWebConfig = {
 type CanonicalRepoInput =
   | { kind: 'github'; repo: string; ref?: string }
   | { kind: 'web'; url: string; config?: CanonicalWebConfig }
-  | { kind: 'pdf'; url: string };
+  | { kind: 'pdf'; url?: string; path?: string };
 
 /**
  * Normalize web URL for consistent fingerprinting.
@@ -173,11 +173,25 @@ function canonicalizeCreateInput(input: CreateBundleInput): {
         };
       }
       if (r.kind === 'pdf') {
-        // PDF sources - normalize URL for fingerprinting
-        const normalizedUrl = normalizeWebUrlForFingerprint(r.url);
+        // PDF sources - use URL or local path for fingerprinting
+        if (r.url) {
+          const normalizedUrl = normalizeWebUrlForFingerprint(r.url);
+          return {
+            kind: 'pdf' as const,
+            url: normalizedUrl,
+          };
+        } else if (r.path) {
+          // For local paths, normalize to absolute lowercase path
+          const normalizedPath = path.resolve(r.path).replace(/\\/g, '/').toLowerCase();
+          return {
+            kind: 'pdf' as const,
+            path: normalizedPath,
+          };
+        }
+        // Fallback (should not happen due to schema validation)
         return {
           kind: 'pdf' as const,
-          url: normalizedUrl,
+          url: '',
         };
       }
       // For de-duplication, treat local imports as equivalent to github imports of the same logical repo/ref.
@@ -190,10 +204,10 @@ function canonicalizeCreateInput(input: CreateBundleInput): {
     })
     .sort((a, b) => {
       const ka = a.kind === 'web' ? `web:${a.url}:${JSON.stringify(a.config ?? {})}` :
-                 a.kind === 'pdf' ? `pdf:${a.url}` :
+                 a.kind === 'pdf' ? `pdf:${a.url ?? ''}:${a.path ?? ''}` :
                  `github:${a.repo}:${a.ref ?? ''}`;
       const kb = b.kind === 'web' ? `web:${b.url}:${JSON.stringify(b.config ?? {})}` :
-                 b.kind === 'pdf' ? `pdf:${b.url}` :
+                 b.kind === 'pdf' ? `pdf:${b.url ?? ''}:${b.path ?? ''}` :
                  `github:${b.repo}:${b.ref ?? ''}`;
       return ka.localeCompare(kb);
     });

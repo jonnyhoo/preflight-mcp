@@ -221,10 +221,15 @@ export class PdfParser implements IDocumentParser {
         }
       }
 
+      const normalizedPageTexts = opts.generateFullText
+        ? this.normalizePdfPageTexts(pageTexts)
+        : pageTexts;
+
       for (let pageIdx = startPage; pageIdx < startPage + pagesToProcess; pageIdx++) {
         try {
           // Get page text
           const pageText = pageTexts[pageIdx] ?? '';
+          const normalizedPageText = normalizedPageTexts[pageIdx] ?? pageText;
           
           if (pageText.trim()) {
             // Use smart analysis for academic papers if enabled
@@ -236,12 +241,13 @@ export class PdfParser implements IDocumentParser {
                 warnings
               );
               contents.push(...smartContents);
-              fullTextParts.push(pageText);
             } else {
               // Standard structure detection
               const pageContents = this.parsePageContent(pageText, pageIdx);
               contents.push(...pageContents);
-              fullTextParts.push(pageText);
+            }
+            if (opts.generateFullText && normalizedPageText.trim()) {
+              fullTextParts.push(normalizedPageText);
             }
           }
         } catch (pageError) {
@@ -318,6 +324,8 @@ export class PdfParser implements IDocumentParser {
         const buffer = fs.readFileSync(filePath);
         const parsed = await pdfParse(buffer);
         const text = (parsed?.text as string | undefined) ?? '';
+        const normalizedText = this.normalizePdfPageText(text);
+        const finalText = normalizedText.trim() ? normalizedText : text;
 
         const metadata: DocumentMetadata = {
           title: path.basename(filePath, path.extname(filePath)),
@@ -328,8 +336,8 @@ export class PdfParser implements IDocumentParser {
           parsedAt: new Date().toISOString(),
         };
 
-        const contents: ParsedContent[] = text.trim()
-          ? [{ type: 'text', content: text }]
+        const contents: ParsedContent[] = finalText.trim()
+          ? [{ type: 'text', content: finalText }]
           : [];
 
         const stats: ParseStats = {
@@ -343,7 +351,7 @@ export class PdfParser implements IDocumentParser {
           contents,
           metadata,
           stats,
-          fullText: text,
+          fullText: finalText,
           warnings: [
             `unpdf failed; used pdf-parse fallback: ${errMsg}`,
           ],
@@ -375,6 +383,242 @@ export class PdfParser implements IDocumentParser {
         };
       }
     }
+  }
+
+  // ============================================================================
+  // PDF Text Normalization (Non-Distill)
+  // ============================================================================
+
+  /**
+   * Normalize page texts for cleaner full-text output.
+   */
+  private normalizePdfPageTexts(pageTexts: string[]): string[] {
+    if (pageTexts.length === 0) return pageTexts;
+    const repeatedLineKeys = this.findRepeatedLineKeys(pageTexts);
+    return pageTexts.map((text) => this.normalizePdfPageText(text ?? '', repeatedLineKeys));
+  }
+
+  /**
+   * Normalize a single page's text.
+   */
+  private normalizePdfPageText(pageText: string, repeatedLineKeys?: Set<string>): string {
+    const lines = this.splitPdfLines(pageText);
+    const cleaned: string[] = [];
+
+    for (const rawLine of lines) {
+      const line = rawLine.replace(/\s+$/g, '');
+      const trimmed = line.trim();
+
+      if (!trimmed) {
+        if (cleaned.length > 0 && cleaned[cleaned.length - 1] !== '') {
+          cleaned.push('');
+        }
+        continue;
+      }
+
+      if (this.isLikelyPageNumberLine(trimmed)) {
+        continue;
+      }
+
+      const key = this.normalizeLineKey(trimmed);
+      if (repeatedLineKeys && repeatedLineKeys.has(key)) {
+        continue;
+      }
+
+      cleaned.push(trimmed);
+    }
+
+    const merged = this.mergePdfLines(cleaned);
+    return merged.replace(/\n{3,}/g, '\n\n').trim();
+  }
+
+  /**
+   * Split raw PDF text into lines with normalized newlines.
+   */
+  private splitPdfLines(text: string): string[] {
+    return text
+      .replace(/\r\n?/g, '\n')
+      .replace(/\u0000/g, '')
+      .split('\n');
+  }
+
+  /**
+   * Merge lines into paragraphs using lightweight heuristics.
+   */
+  private mergePdfLines(lines: string[]): string {
+    const out: string[] = [];
+
+    for (const line of lines) {
+      if (line === '') {
+        if (out.length > 0 && out[out.length - 1] !== '') {
+          out.push('');
+        }
+        continue;
+      }
+
+      if (out.length === 0) {
+        out.push(line);
+        continue;
+      }
+
+      const prev = out[out.length - 1] ?? '';
+      if (prev === '') {
+        out.push(line);
+        continue;
+      }
+
+      const merged = this.tryMergeLines(prev, line);
+      if (merged) {
+        out[out.length - 1] = merged;
+      } else {
+        out.push(line);
+      }
+    }
+
+    return out.join('\n');
+  }
+
+  /**
+   * Decide whether to merge two lines, and if so, how.
+   */
+  private tryMergeLines(prev: string, next: string): string | null {
+    const prevTrim = prev.trimEnd();
+    const nextTrim = next.trimStart();
+
+    if (this.isHeadingLike(prevTrim) || this.isHeadingLike(nextTrim)) return null;
+    if (this.isListItem(prevTrim) || this.isListItem(nextTrim)) return null;
+
+    if (this.isUrlContinuation(prevTrim, nextTrim)) {
+      return prevTrim + nextTrim;
+    }
+
+    const hyphenMatch = prevTrim.match(/([A-Za-z]{2,})-$/);
+    if (hyphenMatch && /^[a-z]/.test(nextTrim)) {
+      if (this.shouldKeepHyphen(nextTrim)) {
+        return prevTrim + nextTrim;
+      }
+      return prevTrim.slice(0, -1) + nextTrim;
+    }
+
+    if (
+      prevTrim.endsWith('(') ||
+      prevTrim.endsWith('[') ||
+      prevTrim.endsWith('{') ||
+      prevTrim.endsWith('/') ||
+      prevTrim.endsWith('\\') ||
+      prevTrim.endsWith('—')
+    ) {
+      return prevTrim + nextTrim;
+    }
+
+    return `${prevTrim} ${nextTrim}`;
+  }
+
+  /**
+   * Heading-like detection for line-merge heuristics.
+   */
+  private isHeadingLike(line: string): boolean {
+    if (this.isHeading(line)) return true;
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.length > 80) return false;
+    if (/[.!?]$/.test(trimmed)) return false;
+
+    const words = trimmed.split(/\s+/);
+    if (words.length === 0 || words.length > 10) return false;
+
+    const smallWords = new Set([
+      'a', 'an', 'and', 'or', 'the', 'of', 'in', 'on', 'for', 'to',
+      'with', 'by', 'vs', 'via', 'from', 'as',
+    ]);
+
+    let matches = 0;
+    for (const word of words) {
+      const cleaned = word.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, '');
+      if (!cleaned) continue;
+      const lower = cleaned.toLowerCase();
+      if (smallWords.has(lower)) {
+        matches++;
+        continue;
+      }
+      if (/^[A-Z][a-z]/.test(cleaned) || /^[A-Z]{2,}$/.test(cleaned) || /^\d+/.test(cleaned)) {
+        matches++;
+      }
+    }
+
+    return matches / words.length >= 0.7;
+  }
+
+  /**
+   * Detect likely page-number/folio lines.
+   */
+  private isLikelyPageNumberLine(line: string): boolean {
+    if (this.isPageNumber(line)) return true;
+    if (/^page\s+\d+(\s+of\s+\d+)?$/i.test(line)) return true;
+    if (/^\d+\s*\/\s*\d+$/i.test(line)) return true;
+    if (/^[ivxlcdm]{1,6}$/i.test(line)) return true;
+    return false;
+  }
+
+  /**
+   * Normalize a line for repeated header/footer detection.
+   */
+  private normalizeLineKey(line: string): string {
+    return line.replace(/\s+/g, ' ').trim().toLowerCase();
+  }
+
+  /**
+   * Detect repeated lines across pages (headers/footers).
+   */
+  private findRepeatedLineKeys(pageTexts: string[]): Set<string> {
+    const totalPages = pageTexts.length;
+    if (totalPages < 2) return new Set();
+
+    const counts = new Map<string, number>();
+
+    for (const pageText of pageTexts) {
+      const seen = new Set<string>();
+      const lines = this.splitPdfLines(pageText ?? '');
+
+      for (const rawLine of lines) {
+        const trimmed = rawLine.trim();
+        if (!trimmed) continue;
+        if (this.isLikelyPageNumberLine(trimmed)) continue;
+
+        const key = this.normalizeLineKey(trimmed);
+        if (!key || key.length < 4 || key.length > 160) continue;
+        if (seen.has(key)) continue;
+
+        seen.add(key);
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+    }
+
+    const minRepeats = Math.max(2, Math.ceil(totalPages * 0.6));
+    const repeated = new Set<string>();
+
+    for (const [key, count] of counts) {
+      if (count >= minRepeats) {
+        repeated.add(key);
+      }
+    }
+
+    return repeated;
+  }
+
+  /**
+   * Keep hyphens for compound words (e.g., "state-\nof-the-art").
+   */
+  private shouldKeepHyphen(next: string): boolean {
+    return /^(of|in|on|to|by|for|and|or|the|a|an|vs|per|via|with|from|non|pre|post|anti|co)-/i.test(next);
+  }
+
+  /**
+   * Detect URLs broken across lines.
+   */
+  private isUrlContinuation(prev: string, next: string): boolean {
+    if (!/(https?:\/\/|www\.)/i.test(prev)) return false;
+    if (/[)\].,;:]$/.test(prev)) return false;
+    return /^[A-Za-z0-9/_?#=&%.-]/.test(next);
   }
 
   /**
@@ -645,6 +889,11 @@ export class PdfParser implements IDocumentParser {
     for (const line of lines) {
       const trimmed = line.trim();
       
+      // Skip standalone page numbers (noise reduction)
+      if (this.isPageNumber(trimmed)) {
+        continue;
+      }
+      
       // Detect headings (heuristic: all caps or numbered sections)
       if (this.isHeading(trimmed)) {
         // Save accumulated text
@@ -723,6 +972,15 @@ export class PdfParser implements IDocumentParser {
     }
     
     return false;
+  }
+
+  /**
+   * Detect if a line is a standalone page number.
+   * Filters out noise like "2", "3", "4" that appear as isolated lines.
+   */
+  private isPageNumber(line: string): boolean {
+    // Single number (1-4 digits), possibly with surrounding whitespace
+    return /^\d{1,4}$/.test(line);
   }
 
   /**
