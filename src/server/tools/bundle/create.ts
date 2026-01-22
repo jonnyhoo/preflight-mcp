@@ -27,12 +27,14 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
     'preflight_create_bundle',
     {
       title: 'Create bundle',
-      description: 'Create a bundle from GitHub repos, local directories, documents, or web documentation sites.\n\n' +
-        '**Examples:**\n' +
-        '- GitHub: `{"repos": [{"kind": "github", "repo": "owner/repo"}]}`\n' +
-        '- Local: `{"repos": [{"kind": "local", "repo": "my/project", "path": "C:\\\\path\\\\to\\\\dir"}]}`\n' +
+      description: 'Create a bundle from GitHub repos, local directories, PDFs, or web documentation sites.\n\n' +
+        '**Examples (LLM-ready):**\n' +
+        '- GitHub repo: `{"repos": [{"kind": "github", "repo": "owner/repo"}]}`\n' +
+        '- Local repo: `{"repos": [{"kind": "local", "repo": "local/<folder>", "path": "C:\\\\path\\\\to\\\\dir"}]}`\n' +
         '- Web docs: `{"repos": [{"kind": "web", "url": "https://docs.example.com"}]}`\n' +
-        '- Web with filter: `{"repos": [{"kind": "web", "url": "https://docs.example.com", "config": {"includePatterns": ["/api/"], "maxPages": 100}}]}`\n\n' +
+        '- Web docs (filtered): `{"repos": [{"kind": "web", "url": "https://docs.example.com", "config": {"includePatterns": ["/api/"], "maxPages": 100}}]}`\n' +
+        '- Online PDF: `{"repos": [{"kind": "pdf", "url": "https://arxiv.org/pdf/2512.14982"}]}`\n' +
+        '- Local PDF: `{"repos": [{"kind": "pdf", "path": "C:\\\\docs\\\\paper.pdf"}]}`\n\n' +
         '**Options:** `ifExists: "returnExisting"` to reuse existing bundle.\n' +
         'Use when: "analyze repo", "index project", "crawl docs", "分析项目", "理解代码", "爬取文档".',
       inputSchema: CreateBundleInputSchema,

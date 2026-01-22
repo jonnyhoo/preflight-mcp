@@ -37,7 +37,7 @@ export const CreateRepoInputSchema = z.union([
     kind: z.literal('local'),
     repo: z
       .string()
-      .describe('Logical identifier in "owner/repo" format for indexing. Example: "myteam/myproject"'),
+      .describe('Logical identifier in "owner/repo" format for indexing (not necessarily GitHub). If you don’t have one, use "local/<folder>". Example: "local/reverse-mcp-server"'),
     path: z.string().describe('Absolute path to local directory. Example: "C:\\Projects\\myproject" or "/home/user/myproject"'),
     ref: z.string().optional().describe('Optional version label. Example: "v1.0", "dev"'),
   }),

@@ -15,7 +15,7 @@ export function parseOwnerRepo(input: string): GitHubRepoRef {
   const trimmed = input.trim().replace(/^https?:\/\/github\.com\//i, '');
   const parts = trimmed.split('/').filter(Boolean);
   if (parts.length < 2) {
-    throw new Error(`Invalid GitHub repo identifier: ${input} (expected owner/repo)`);
+    throw new Error(`Invalid repo identifier: ${input} (expected owner/repo; for local use local/<name>)`);
   }
   return { owner: parts[0]!, repo: parts[1]!.replace(/\.git$/i, '') };
 }
