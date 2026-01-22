@@ -24,6 +24,10 @@ interface ConfigFile {
   embeddingApiBase?: string;
   embeddingApiKey?: string;
   embeddingModel?: string;
+  // MinerU PDF parsing configuration
+  mineruApiBase?: string;
+  mineruApiKey?: string;
+  mineruEnabled?: boolean;
 }
 
 let cachedConfigFile: ConfigFile | null = null;
@@ -188,6 +192,19 @@ export type PreflightConfig = {
   llmModel: string;
   /** Enable LLM for card generation (auto-enabled if API key set). */
   llmEnabled: boolean;
+
+  // --- MinerU (PDF parsing via MinerU API) ---
+
+  /** MinerU API base URL (default: https://mineru.net). */
+  mineruApiBase: string;
+  /** MinerU API key (required for MinerU parsing). */
+  mineruApiKey?: string;
+  /** Enable MinerU for PDF parsing (auto-enabled if API key set). */
+  mineruEnabled: boolean;
+  /** Timeout for MinerU API polling in milliseconds (default: 5 minutes). */
+  mineruTimeoutMs: number;
+  /** Polling interval for MinerU task status in milliseconds (default: 3 seconds). */
+  mineruPollIntervalMs: number;
 };
 
 function envNumber(name: string, fallback: number): number {
@@ -350,5 +367,12 @@ export function getConfig(): PreflightConfig {
     llmApiKey: process.env.PREFLIGHT_LLM_API_KEY ?? loadConfigFile().llmApiKey ?? (process.env.PREFLIGHT_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY),
     llmModel: (process.env.PREFLIGHT_LLM_MODEL ?? loadConfigFile().llmModel ?? 'gpt-4o-mini').trim(),
     llmEnabled: envBoolean('PREFLIGHT_LLM_ENABLED', false) || Boolean(process.env.PREFLIGHT_LLM_API_KEY) || loadConfigFile().llmEnabled || Boolean(loadConfigFile().llmApiKey) || Boolean(process.env.PREFLIGHT_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY),
+
+    // MinerU for PDF parsing (high-quality extraction)
+    mineruApiBase: (process.env.PREFLIGHT_MINERU_API_BASE ?? process.env.MINERU_API_BASE ?? loadConfigFile().mineruApiBase ?? 'https://mineru.net').trim(),
+    mineruApiKey: process.env.PREFLIGHT_MINERU_API_KEY ?? process.env.MINERU_API_KEY ?? loadConfigFile().mineruApiKey,
+    mineruEnabled: envBoolean('PREFLIGHT_MINERU_ENABLED', false) || Boolean(process.env.PREFLIGHT_MINERU_API_KEY ?? process.env.MINERU_API_KEY) || loadConfigFile().mineruEnabled || Boolean(loadConfigFile().mineruApiKey),
+    mineruTimeoutMs: envNumber('PREFLIGHT_MINERU_TIMEOUT_MS', 5 * 60_000),
+    mineruPollIntervalMs: envNumber('PREFLIGHT_MINERU_POLL_INTERVAL_MS', 3000),
   };
 }

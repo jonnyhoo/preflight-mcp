@@ -12,6 +12,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 import { PdfParser } from '../parser/pdf-parser.js';
+import { MineruParser, isMineruAvailable } from '../parser/mineru-parser.js';
 import { OfficeParser } from '../parser/office-parser.js';
 import { HtmlParser, MarkdownParser } from '../parser/text-parser.js';
 import type { ParsedContent, IDocumentParser } from '../parser/types.js';
@@ -104,12 +105,23 @@ export interface DocumentIngestOptions {
 
 /**
  * Get appropriate parser for a file extension.
+ * 
+ * For PDF files:
+ * - Uses MineruParser (cloud API) if configured (high-quality extraction)
+ * - Falls back to PdfParser (local unpdf/pdf-parse) otherwise
  */
 function getParserForExtension(ext: string): IDocumentParser | null {
   const lowerExt = ext.toLowerCase();
   
   switch (lowerExt) {
     case '.pdf':
+      // Prefer MinerU for high-quality PDF parsing if available
+      if (isMineruAvailable()) {
+        logger.info('Using MinerU parser for PDF (cloud API)');
+        return new MineruParser();
+      }
+      // Fallback to local PDF parser
+      logger.info('Using local PDF parser (unpdf/pdf-parse) - MinerU not configured');
       return new PdfParser();
     case '.doc':
     case '.docx':

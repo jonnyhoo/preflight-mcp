@@ -61,6 +61,7 @@ export {
 // ============================================================================
 
 export { PdfParser, createPdfParser } from './pdf-parser.js';
+export { MineruParser, createMineruParser, isMineruAvailable } from './mineru-parser.js';
 export { OfficeParser, createOfficeParser } from './office-parser.js';
 export {
   HtmlParser,
