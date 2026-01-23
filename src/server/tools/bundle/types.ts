@@ -9,6 +9,18 @@ import * as z from 'zod';
 // ==========================================================================
 
 /**
+ * SPA rendering options.
+ */
+export const SpaOptionsSchema = z.object({
+  /** Wait for specific selector before extracting (e.g., '#content') */
+  waitForSelector: z.string().optional()
+    .describe('CSS selector to wait for before extraction. Example: "#content"'),
+  /** Wait time after page load in ms (default: 2000) */
+  waitAfterLoad: z.number().int().min(0).max(30000).optional()
+    .describe('Extra wait time after page load in ms. Default: 2000'),
+}).strict().optional();
+
+/**
  * Web crawl configuration options.
  * Controls how documentation sites are crawled.
  */
@@ -25,6 +37,15 @@ export const WebCrawlConfigSchema = z.object({
   /** URL patterns to exclude (e.g., ["/blog/", "/changelog/"]) */
   excludePatterns: z.array(z.string()).optional()
     .describe('URL patterns to exclude. Example: ["/blog/", "/changelog/"]'),
+  /** Skip llms.txt detection (default: false) */
+  skipLlmsTxt: z.boolean().optional()
+    .describe('Skip llms.txt detection and use BFS crawl. Set true for SPA sites. Default: false'),
+  /** Use headless browser for SPA rendering (default: false) */
+  useSpa: z.boolean().optional()
+    .describe('Use headless browser to render JavaScript. Required for SPA sites. Default: false'),
+  /** SPA rendering options */
+  spaOptions: SpaOptionsSchema
+    .describe('Options for SPA rendering (when useSpa=true)'),
 }).strict().optional();
 
 export const CreateRepoInputSchema = z.union([

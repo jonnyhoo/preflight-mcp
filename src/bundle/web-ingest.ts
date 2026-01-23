@@ -149,6 +149,8 @@ export async function ingestWebSource(params: {
     userAgent: config?.userAgent,
     skipLlmsTxt: config?.skipLlmsTxt ?? false,
     respectRobotsTxt: config?.respectRobotsTxt ?? true,
+    useSpa: config?.useSpa ?? false,
+    spaOptions: config?.spaOptions,
   };
 
   const crawlResult: CrawlResult = await crawlWebsite(crawlConfig, (progress) => {

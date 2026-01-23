@@ -35,6 +35,10 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
         '- Web docs (filtered): `{"repos": [{"kind": "web", "url": "https://docs.example.com", "config": {"includePatterns": ["/api/"], "maxPages": 100}}]}`\n' +
         '- Online PDF: `{"repos": [{"kind": "pdf", "url": "https://arxiv.org/pdf/2512.14982"}]}`\n' +
         '- Local PDF: `{"repos": [{"kind": "pdf", "path": "C:\\\\docs\\\\paper.pdf"}]}`\n\n' +
+        '**Web crawl modes:**\n' +
+        '- Default (no useSpa): For static sites, SSR sites, GitHub Pages, Hugo, Jekyll. Fast and lightweight.\n' +
+        '- `useSpa: true`: ONLY for sites that require JavaScript to render content (React/Vue/Angular CSR). Slow, uses headless browser. Also add `skipLlmsTxt: true` for SPA sites.\n' +
+        '- Signs you need useSpa: page shows "Loading..." or blank content, or site has anti-bot protection.\n\n' +
         '**Options:** `ifExists: "returnExisting"` to reuse existing bundle.\n' +
         'Use when: "analyze repo", "index project", "crawl docs", "分析项目", "理解代码", "爬取文档".',
       inputSchema: CreateBundleInputSchema,
@@ -113,9 +117,34 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
           
           server.sendResourceListChanged();
           
-          const textResponse = docResult.created
+          let textResponse = docResult.created
             ? `✅ Document bundle created: ${docResult.bundleId}\nParsed: ${docResult.parsed} document(s)${docResult.skipped > 0 ? `, skipped: ${docResult.skipped}` : ''}`
             : `✅ Document bundle already exists: ${docResult.bundleId}`;
+          
+          // Read and include the parsed md content directly
+          const { findBundleStorageDir, getBundlePathsForId } = await import('../../../bundle/service.js');
+          const storageDir = await findBundleStorageDir(cfg.storageDirs, docResult.bundleId);
+          if (storageDir) {
+            const paths = getBundlePathsForId(storageDir, docResult.bundleId);
+            const docsDir = `${paths.rootDir}/docs`;
+            try {
+              const files = await fs.readdir(docsDir);
+              const mdFiles = files.filter((f) => f.endsWith('.md'));
+              if (mdFiles.length > 0) {
+                textResponse += '\n\n---\n';
+                for (const mdFile of mdFiles) {
+                  try {
+                    const mdContent = await fs.readFile(`${docsDir}/${mdFile}`, 'utf8');
+                    textResponse += `\n${mdContent}\n`;
+                  } catch {
+                    // md file not found, skip
+                  }
+                }
+              }
+            } catch {
+              // docs dir not found, skip
+            }
+          }
           
           return {
             content: [{ type: 'text', text: textResponse }],
@@ -139,12 +168,15 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
         );
 
         const isPdfOnly = args.repos.length > 0 && args.repos.every((r: any) => r.kind === 'pdf');
+        const pdfMdFiles = isPdfOnly
+          ? summary.repos
+              .filter((r) => r.kind === 'pdf')
+              .map((r) => `pdf_${r.id.replace(/^pdf\//, '')}.md`)
+          : [];
         const resources = isPdfOnly
           ? {
               manifest: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'manifest.json' }),
-              documents: summary.repos
-                .filter((r) => r.kind === 'pdf')
-                .map((r) => toBundleFileUri({ bundleId: summary.bundleId, relativePath: `pdf_${r.id.replace(/^pdf\//, '')}.md` })),
+              documents: pdfMdFiles.map((f) => toBundleFileUri({ bundleId: summary.bundleId, relativePath: f })),
             }
           : {
               startHere: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'START_HERE.md' }),
@@ -170,6 +202,25 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
         }
         textResponse += `✅ Bundle created: ${summary.bundleId}\n`;
         textResponse += `Repos: ${summary.repos.map(r => `${r.id} (${r.source})`).join(', ')}\n`;
+
+        // For PDF bundles, read and include the md content directly
+        if (isPdfOnly && pdfMdFiles.length > 0) {
+          const { findBundleStorageDir, getBundlePathsForId } = await import('../../../bundle/service.js');
+          const storageDir = await findBundleStorageDir(cfg.storageDirs, summary.bundleId);
+          if (storageDir) {
+            const paths = getBundlePathsForId(storageDir, summary.bundleId);
+            textResponse += '\n---\n';
+            for (const mdFile of pdfMdFiles) {
+              try {
+                const mdPath = `${paths.rootDir}/${mdFile}`;
+                const mdContent = await fs.readFile(mdPath, 'utf8');
+                textResponse += `\n${mdContent}\n`;
+              } catch {
+                // md file not found, skip
+              }
+            }
+          }
+        }
 
         return {
           content: [{ type: 'text', text: textResponse }],

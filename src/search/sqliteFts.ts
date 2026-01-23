@@ -533,7 +533,7 @@ export function searchIndex(
         repo,
         kind,
         lineNo,
-        snippet(lines, 0, '[', ']', 'â€?, 10) AS snippet
+        snippet(lines, 0, '[', ']', '...', 10) AS snippet
       FROM lines
       WHERE ${whereKind} lines MATCH ?
       ORDER BY bm25(lines)
@@ -640,7 +640,7 @@ export function searchIndexAdvanced(
         repo,
         kind,
         lineNo,
-        snippet(lines, 0, '[', ']', 'â€?, 10) AS snippet,
+        snippet(lines, 0, '[', ']', '...', 10) AS snippet,
         bm25(lines) AS score
       FROM lines
       WHERE ${whereKind} lines MATCH ?

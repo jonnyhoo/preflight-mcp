@@ -33,8 +33,26 @@ export interface WebCrawlConfig {
   skipLlmsTxt?: boolean;
   /** Respect robots.txt rules (default: true) */
   respectRobotsTxt?: boolean;
+  /** Use headless browser for SPA rendering (default: false) */
+  useSpa?: boolean;
+  /** SPA rendering options */
+  spaOptions?: SpaOptions;
   /** Incremental update settings */
   incrementalConfig?: IncrementalConfig;
+}
+
+/**
+ * Options for SPA (Single Page Application) rendering.
+ */
+export interface SpaOptions {
+  /** Wait for specific selector before extracting (e.g., '#content') */
+  waitForSelector?: string;
+  /** Wait time after page load in ms (default: 2000) */
+  waitAfterLoad?: number;
+  /** Path to Chrome/Chromium executable (uses bundled by default) */
+  executablePath?: string;
+  /** Run browser in headless mode (default: true) */
+  headless?: boolean;
 }
 
 /**

@@ -21,6 +21,8 @@ export type {
   ConditionalFetchResult,
   IncrementalCrawlResult,
   SitemapEntry,
+  // SPA types
+  SpaOptions,
 } from './types.js';
 
 // URL utilities
@@ -83,3 +85,10 @@ export {
   needsFullCrawl,
   createPageState,
 } from './page-state.js';
+
+// SPA fetcher (browser-based rendering)
+export {
+  fetchUrlWithBrowser,
+  closeBrowser,
+  looksLikeSpa,
+} from './spa-fetcher.js';

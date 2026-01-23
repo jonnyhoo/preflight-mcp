@@ -18,6 +18,7 @@ import type {
   CrawlProgressCallback,
   PageState,
   IncrementalCrawlResult,
+  SpaOptions,
 } from './types.js';
 import { validateWebUrl, normalizeUrl, matchesPatterns } from './normalizer.js';
 import { fetchAndParseLlmsTxt } from './llms-txt.js';
@@ -30,6 +31,7 @@ import {
   shouldDegradeToFull,
   INCREMENTAL_DEFAULTS,
 } from './incremental.js';
+import { fetchUrlWithBrowser, closeBrowser, looksLikeSpa } from './spa-fetcher.js';
 
 /** Default configuration values */
 const DEFAULTS = {
@@ -41,6 +43,7 @@ const DEFAULTS = {
   userAgent: 'Preflight-Web-Crawler/1.0 (+https://github.com/jonnyhoo/preflight-mcp)',
   respectRobotsTxt: true,
   skipLlmsTxt: false,
+  useSpa: false,
 } as const;
 
 /**
@@ -94,11 +97,29 @@ async function fetchRobotsTxt(
 
 /**
  * Fetch a single URL and return HTML content.
+ *
+ * @param url - URL to fetch
+ * @param options - Fetch options including SPA mode
  */
 async function fetchUrl(
   url: string,
-  options: { timeout: number; userAgent: string }
+  options: {
+    timeout: number;
+    userAgent: string;
+    useSpa?: boolean;
+    spaOptions?: SpaOptions;
+  }
 ): Promise<{ html: string; finalUrl: string } | { error: string }> {
+  // Use browser-based fetch for SPA mode
+  if (options.useSpa) {
+    return fetchUrlWithBrowser(url, {
+      timeout: options.timeout,
+      userAgent: options.userAgent,
+      spaOptions: options.spaOptions,
+    });
+  }
+
+  // Standard HTTP fetch for non-SPA
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), options.timeout);
@@ -164,6 +185,8 @@ export async function crawlWebsite(
     userAgent: config.userAgent ?? DEFAULTS.userAgent,
     respectRobotsTxt: config.respectRobotsTxt ?? DEFAULTS.respectRobotsTxt,
     skipLlmsTxt: config.skipLlmsTxt ?? DEFAULTS.skipLlmsTxt,
+    useSpa: config.useSpa ?? DEFAULTS.useSpa,
+    spaOptions: config.spaOptions,
     includePatterns: config.includePatterns,
     excludePatterns: config.excludePatterns,
   };
@@ -263,6 +286,8 @@ export async function crawlWebsite(
           const fetchResult = await fetchUrl(normalized, {
             timeout: cfg.timeout,
             userAgent: cfg.userAgent,
+            useSpa: cfg.useSpa,
+            spaOptions: cfg.spaOptions,
           });
 
           if ('error' in fetchResult) {
@@ -321,6 +346,11 @@ export async function crawlWebsite(
     }
   }
 
+  // Close browser if SPA mode was used
+  if (cfg.useSpa) {
+    await closeBrowser();
+  }
+
   // Final stats
   const timeMs = Date.now() - startTime;
 
@@ -359,6 +389,8 @@ export async function crawlUrls(
     userAgent: config.userAgent ?? DEFAULTS.userAgent,
     rateLimit: config.rateLimit ?? DEFAULTS.rateLimit,
     concurrency: config.concurrency ?? DEFAULTS.concurrency,
+    useSpa: config.useSpa ?? DEFAULTS.useSpa,
+    spaOptions: config.spaOptions,
   };
 
   const pages: CrawledPage[] = [];
@@ -390,6 +422,8 @@ export async function crawlUrls(
         const fetchResult = await fetchUrl(normalized, {
           timeout: cfg.timeout,
           userAgent: cfg.userAgent,
+          useSpa: cfg.useSpa,
+          spaOptions: cfg.spaOptions,
         });
 
         if ('error' in fetchResult) {
@@ -427,6 +461,11 @@ export async function crawlUrls(
     if (page) {
       pages.push(page);
     }
+  }
+
+  // Close browser if SPA mode was used
+  if (cfg.useSpa) {
+    await closeBrowser();
   }
 
   const timeMs = Date.now() - startTime;
