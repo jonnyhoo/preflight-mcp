@@ -32,7 +32,11 @@ import {
   createVLMConfig,
   processLowConfidenceElements,
   processScannedPage,
+  processPageWithVLM,
+  enhanceWithRegionVLM,
+  enhanceInlineFormulas,
 } from './pdf/index.js';
+import type { PageStats } from './pdf/types.js';
 import type {
   AnalyzedElement,
   RichTextItem,
@@ -194,8 +198,11 @@ export class PdfParser implements IDocumentParser {
       const pagesToProcess = Math.min(endPage - startPage + 1, maxPages);
 
       // Check if smart analysis is enabled (for academic papers)
-      const useSmartAnalysis = opts.smartAnalysis ?? false;
-      const vlmConfig = opts.vlmConfig ? createVLMConfig(opts.vlmConfig) : null;
+      // Read from opts directly or from extra field (set by document-ingest)
+      const extraOpts = opts.extra as { smartAnalysis?: boolean; vlmConfig?: Partial<VLMConfig> } | undefined;
+      const useSmartAnalysis = opts.smartAnalysis ?? extraOpts?.smartAnalysis ?? false;
+      const vlmConfigOpts = opts.vlmConfig ?? extraOpts?.vlmConfig;
+      const vlmConfig = vlmConfigOpts ? createVLMConfig(vlmConfigOpts) : null;
 
       // Extract text content using unpdf (fast, native text extraction)
       const textResult = await extractText(freshData(), {
@@ -210,8 +217,14 @@ export class PdfParser implements IDocumentParser {
       const totalNativeText = pageTexts.join(' ');
       const needsOcr = !hasSubstantialText(totalNativeText);
 
-      // If PDF appears to be scanned (no/minimal text), try OCR
-      if (needsOcr && opts.enableOcr !== false) {
+      // If PDF appears to be scanned (no/minimal text), try VLM first if available
+      // VLM provides better structured content extraction than OCR
+      let useVLMForAllPages = false;
+      if (needsOcr && vlmConfig?.enabled) {
+        warnings.push('PDF has minimal text; using VLM for enhanced content extraction');
+        useVLMForAllPages = true;
+      } else if (needsOcr && opts.enableOcr !== false) {
+        // Fallback to OCR if VLM not available
         const ocrResult = await this.tryOcrExtraction(filePath, pagesToProcess, warnings);
         if (ocrResult) {
           pageTexts = ocrResult.pageTexts;
@@ -225,39 +238,101 @@ export class PdfParser implements IDocumentParser {
         ? this.normalizePdfPageTexts(pageTexts)
         : pageTexts;
 
-      for (let pageIdx = startPage; pageIdx < startPage + pagesToProcess; pageIdx++) {
-        try {
-          // Get page text
-          const pageText = pageTexts[pageIdx] ?? '';
-          const normalizedPageText = normalizedPageTexts[pageIdx] ?? pageText;
-          
-          if (pageText.trim()) {
-            // Use smart analysis for academic papers if enabled
-            if (useSmartAnalysis) {
-              const smartContents = await this.smartAnalyzePage(
-                pdf,
-                pageIdx,
-                vlmConfig,
-                warnings
-              );
-              contents.push(...smartContents);
-            } else {
-              // Standard structure detection
-              const pageContents = this.parsePageContent(pageText, pageIdx);
-              contents.push(...pageContents);
+      // Debug: log VLM entry conditions (avoid logging secrets)
+      logger.info(
+        `VLM entry check: smartAnalysis=${useSmartAnalysis}, vlmEnabled=${vlmConfig?.enabled}, needsOcr=${needsOcr}, vlmConfig=${JSON.stringify(
+          vlmConfigOpts
+            ? {
+                enabled: vlmConfig?.enabled,
+                hasApiBase: !!vlmConfig?.apiBase,
+                hasApiKey: !!vlmConfig?.apiKey,
+                model: vlmConfig?.model,
+              }
+            : null
+        )}`
+      );
+
+      // Use region-based VLM enhancement when smart analysis is enabled with VLM
+      // This batch-processes all formula/table regions in a single VLM call
+      if (useSmartAnalysis && vlmConfig?.enabled && !needsOcr) {
+        logger.info('Using region-based VLM enhancement for PDF');
+        const regionResult = await this.parseWithRegionVLM(
+          pdf,
+          freshData, // Pass function, not result - unpdf detaches ArrayBuffers
+          startPage,
+          pagesToProcess,
+          vlmConfig,
+          warnings
+        );
+        contents.push(...regionResult.contents);
+        fullTextParts.push(...regionResult.fullTextParts);
+      } else {
+        // Standard per-page processing
+        for (let pageIdx = startPage; pageIdx < startPage + pagesToProcess; pageIdx++) {
+          try {
+            // Get page text
+            const pageText = pageTexts[pageIdx] ?? '';
+            const normalizedPageText = normalizedPageTexts[pageIdx] ?? pageText;
+            
+            // Use VLM for all pages if scanned/minimal text PDF with VLM enabled
+            if (useVLMForAllPages && vlmConfig?.enabled) {
+              const vlmElements = await processPageWithVLM(freshData(), pageIdx, vlmConfig);
+              if (vlmElements.length > 0) {
+                contents.push(...this.convertAnalyzedElements(vlmElements));
+                // Extract text from VLM elements for full text
+                if (opts.generateFullText) {
+                  const vlmText = vlmElements
+                    .filter(el => el.type === 'paragraph' || el.type === 'heading')
+                    .map(el => el.content)
+                    .join('\n\n');
+                  if (vlmText.trim()) fullTextParts.push(vlmText);
+                }
+                continue;
+              }
+              // If VLM returns nothing, fall through to standard parsing
             }
-            if (opts.generateFullText && normalizedPageText.trim()) {
-              fullTextParts.push(normalizedPageText);
+            
+            if (pageText.trim()) {
+              // Use smart analysis for academic papers if enabled
+              if (useSmartAnalysis) {
+                const smartContents = await this.smartAnalyzePage(
+                  pdf,
+                  pageIdx,
+                  vlmConfig,
+                  warnings
+                );
+                contents.push(...smartContents);
+              } else {
+                // Standard structure detection
+                const pageContents = this.parsePageContent(pageText, pageIdx);
+                contents.push(...pageContents);
+              }
+              if (opts.generateFullText && normalizedPageText.trim()) {
+                fullTextParts.push(normalizedPageText);
+              }
+            } else if (vlmConfig?.enabled) {
+              // Page has no text but VLM is available - try VLM extraction
+              const vlmElements = await processPageWithVLM(freshData(), pageIdx, vlmConfig);
+              if (vlmElements.length > 0) {
+                contents.push(...this.convertAnalyzedElements(vlmElements));
+                if (opts.generateFullText) {
+                  const vlmText = vlmElements
+                    .filter(el => el.type === 'paragraph' || el.type === 'heading')
+                    .map(el => el.content)
+                    .join('\n\n');
+                  if (vlmText.trim()) fullTextParts.push(vlmText);
+                }
+              }
             }
+          } catch (pageError) {
+            const errMsg = pageError instanceof Error ? pageError.message : String(pageError);
+            errors.push({
+              code: 'PAGE_ERROR',
+              message: `Error processing page ${pageIdx}: ${errMsg}`,
+              pageIndex: pageIdx,
+              recoverable: true,
+            });
           }
-        } catch (pageError) {
-          const errMsg = pageError instanceof Error ? pageError.message : String(pageError);
-          errors.push({
-            code: 'PAGE_ERROR',
-            message: `Error processing page ${pageIdx}: ${errMsg}`,
-            pageIndex: pageIdx,
-            recoverable: true,
-          });
         }
       }
 
@@ -754,6 +829,7 @@ export class PdfParser implements IDocumentParser {
   /**
    * Smart analyze a page using the academic paper analyzer.
    * Detects headings, formulas, code blocks, and tables with higher accuracy.
+   * Returns both contents and stats for batch VLM processing.
    */
   private async smartAnalyzePage(
     pdf: PDFDocumentProxy,
@@ -761,6 +837,20 @@ export class PdfParser implements IDocumentParser {
     vlmConfig: VLMConfig | null,
     warnings: string[]
   ): Promise<ParsedContent[]> {
+    const result = await this.smartAnalyzePageWithStats(pdf, pageIndex, vlmConfig, warnings);
+    return result.contents;
+  }
+
+  /**
+   * Smart analyze a page and return both contents and internal state.
+   * Used for batch VLM processing where we need page stats and raw elements.
+   */
+  private async smartAnalyzePageWithStats(
+    pdf: PDFDocumentProxy,
+    pageIndex: number,
+    vlmConfig: VLMConfig | null,
+    warnings: string[]
+  ): Promise<{ contents: ParsedContent[]; stats: PageStats | null; elements: AnalyzedElement[] }> {
     try {
       const page = await pdf.getPage(pageIndex + 1);
       const viewport = page.getViewport({ scale: 1.0 });
@@ -791,29 +881,26 @@ export class PdfParser implements IDocumentParser {
       // Calculate page stats
       const stats = calculatePageStats(pageIndex, items, lines, viewport.width, viewport.height);
       
-      // Check if scanned page
+      // Check if scanned page - use VLM for full page analysis
       if (stats.isScanned && vlmConfig?.enabled) {
         const vlmElements = await processScannedPage(pdf, pageIndex, vlmConfig);
-        return this.convertAnalyzedElements(vlmElements);
-      }
-      
-      // Classify elements
-      const elements = classifyPageElements(lines, stats);
-      
-      // Process low-confidence elements with VLM if enabled
-      if (vlmConfig?.enabled) {
-        const { highConfidence, lowConfidence } = identifyLowConfidenceElements(
-          elements,
-          vlmConfig.confidenceThreshold
-        );
-        
-        if (lowConfidence.length > 0) {
-          const improved = await processLowConfidenceElements(pdf, lowConfidence, vlmConfig);
-          return this.convertAnalyzedElements([...highConfidence, ...improved]);
+        if (vlmElements.length > 0) {
+          return {
+            contents: this.convertAnalyzedElements(vlmElements),
+            stats,
+            elements: vlmElements,
+          };
         }
       }
       
-      return this.convertAnalyzedElements(elements);
+      // Classify elements (now includes bounds for formulas and tables)
+      const elements = classifyPageElements(lines, stats);
+      
+      return {
+        contents: this.convertAnalyzedElements(elements),
+        stats,
+        elements,
+      };
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
       warnings.push(`Smart analysis failed for page ${pageIndex}: ${errMsg}`);
@@ -826,8 +913,137 @@ export class PdfParser implements IDocumentParser {
         )
         .map((item: { str: string }) => item.str)
         .join(' ');
-      return this.parsePageContent(pageText, pageIndex);
+      return {
+        contents: this.parsePageContent(pageText, pageIndex),
+        stats: null,
+        elements: [],
+      };
     }
+  }
+
+  /**
+   * Parse PDF with region-based VLM enhancement.
+   * Collects all formula/table regions across pages, then batch processes with VLM.
+   * 
+   * @param freshData - Function that returns fresh Uint8Array (unpdf detaches ArrayBuffers)
+   */
+  private async parseWithRegionVLM(
+    pdf: PDFDocumentProxy,
+    freshData: () => Uint8Array,
+    startPage: number,
+    pagesToProcess: number,
+    vlmConfig: VLMConfig,
+    warnings: string[]
+  ): Promise<{ contents: ParsedContent[]; fullTextParts: string[] }> {
+    const allElements: AnalyzedElement[] = [];
+    const allStats: PageStats[] = [];
+
+    // Phase 1: Rule-based analysis of all pages
+    logger.info(`Phase 1: Rule-based analysis of ${pagesToProcess} pages`);
+    for (let pageIdx = startPage; pageIdx < startPage + pagesToProcess; pageIdx++) {
+      const result = await this.smartAnalyzePageWithStats(pdf, pageIdx, null, warnings);
+      allElements.push(...result.elements);
+      if (result.stats) {
+        // Ensure stats array is indexed by pageIndex
+        allStats[pageIdx] = result.stats;
+      }
+    }
+
+    // Phase 2: Enhance formulas/tables with VLM
+    logger.info(`Phase 2: VLM enhancement for formulas/tables`);
+    const enhanced = await enhanceWithRegionVLM(
+      freshData,
+      allElements,
+      allStats,
+      vlmConfig
+    );
+
+    if (enhanced.vlmErrors.length > 0) {
+      warnings.push(...enhanced.vlmErrors.map(e => `VLM: ${e}`));
+    }
+    if (enhanced.vlmRegions > 0) {
+      warnings.push(`VLM enhanced ${enhanced.vlmRegions} formula/table regions`);
+    }
+
+    // Phase 2.5: Enhance paragraphs with inline formulas (Unicode math -> LaTeX)
+    logger.info(`Phase 2.5: Inline formula enhancement for paragraphs`);
+    let inlineEnhanced: { elements: AnalyzedElement[]; enhanced: number };
+    try {
+      inlineEnhanced = await enhanceInlineFormulas(enhanced.elements, vlmConfig);
+      
+      if (inlineEnhanced.enhanced > 0) {
+        warnings.push(`Inline formula: ${inlineEnhanced.enhanced} paragraphs enhanced`);
+      }
+    } catch (err) {
+      // Phase 2.5 failure is non-fatal - just use elements from Phase 2
+      logger.warn(`Phase 2.5 failed: ${err instanceof Error ? err.message : String(err)}`);
+      warnings.push(`Phase 2.5 inline formula enhancement failed - using rule-based only`);
+      inlineEnhanced = { elements: enhanced.elements, enhanced: 0 };
+    }
+
+    // Phase 3: Generate fullText from ENHANCED elements (including VLM results)
+    const fullTextParts = this.generateFullTextFromElements(inlineEnhanced.elements, pagesToProcess, startPage);
+
+    return {
+      contents: this.convertAnalyzedElements(inlineEnhanced.elements),
+      fullTextParts,
+    };
+  }
+
+  /**
+   * Generate full text parts from enhanced elements, organized by page.
+   * Includes VLM-enhanced formulas (LaTeX) and tables (Markdown).
+   */
+  private generateFullTextFromElements(
+    elements: AnalyzedElement[],
+    pagesToProcess: number,
+    startPage: number
+  ): string[] {
+    const fullTextParts: string[] = [];
+    
+    // Group elements by page
+    for (let pageIdx = startPage; pageIdx < startPage + pagesToProcess; pageIdx++) {
+      const pageElements = elements.filter(el => el.pageIndex === pageIdx);
+      if (pageElements.length === 0) continue;
+      
+      const parts: string[] = [];
+      for (const el of pageElements) {
+        switch (el.type) {
+          case 'heading':
+            // Use markdown heading syntax
+            const level = el.level ?? 1;
+            parts.push(`${'#'.repeat(Math.min(level, 6))} ${el.content}`);
+            break;
+          case 'formula':
+            // Wrap in $$ for display math if VLM processed (LaTeX)
+            if (el.vlmProcessed) {
+              parts.push(`$$\n${el.content}\n$$`);
+            } else {
+              parts.push(el.content);
+            }
+            break;
+          case 'table':
+            // VLM returns markdown table, use as-is
+            parts.push(el.content);
+            break;
+          case 'code':
+            parts.push(`\`\`\`\n${el.content}\n\`\`\``);
+            break;
+          case 'list':
+            parts.push(el.content);
+            break;
+          default:
+            // paragraph, caption, footnote, etc.
+            parts.push(el.content);
+        }
+      }
+      
+      if (parts.length > 0) {
+        fullTextParts.push(parts.join('\n\n'));
+      }
+    }
+    
+    return fullTextParts;
   }
 
   /**

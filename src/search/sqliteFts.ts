@@ -46,6 +46,7 @@ export function supportsIncrementalIndex(dbPath: string): boolean {
       db.close();
     }
   } catch {
+    // DB doesn't exist or can't be opened - no incremental support
     return false;
   }
 }
@@ -61,7 +62,7 @@ function getStoredFileMeta(db: Database.Database): Map<string, string> {
       meta.set(row.path, row.sha256);
     }
   } catch {
-    // Table doesn't exist yet
+    // file_meta table doesn't exist - return empty (will trigger full rebuild)
   }
   return meta;
 }

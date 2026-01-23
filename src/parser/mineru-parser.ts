@@ -608,6 +608,7 @@ export class MineruParser implements IDocumentParser {
         stats,
         fullText: markdown,
         warnings: assets.size > 0 ? [`Extracted ${assets.size} assets from PDF`] : undefined,
+        assets: assets.size > 0 ? assets : undefined,
       };
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);

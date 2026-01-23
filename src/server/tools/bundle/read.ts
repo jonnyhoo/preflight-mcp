@@ -32,15 +32,14 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
       description:
         'Read specific file(s) from a bundle.\n\n' +
         '**Common usage:**\n' +
-        '- Read a file: `{bundleId, file: "repos/owner/repo/norm/src/main.ts"}`\n' +
-        '- Read specific lines: `{bundleId, file: "...", ranges: ["50-100"]}`\n' +
-        '- Get file outline: `{bundleId, file: "...", outline: true}`\n\n' +
-        '**When to use:**\n' +
-        '- You know the exact file path (from search results or tree)\n' +
-        '- You need to read specific line ranges for evidence\n\n' +
-        '**Use `preflight_get_overview` instead if:** you want project summary\n' +
-        '**Use `preflight_search_and_read` instead if:** you need to find code first\n\n' +
-        'Triggers: "读取文件", "查看代码", "read file", "show source"',
+        '- Read code: `{bundleId, file: "repos/owner/repo/norm/src/main.ts"}`\n' +
+        '- Read PDF content: `{bundleId, file: "pdf_xxx.md"}`\n' +
+        '- Read web page: `{bundleId, file: "repos/web/.../norm/docs/intro.md"}`\n' +
+        '- Read specific lines: `{bundleId, file: "...", ranges: ["50-100"]}`\n\n' +
+        '**When to use:** You know the exact file path (from search results or tree)\n\n' +
+        '**Use `preflight_get_overview` instead if:** you want overview first\n' +
+        '**Use `preflight_search_and_read` instead if:** you need to find content first\n\n' +
+        'Triggers: "读取", "read", "查看", "阅读页面", "read page"',
       inputSchema: {
         bundleId: z.string().describe('Bundle ID to read.'),
         file: z.string().optional().describe('Specific file to read (e.g., "deps/dependency-graph.json"). If omitted, uses mode-based batch reading.'),

@@ -22,8 +22,8 @@ const logger = createModuleLogger('context-extractor');
 // ============================================================================
 
 const DEFAULT_CONFIG: Required<ContextConfig> = {
-  maxTokens: 4096,
-  windowSize: 3,
+  maxTokens: 65536,  // No limits
+  windowSize: 5,
   format: 'auto',
   respectPageBoundaries: true,
   tokenizer: defaultTokenizer,

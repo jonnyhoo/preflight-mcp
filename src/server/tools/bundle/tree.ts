@@ -28,9 +28,12 @@ export function registerRepoTreeTool({ server, cfg }: ToolDependencies, coreOnly
     {
       title: 'Repository tree & statistics',
       description:
-        'Get repository structure overview with directory tree, file statistics, and entry point candidates. ' +
-        'Use this BEFORE deep analysis to understand project layout without wasting tokens on search. ' +
-        'Use when: "show project structure", "what files are in this repo", "项目结构", "文件分布", "show tree".',
+        'Get bundle structure overview with directory tree and file statistics. ' +
+        'Use this BEFORE deep analysis to understand layout without wasting tokens on search.\n\n' +
+        '**For Code Repositories:** Entry points, top directories, file type distribution.\n' +
+        '**For PDF/Documents:** Document files, images folder, index files.\n' +
+        '**For Web Documentation:** Page hierarchy, documentation sections.\n\n' +
+        'Use when: "show structure", "what files", "项目结构", "文件分布", "show tree", "文档结构", "页面结构".',
       inputSchema: {
         bundleId: z.string().describe('Bundle ID to analyze.'),
         depth: z.number().int().min(1).max(10).default(4).describe('Maximum directory depth to traverse. Default 4.'),

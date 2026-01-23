@@ -91,6 +91,7 @@ async function fetchRobotsTxt(
     const robotsParserModule = await import('robots-parser') as unknown as { default: (url: string, content: string) => Robot };
     return robotsParserModule.default(robotsUrl, text);
   } catch {
+    // robots.txt not available or parse failed - allow crawling
     return null;
   }
 }
@@ -616,6 +617,7 @@ export async function crawlWebsiteIncremental(
           await sleep(cfg.rateLimit);
           return { url, result: 'added' as const, page, state };
         } catch {
+          // Page extraction failed - count as error
           errorCount++;
           return { url, result: 'error' as const };
         }
@@ -686,6 +688,7 @@ export async function crawlWebsiteIncremental(
           await sleep(cfg.rateLimit);
           return { url, result: 'updated' as const, page, state };
         } catch {
+          // Content extraction failed - keep previous state
           errorCount++;
           newState.set(url, prev);
           return { url, result: 'error' as const };

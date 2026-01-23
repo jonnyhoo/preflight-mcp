@@ -256,7 +256,7 @@ export async function clearBundleMulti(storageDirs: string[], bundleId: string):
       try {
         await fs.stat(paths.rootDir);
       } catch {
-        // Directory doesn't exist, skip
+        // Bundle dir doesn't exist in this storage - skip to next
         continue;
       }
 
@@ -323,6 +323,6 @@ export async function cleanupFailedBundle(cfg: PreflightConfig, bundleId: string
   try {
     await rmIfExists(tmpCheckout);
   } catch {
-    // Ignore cleanup errors
+    // Temp checkout cleanup failed - non-critical, will be cleaned on next startup
   }
 }

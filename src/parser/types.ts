@@ -280,6 +280,9 @@ export interface ParseResult {
   
   /** Warnings (non-fatal issues) */
   warnings?: string[];
+  
+  /** Extracted assets (images, etc.) - key is relative path, value is buffer */
+  assets?: Map<string, Buffer>;
 }
 
 /**

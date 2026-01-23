@@ -72,6 +72,7 @@ export const CreateRepoInputSchema = z.union([
     url: z.string().url().optional().describe('PDF URL to download and parse. Example: "https://arxiv.org/pdf/2512.14982"'),
     path: z.string().optional().describe('Local file path to PDF. Example: "C:\\\\docs\\\\paper.pdf" or "/home/user/paper.pdf"'),
     name: z.string().optional().describe('Display name for the document. Example: "Prompt Repetition Paper"'),
+    forceLocalParser: z.boolean().optional().describe('If true, use local parser (unpdf+VLM) instead of MinerU. Useful for testing fallback quality.'),
   }).refine(
     (data) => data.url || data.path,
     { message: 'Either url or path must be provided for PDF input' }

@@ -32,6 +32,19 @@ interface ConfigFile {
 
 let cachedConfigFile: ConfigFile | null = null;
 
+/** Config loading warnings/errors that LLM should be aware of */
+const configWarnings: string[] = [];
+
+/**
+ * Get any warnings that occurred during config loading.
+ * These should be exposed to LLM via MCP tools.
+ */
+export function getConfigWarnings(): string[] {
+  // Trigger config load if not already done
+  loadConfigFile();
+  return [...configWarnings];
+}
+
 /**
  * Load config from ~/.preflight/config.json (or PREFLIGHT_CONFIG_PATH)
  */
@@ -53,7 +66,11 @@ function loadConfigFile(): ConfigFile {
         return cachedConfigFile;
       }
     } catch (err) {
-      console.error(`[preflight] Failed to load config from ${configPath}:`, err);
+      // Store warning for LLM visibility
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const warning = `Config file error (${configPath}): ${errMsg}. Using defaults - some features (MinerU, VLM, LLM, Embedding) may not work.`;
+      configWarnings.push(warning);
+      console.error(`[preflight] ${warning}`);
     }
   }
   

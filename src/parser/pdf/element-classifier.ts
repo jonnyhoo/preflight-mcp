@@ -16,6 +16,43 @@ import {
 } from './types.js';
 
 /**
+ * Calculate bounding box for lines range.
+ */
+function calculateElementBoundsFromLines(
+  lines: TextLine[],
+  startIndex: number,
+  endIndex: number,
+  stats: PageStats
+): { x: number; y: number; width: number; height: number } {
+  const relevantLines = lines.slice(startIndex, endIndex + 1);
+  if (relevantLines.length === 0) {
+    return { x: 0, y: 0, width: 0, height: 0 };
+  }
+
+  let minX = Infinity;
+  let maxX = 0;
+  let minY = Infinity;
+  let maxY = 0;
+
+  for (const line of relevantLines) {
+    for (const item of line.items) {
+      minX = Math.min(minX, item.x);
+      maxX = Math.max(maxX, item.x + item.width);
+      minY = Math.min(minY, item.y - item.height);
+      maxY = Math.max(maxY, item.y);
+    }
+  }
+
+  const padding = stats.medianFontSize * 0.5;
+  return {
+    x: Math.max(0, minX - padding),
+    y: Math.max(0, minY - padding),
+    width: Math.min(stats.width, maxX - minX + padding * 2),
+    height: maxY - minY + padding * 2,
+  };
+}
+
+/**
  * Classifies all lines in a page into semantic elements.
  * 
  * @param lines - Text lines from the page
@@ -273,12 +310,16 @@ export function detectFormula(
       .map(l => l.text)
       .join(' ');
     
+    // Calculate bounds for VLM cropping
+    const bounds = calculateElementBoundsFromLines(lines, startIndex, endIndex, stats);
+    
     return {
       element: {
         type: 'formula',
         content,
         confidence,
         pageIndex: stats.pageIndex,
+        bounds,
       },
       endIndex,
     };
@@ -525,6 +566,9 @@ export function detectTable(
   const content = tableLines.map(l => l.text).join('\n');
   const confidence = Math.min(0.6 + (tableLines.length * 0.05), 0.85);
   
+  // Calculate bounds for VLM cropping
+  const bounds = calculateElementBoundsFromLines(lines, startIndex, endIndex, stats);
+  
   return {
     element: {
       type: 'table',
@@ -532,6 +576,7 @@ export function detectTable(
       confidence,
       pageIndex: stats.pageIndex,
       columns: cells.length,
+      bounds,
     },
     endIndex,
   };

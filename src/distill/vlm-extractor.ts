@@ -183,7 +183,7 @@ export function getVLMConfig(): VLMConfig {
     apiBase: cfg.vlmApiBase || '',
     apiKey: cfg.vlmApiKey || '',
     model: cfg.vlmModel || 'qwen3-vl-plus',
-    maxTokens: 4096,
+    maxTokens: 32768,  // No limits - user has unlimited budget
     enabled: cfg.vlmEnabled && Boolean(cfg.vlmApiKey && cfg.vlmApiBase),
   };
 }

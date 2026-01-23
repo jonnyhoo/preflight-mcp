@@ -12,6 +12,7 @@ import { isParseableDocument } from '../../../bundle/document-ingest.js';
 import { getProgressTracker } from '../../../jobs/progressTracker.js';
 import { toBundleFileUri } from '../../../mcp/uris.js';
 import { wrapPreflightError } from '../../../mcp/errorKinds.js';
+import { getConfigWarnings } from '../../../config.js';
 
 // ==========================================================================
 // preflight_create_bundle
@@ -86,6 +87,9 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
     },
     async (args) => {
       try {
+        // Check for config warnings that LLM should know about
+        const configWarnings = getConfigWarnings();
+        
         // Check if all inputs are document files (PDF, Office, etc.)
         const localPaths = args.repos
           .filter((r: any) => r.kind === 'local' && r.path)
@@ -117,7 +121,17 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
           
           server.sendResourceListChanged();
           
-          let textResponse = docResult.created
+          // Build response with config warnings first
+          let textResponse = '';
+          if (configWarnings.length > 0) {
+            textResponse += '⚠️ **Configuration Issues:**\n';
+            for (const warn of configWarnings) {
+              textResponse += `- ${warn}\n`;
+            }
+            textResponse += '\n';
+          }
+          
+          textResponse += docResult.created
             ? `✅ Document bundle created: ${docResult.bundleId}\nParsed: ${docResult.parsed} document(s)${docResult.skipped > 0 ? `, skipped: ${docResult.skipped}` : ''}`
             : `✅ Document bundle already exists: ${docResult.bundleId}`;
           
@@ -193,6 +207,16 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
         };
 
         let textResponse = '';
+        
+        // Show config warnings first (critical for LLM to understand issues)
+        if (configWarnings.length > 0) {
+          textResponse += '⚠️ **Configuration Issues:**\n';
+          for (const warn of configWarnings) {
+            textResponse += `- ${warn}\n`;
+          }
+          textResponse += '\n';
+        }
+        
         if (summary.warnings && summary.warnings.length > 0) {
           textResponse += '📢 **Network Issues Encountered:**\n';
           for (const warn of summary.warnings) {
@@ -220,6 +244,28 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
               }
             }
           }
+        }
+
+        // Unified Next steps for all bundle types
+        textResponse += '\n---\n\n';
+        textResponse += '💡 **Next steps:**\n';
+        
+        // Detect bundle type for appropriate hints
+        const isWebOnly = args.repos.length > 0 && args.repos.every((r: any) => r.kind === 'web');
+        
+        if (isPdfOnly) {
+          textResponse += '- Use `preflight_get_overview` to see document structure (title, abstract, table of contents)\n';
+          textResponse += '- Use `preflight_search_and_read` to search specific content\n';
+          textResponse += '- Use `preflight_read_file` to read the full document\n';
+        } else if (isWebOnly) {
+          textResponse += '- Use `preflight_get_overview` to see documentation overview\n';
+          textResponse += '- Use `preflight_repo_tree` to see page structure\n';
+          textResponse += '- Use `preflight_search_and_read` to search documentation\n';
+        } else {
+          // Code repository
+          textResponse += '- Use `preflight_get_overview` to see project summary and architecture\n';
+          textResponse += '- Use `preflight_repo_tree` to see file structure\n';
+          textResponse += '- Use `preflight_search_and_read` to find specific code\n';
         }
 
         return {

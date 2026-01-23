@@ -50,6 +50,7 @@ import {
   cloneAndIngestGitHubRepo,
 } from './repo-ingest.js';
 import { downloadPdfToLocal } from './pdf-download.js';
+import { generateDocumentOverview } from './document-overview.js';
 
 // Web module imports are dynamic to avoid loading jsdom in non-web contexts
 // This fixes Jest ESM compatibility issues
@@ -465,20 +466,42 @@ async function createBundleInternal(
         await ensureDir(pdfDocsDir);
 
         // Parse PDF document
+        // forceLocalParser skips MinerU and uses unpdf+VLM instead
+        const forceLocalParser = 'forceLocalParser' in repoInput && repoInput.forceLocalParser === true;
+        
+        // VLM config requires all three: enabled flag, API key, and API base URL
+        const hasVlmConfig = cfg.vlmEnabled && cfg.vlmApiKey && cfg.vlmApiBase;
+        if (forceLocalParser) {
+          // DEBUG: print actual key prefix to verify config is loaded correctly
+          const keyPreview = cfg.vlmApiKey ? `${cfg.vlmApiKey.slice(0, 12)}...` : 'NONE';
+          logger.info(`forceLocalParser=true, VLM config: enabled=${cfg.vlmEnabled}, apiBase=${cfg.vlmApiBase}, keyPreview=${keyPreview}`);
+        }
+        
         const parseResult = await ingestDocument(localPdfPath!, {
           extractImages: true,
           extractTables: true,
           extractEquations: true,
           outputDir: pdfDocsDir,
-          vlmConfig: cfg.vlmEnabled && cfg.vlmApiKey ? {
-            apiBase: cfg.vlmApiBase ?? '',
-            apiKey: cfg.vlmApiKey,
+          forceLocalParser,
+          vlmConfig: hasVlmConfig ? {
+            apiBase: cfg.vlmApiBase!,
+            apiKey: cfg.vlmApiKey!,
             model: cfg.vlmModel,
           } : undefined,
         });
 
         const notes: string[] = [];
+        
+        // Show which parser was used (critical for LLM to understand quality)
+        if (parseResult.parserUsed) {
+          notes.push(`Parser: ${parseResult.parserUsed}`);
+        }
+        
         if (!parseResult.success) {
+          // When forceLocalParser is used, failure is fatal - don't create empty bundle
+          if (forceLocalParser) {
+            throw new Error(`PDF parsing failed (forceLocalParser=true): ${parseResult.error}`);
+          }
           notes.push(`Parse warning: ${parseResult.error}`);
         }
         if (parseResult.warnings) {
@@ -515,6 +538,29 @@ async function createBundleInternal(
           ].filter(Boolean).join('\n');
           
           await fs.writeFile(mdPath, mdContent, 'utf8');
+          
+          // Save extracted assets (images) to bundle directory
+          if (parseResult.assets && parseResult.assets.size > 0) {
+            const imagesDir = path.join(pdfDocsDir, 'images');
+            await ensureDir(imagesDir);
+            
+            for (const [assetPath, assetBuffer] of parseResult.assets) {
+              // Extract just the filename from the asset path
+              const assetFilename = path.basename(assetPath);
+              const assetOutputPath = path.join(imagesDir, assetFilename);
+              await fs.writeFile(assetOutputPath, assetBuffer);
+            }
+            
+            notes.push(`Images saved: ${parseResult.assets.size}`);
+          }
+          
+          // Generate OVERVIEW.md for PDF bundles (for get_overview tool)
+          if (isPdfOnly) {
+            await generateDocumentOverview(pdfDocsDir, parseResult.fullText, {
+              source: pdfUrl ?? localPdfPath ?? 'unknown',
+              pageCount: parseResult.pageCount,
+            });
+          }
           
           // Compute content hash
           const mdContentHash = sha256Text(mdContent);
@@ -699,7 +745,7 @@ async function createBundleInternal(
         await writeManifest(tmpPaths.manifestPath, manifest);
         logger.debug(`Tags updated with FACTS.json data: ${updatedTags.join(', ')}`);
       } catch {
-        // Ignore parse errors - keep original tags
+        // FACTS.json parse error - keep original tags (non-critical)
       }
     }
   }
@@ -818,7 +864,7 @@ export async function checkForUpdates(cfg: PreflightConfig, bundleId: string): P
       try {
         remoteSha = await getRemoteHeadSha(cloneUrl);
       } catch {
-        // ignore
+        // Remote SHA fetch failed - proceed with clone anyway
       }
 
       const changed = !!(remoteSha && prev?.headSha && remoteSha !== prev.headSha);
@@ -835,7 +881,7 @@ export async function checkForUpdates(cfg: PreflightConfig, bundleId: string): P
       try {
         localSha = await getLocalHeadSha(path.resolve(repoInput.path));
       } catch {
-        // Not a git repo (or git not available) - fall back to "changed".
+        // Not a git repo or git unavailable - conservatively assume changed
       }
 
       const changed = !localSha || !prev?.headSha || localSha !== prev.headSha;
@@ -981,7 +1027,7 @@ async function scanBundleIndexableFiles(params: {
       }
     }
   } catch {
-    // ignore missing repos dir
+    // repos/ dir missing or inaccessible - skip repo scanning
   }
 
   // 2) docs/** (document artifacts, e.g., PDFs)
@@ -1015,7 +1061,7 @@ async function scanBundleIndexableFiles(params: {
       }
     }
   } catch {
-    // ignore missing docs dir
+    // docs/ dir missing or inaccessible - skip doc scanning
   }
 
   // 3) root-level pdf_*.md (pdf-only bundles)
@@ -1040,7 +1086,7 @@ async function scanBundleIndexableFiles(params: {
       });
     }
   } catch {
-    // ignore missing root files
+    // Root PDF files scan failed - skip (non-critical)
   }
 
   return { files, totalBytes, skipped };
@@ -1241,7 +1287,7 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
       try {
         remoteSha = await getRemoteHeadSha(cloneUrl);
       } catch {
-        // ignore remote check errors; proceed to clone anyway.
+        // Remote SHA check failed - proceed with clone anyway
       }
 
       const prev = manifest.repos.find((r) => r.kind === 'github' && r.id === repoId);
@@ -1284,7 +1330,7 @@ export async function updateBundle(cfg: PreflightConfig, bundleId: string, optio
       try {
         localSha = await getLocalHeadSha(path.resolve(repoInput.path));
       } catch {
-        // Not a git repo (or git not available) - treat as changed.
+        // Not a git repo or git unavailable - conservatively treat as changed
       }
 
       const unchanged = !options?.force && !!localSha && !!prev?.headSha && localSha === prev.headSha;

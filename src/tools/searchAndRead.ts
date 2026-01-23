@@ -516,23 +516,16 @@ export const searchAndReadToolDescription = {
   title: 'Search and read excerpts',
   description:
     'Search bundle and return excerpts with context in one call. ' +
-    'The most important tool for LLM evidence gathering - combines search + read.\n\n' +
+    'Works for code repositories, PDF documents, AND web documentation.\n\n' +
+    '**For Code:** Find functions, classes, implementations.\n' +
+    '**For PDF/Documents:** Search paper content, find sections.\n' +
+    '**For Web Docs:** Search documentation pages, find API references.\n\n' +
     '**LLM Usage Guide:**\n' +
-    '- Use when you need to find AND read code/docs in one step\n' +
-    '- Default contextLines=30 provides good surrounding context\n' +
-    '- Results include citation-ready evidence[] with path + range\n' +
-    '- Deterministic ordering: score → path → line (stable pagination)\n\n' +
-    '**Token Optimization (NEW):**\n' +
-    '- groupByFile=true: Returns {path, hitCount, lines[], topSnippet} per file\n' +
-    '- Saves 30-50% tokens when same file has multiple matches\n' +
-    '- Use for initial exploration, then readContent=true for specific files\n\n' +
+    '- Use when you need to find AND read content in one step\n' +
+    '- Results include citation-ready evidence[] with path + range\n\n' +
     '**When to use vs other tools:**\n' +
-    '- search_and_read: You need evidence excerpts NOW (most common)\n' +
-    '- search_and_read + groupByFile: Quick overview without reading content\n' +
-    '- groupByFile=true + readContent=false: Quick index-only search (replaces legacy search_bundle)\n' +
-    '- read_files: You already know exact files and ranges\n\n' +
-    '**Evidence Citation:**\n' +
-    '- Each hit includes matchRange (exact match) and excerptRange (with context)\n' +
-    '- Use excerptRange for citations: "path:startLine-endLine"\n\n' +
-    'Triggers: "search and show", "find with context", "搜索并显示", "查找代码"',
+    '- search_and_read: Find specific content (most common)\n' +
+    '- get_overview: Want structure first\n' +
+    '- read_file: Know exact file path\n\n' +
+    'Triggers: "search", "find", "搜索", "查找", "搜索文档", "search docs"',
 };

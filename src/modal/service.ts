@@ -120,8 +120,8 @@ const DEFAULT_CONFIG: Required<ModalServiceConfig> = {
   processImages: true,
   processTables: true,
   processEquations: true,
-  contextWindowSize: 3,
-  maxContextTokens: 4096,
+  contextWindowSize: 5,
+  maxContextTokens: 65536,  // No limits
   parallelProcessing: false,
   maxConcurrency: 4,
 };

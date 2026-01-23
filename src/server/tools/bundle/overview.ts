@@ -12,6 +12,7 @@ import { safeJoin } from '../../../mcp/uris.js';
 import { wrapPreflightError } from '../../../mcp/errorKinds.js';
 import { BundleNotFoundError } from '../../../errors.js';
 import type { BundleFacts } from '../../../bundle/facts.js';
+import { readManifest } from '../../../bundle/manifest.js';
 
 // ==========================================================================
 // preflight_get_overview
@@ -28,17 +29,16 @@ export function registerGetOverviewTool({ server, cfg }: ToolDependencies, coreO
     {
       title: 'Get bundle overview',
       description:
-        '⭐ **START HERE** - Get project overview in one call. Returns OVERVIEW.md + START_HERE.md + AGENTS.md. ' +
+        '⭐ **START HERE** - Get bundle overview in one call. ' +
         'This is the recommended FIRST tool to call when exploring any bundle. ' +
-        'Use when: "了解项目", "项目概览", "what is this project", "show overview", "get started".\n\n' +
-        '**Returns:**\n' +
-        '- OVERVIEW.md: AI-generated project summary & architecture\n' +
-        '- START_HERE.md: Key entry points & critical paths\n' +
-        '- AGENTS.md: AI agent usage guide\n\n' +
+        'Use when: "了解项目", "项目概览", "what is this project", "show overview", "get started", "了解论文", "文档概览", "了解文档站".\n\n' +
+        '**For Code Repositories:** Project summary, architecture, entry points\n' +
+        '**For PDF/Documents:** Title, authors, abstract, table of contents\n' +
+        '**For Web Documentation:** Site structure, main topics, page index\n\n' +
         '**Next steps after overview:**\n' +
-        '1. `preflight_repo_tree` - See file structure\n' +
-        '2. `preflight_search` - Find specific code\n' +
-        '3. `preflight_read_file` - Read specific files',
+        '1. `preflight_search_and_read` - Search and read specific content\n' +
+        '2. `preflight_repo_tree` - See file/page structure\n' +
+        '3. `preflight_read_file` - Read specific file/page',
       inputSchema: {
         bundleId: z.string().describe('Bundle ID to get overview for.'),
         brief: z.boolean().optional().default(false).describe(
@@ -147,6 +147,31 @@ export function registerGetOverviewTool({ server, cfg }: ToolDependencies, coreO
 
         if (sections.length === 0) {
           textParts.push('⚠️ No overview files found. Try preflight_repo_tree to explore structure.');
+        }
+
+        // Detect bundle type and add tailored next steps
+        let bundleType: 'code' | 'document' = 'code';
+        try {
+          const manifest = await readManifest(paths.manifestPath);
+          if (manifest.type === 'document' || manifest.repos?.every(r => r.kind === 'pdf')) {
+            bundleType = 'document';
+          }
+        } catch {
+          // Manifest read error, assume code bundle
+        }
+
+        textParts.push('');
+        textParts.push('---');
+        textParts.push('');
+        textParts.push('**Next steps:**');
+        if (bundleType === 'document') {
+          textParts.push('- Use `preflight_search_and_read` to search document content');
+          textParts.push('- Use `preflight_read_file` to read the full document');
+          textParts.push('- Use `preflight_repo_tree` to see bundle structure');
+        } else {
+          textParts.push('- Use `preflight_repo_tree` - See file structure');
+          textParts.push('- Use `preflight_search` - Find specific code');
+          textParts.push('- Use `preflight_read_file` - Read specific files');
         }
 
         const out = { bundleId: args.bundleId, overview, startHere, agents, sections };

@@ -242,7 +242,7 @@ export async function checkInProgressLock(cfg: PreflightConfig, fingerprint: str
         }
       }
     } catch {
-      // ignore
+      // Storage dir unavailable or index read failed - try next dir
     }
   }
 

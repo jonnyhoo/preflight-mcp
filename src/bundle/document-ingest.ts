@@ -53,6 +53,10 @@ export interface DocumentIngestResult {
   error?: string;
   /** Warnings encountered during parsing */
   warnings?: string[];
+  /** Which parser was used (e.g., 'mineru', 'unpdf', 'office') */
+  parserUsed?: string;
+  /** Extracted assets (images, etc.) - key is relative path, value is buffer */
+  assets?: Map<string, Buffer>;
 }
 
 /**
@@ -97,6 +101,8 @@ export interface DocumentIngestOptions {
     apiKey: string;
     model?: string;
   };
+  /** Force use of local parser (unpdf+VLM) instead of MinerU for PDF */
+  forceLocalParser?: boolean;
 }
 
 // ============================================================================
@@ -109,12 +115,18 @@ export interface DocumentIngestOptions {
  * For PDF files:
  * - Uses MineruParser (cloud API) if configured (high-quality extraction)
  * - Falls back to PdfParser (local unpdf/pdf-parse) otherwise
+ * @param forceLocalParser - If true, skip MinerU and use local parser
  */
-function getParserForExtension(ext: string): IDocumentParser | null {
+function getParserForExtension(ext: string, forceLocalParser = false): IDocumentParser | null {
   const lowerExt = ext.toLowerCase();
   
   switch (lowerExt) {
     case '.pdf':
+      // Force local parser if requested (for testing fallback quality)
+      if (forceLocalParser) {
+        logger.info('Using local PDF parser (unpdf+VLM) - forceLocalParser=true');
+        return new PdfParser();
+      }
       // Prefer MinerU for high-quality PDF parsing if available
       if (isMineruAvailable()) {
         logger.info('Using MinerU parser for PDF (cloud API)');
@@ -181,7 +193,7 @@ export async function ingestDocument(
   const ext = path.extname(filePath);
   
   // Get parser for this file type
-  const parser = getParserForExtension(ext);
+  const parser = getParserForExtension(ext, options?.forceLocalParser);
   if (!parser) {
     return {
       sourcePath: filePath,
@@ -206,6 +218,8 @@ export async function ingestDocument(
     }
     
     // Parse the document
+    // When forceLocalParser is true, enable smartAnalysis for VLM-enhanced parsing
+    const useSmartAnalysis = options?.smartAnalysis ?? options?.forceLocalParser ?? false;
     const parseResult = await parser.parse(filePath, {
       extractImages: options?.extractImages ?? true,
       extractTables: options?.extractTables ?? true,
@@ -215,7 +229,7 @@ export async function ingestDocument(
       outputDir: options?.outputDir,
       // Pass additional options via extra field
       extra: {
-        smartAnalysis: options?.smartAnalysis,
+        smartAnalysis: useSmartAnalysis,
         vlmConfig: options?.vlmConfig,
       },
     });
@@ -243,6 +257,8 @@ export async function ingestDocument(
       pageCount: parseResult.metadata.pageCount,
       parseTimeMs: Date.now() - startTime,
       warnings: parseResult.warnings,
+      parserUsed: parseResult.metadata.parser,
+      assets: parseResult.assets,
     };
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
