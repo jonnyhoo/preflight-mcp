@@ -168,9 +168,9 @@ async function findEntryPoints(
     }
   }
 
-  // Common entry point patterns
-  const commonEntries = ['index.ts', 'index.js', 'main.ts', 'main.js', 'src/index.ts', 'src/main.ts'];
-  for (const entry of commonEntries) {
+  // Common entry point patterns (JS/TS)
+  const commonJsEntries = ['index.ts', 'index.js', 'main.ts', 'main.js', 'src/index.ts', 'src/main.ts'];
+  for (const entry of commonJsEntries) {
     const file = files.find((f) => f.repoRelativePath === entry);
     if (file) {
       entryPoints.push({
@@ -179,6 +179,62 @@ async function findEntryPoints(
         evidence: `${file.bundleNormRelativePath}:1`,
       });
     }
+  }
+
+  // Python entry points
+  // Check setup.py/pyproject.toml for package entry points
+  const setupPy = files.find((f) => f.repoRelativePath === 'setup.py');
+  const pyprojectToml = files.find((f) => f.repoRelativePath === 'pyproject.toml');
+  
+  if (setupPy) {
+    entryPoints.push({
+      type: 'package-setup',
+      file: setupPy.bundleNormRelativePath,
+      evidence: `${setupPy.bundleNormRelativePath}:1`,
+    });
+  }
+  
+  if (pyprojectToml) {
+    entryPoints.push({
+      type: 'package-pyproject',
+      file: pyprojectToml.bundleNormRelativePath,
+      evidence: `${pyprojectToml.bundleNormRelativePath}:1`,
+    });
+  }
+
+  // Common Python entry point patterns
+  const commonPyEntries = [
+    '__main__.py',
+    'main.py', 
+    'run.py',
+    'app.py',
+    'cli.py',
+    'src/__main__.py',
+    'src/main.py',
+  ];
+  for (const entry of commonPyEntries) {
+    const file = files.find((f) => f.repoRelativePath === entry);
+    if (file) {
+      entryPoints.push({
+        type: entry.includes('__main__') ? 'python-main' : 
+              entry.includes('cli') ? 'python-cli' : 'python-entry',
+        file: file.bundleNormRelativePath,
+        evidence: `${file.bundleNormRelativePath}:1`,
+      });
+    }
+  }
+
+  // Check for run_*.py patterns (common in ML projects)
+  const runScripts = files.filter((f) => 
+    f.repoRelativePath.match(/^run_[a-z_]+\.py$/) ||
+    f.repoRelativePath.match(/^[a-z]+\/run_[a-z_]+\.py$/)
+  );
+  for (const script of runScripts.slice(0, 3)) { // Limit to top 3
+    entryPoints.push({
+      type: 'python-run-script',
+      file: script.bundleNormRelativePath,
+      evidence: `${script.bundleNormRelativePath}:1`,
+    });
   }
 
   return entryPoints;
@@ -417,66 +473,178 @@ function detectDocFrameworks(files: IngestedFile[]): string[] {
 
 /**
  * Detect frameworks from dependencies and file patterns
+ * 
+ * Framework vs Library distinction:
+ * - Framework: Provides architecture/structure, you write code that fits into it
+ * - Library: You call it from your code, doesn't dictate structure
+ * 
+ * We detect frameworks that significantly shape the project's architecture.
+ * Pure utility libraries (requests, axios, lodash) are excluded.
  */
 function detectFrameworks(deps: DependencyInfo, files: IngestedFile[]): string[] {
   const frameworks = new Set<string>();
 
   const allDeps = [...deps.runtime, ...deps.dev].map((d) => d.name.toLowerCase());
 
-  // JavaScript/TypeScript web frameworks
+  // ==========================================================================
+  // JavaScript/TypeScript
+  // ==========================================================================
+
+  // Web frameworks (architectural)
   if (allDeps.includes('react')) frameworks.add('React');
   if (allDeps.includes('vue')) frameworks.add('Vue');
-  if (allDeps.includes('angular')) frameworks.add('Angular');
+  if (allDeps.includes('angular') || allDeps.includes('@angular/core')) frameworks.add('Angular');
+  if (allDeps.includes('svelte')) frameworks.add('Svelte');
+  if (allDeps.includes('solid-js')) frameworks.add('Solid');
   if (allDeps.includes('next')) frameworks.add('Next.js');
   if (allDeps.includes('nuxt')) frameworks.add('Nuxt');
+  if (allDeps.includes('remix') || allDeps.includes('@remix-run/node')) frameworks.add('Remix');
+  if (allDeps.includes('astro')) frameworks.add('Astro');
+
+  // Server frameworks (architectural)
   if (allDeps.includes('express')) frameworks.add('Express');
   if (allDeps.includes('fastify')) frameworks.add('Fastify');
+  if (allDeps.includes('koa')) frameworks.add('Koa');
+  if (allDeps.includes('hono')) frameworks.add('Hono');
   if (allDeps.includes('nestjs') || allDeps.includes('@nestjs/core')) frameworks.add('NestJS');
 
-  // JavaScript/TypeScript AI/LLM SDKs (scoped packages)
+  // AI/LLM SDKs (architectural - shapes how you interact with AI)
   if (allDeps.some((d) => d.startsWith('@anthropic-ai/'))) frameworks.add('Anthropic');
   if (allDeps.some((d) => d.startsWith('@modelcontextprotocol/'))) frameworks.add('MCP');
+  if (allDeps.includes('ai') || allDeps.includes('@ai-sdk/core')) frameworks.add('Vercel AI SDK');
+  if (allDeps.includes('@langchain/core') || allDeps.includes('langchain')) frameworks.add('LangChain');
 
-  // JavaScript/TypeScript CLI frameworks
+  // CLI frameworks (architectural)
   if (allDeps.includes('commander')) frameworks.add('Commander');
   if (allDeps.includes('yargs')) frameworks.add('Yargs');
   if (allDeps.includes('ink')) frameworks.add('Ink');
-  if (allDeps.includes('inquirer') || allDeps.includes('@inquirer/prompts')) frameworks.add('Inquirer');
+  if (allDeps.includes('oclif') || allDeps.includes('@oclif/core')) frameworks.add('Oclif');
 
-  // JavaScript/TypeScript validation
+  // State management (architectural for frontend)
+  if (allDeps.includes('redux') || allDeps.includes('@reduxjs/toolkit')) frameworks.add('Redux');
+  if (allDeps.includes('mobx')) frameworks.add('MobX');
+  if (allDeps.includes('zustand')) frameworks.add('Zustand');
+
+  // ORM/Database (architectural)
+  if (allDeps.includes('prisma') || allDeps.includes('@prisma/client')) frameworks.add('Prisma');
+  if (allDeps.includes('drizzle-orm')) frameworks.add('Drizzle');
+  if (allDeps.includes('typeorm')) frameworks.add('TypeORM');
+  if (allDeps.includes('sequelize')) frameworks.add('Sequelize');
+
+  // Schema validation (shapes data handling)
   if (allDeps.includes('zod')) frameworks.add('Zod');
-
-  // Python web frameworks
-  if (allDeps.includes('django')) frameworks.add('Django');
-  if (allDeps.includes('flask')) frameworks.add('Flask');
-  if (allDeps.includes('fastapi')) frameworks.add('FastAPI');
-  if (allDeps.includes('starlette')) frameworks.add('Starlette');
-  if (allDeps.includes('uvicorn')) frameworks.add('Uvicorn');
-
-  // Python AI/LLM frameworks
-  if (allDeps.includes('anthropic')) frameworks.add('Anthropic');
-  if (allDeps.includes('openai')) frameworks.add('OpenAI');
-  if (allDeps.includes('langchain')) frameworks.add('LangChain');
-  if (allDeps.includes('mcp')) frameworks.add('MCP');
-
-  // Python data/scraping
-  if (allDeps.includes('beautifulsoup4')) frameworks.add('BeautifulSoup');
-  if (allDeps.includes('scrapy')) frameworks.add('Scrapy');
-  if (allDeps.includes('httpx')) frameworks.add('HTTPX');
-  if (allDeps.includes('requests')) frameworks.add('Requests');
-
-  // Python CLI
-  if (allDeps.includes('click')) frameworks.add('Click');
-  if (allDeps.includes('typer')) frameworks.add('Typer');
-
-  // Python data validation
-  if (allDeps.includes('pydantic')) frameworks.add('Pydantic');
 
   // Test frameworks
   if (allDeps.includes('jest')) frameworks.add('Jest');
   if (allDeps.includes('vitest')) frameworks.add('Vitest');
+  if (allDeps.includes('mocha')) frameworks.add('Mocha');
+  if (allDeps.includes('playwright') || allDeps.includes('@playwright/test')) frameworks.add('Playwright');
+  if (allDeps.includes('cypress')) frameworks.add('Cypress');
+
+  // ==========================================================================
+  // Python
+  // ==========================================================================
+
+  // Web frameworks (architectural)
+  if (allDeps.includes('django')) frameworks.add('Django');
+  if (allDeps.includes('flask')) frameworks.add('Flask');
+  if (allDeps.includes('fastapi')) frameworks.add('FastAPI');
+  if (allDeps.includes('starlette')) frameworks.add('Starlette');
+  if (allDeps.includes('tornado')) frameworks.add('Tornado');
+  if (allDeps.includes('aiohttp')) frameworks.add('aiohttp');
+
+  // AI/LLM frameworks (architectural - core to AI projects)
+  if (allDeps.includes('anthropic')) frameworks.add('Anthropic');
+  if (allDeps.includes('openai')) frameworks.add('OpenAI');
+  if (allDeps.includes('langchain') || allDeps.includes('langchain-core')) frameworks.add('LangChain');
+  if (allDeps.includes('llama-index') || allDeps.includes('llama_index')) frameworks.add('LlamaIndex');
+  if (allDeps.includes('haystack') || allDeps.includes('farm-haystack')) frameworks.add('Haystack');
+  if (allDeps.includes('mcp')) frameworks.add('MCP');
+  if (allDeps.includes('autogen') || allDeps.includes('pyautogen')) frameworks.add('AutoGen');
+  if (allDeps.includes('crewai')) frameworks.add('CrewAI');
+
+  // Deep Learning frameworks (architectural - defines model architecture)
+  if (allDeps.includes('torch') || allDeps.includes('pytorch')) frameworks.add('PyTorch');
+  if (allDeps.includes('tensorflow') || allDeps.includes('tensorflow-gpu')) frameworks.add('TensorFlow');
+  if (allDeps.includes('jax') || allDeps.includes('jaxlib')) frameworks.add('JAX');
+  if (allDeps.includes('keras')) frameworks.add('Keras');
+
+  // ML/NLP frameworks (architectural - shapes ML pipeline)
+  if (allDeps.includes('transformers')) frameworks.add('Transformers');
+  if (allDeps.includes('sentence-transformers')) frameworks.add('Sentence-Transformers');
+  if (allDeps.includes('spacy')) frameworks.add('spaCy');
+  if (allDeps.includes('nltk')) frameworks.add('NLTK');
+  if (allDeps.includes('scikit-learn') || allDeps.includes('sklearn')) frameworks.add('scikit-learn');
+  if (allDeps.includes('xgboost')) frameworks.add('XGBoost');
+  if (allDeps.includes('lightgbm')) frameworks.add('LightGBM');
+
+  // Topic modeling / clustering (architectural for NLP pipelines)
+  if (allDeps.includes('bertopic')) frameworks.add('BERTopic');
+  if (allDeps.includes('gensim')) frameworks.add('Gensim');
+
+  // Vector search / RAG infrastructure (architectural)
+  if (allDeps.includes('faiss-cpu') || allDeps.includes('faiss-gpu') || allDeps.includes('faiss')) frameworks.add('FAISS');
+  if (allDeps.includes('chromadb')) frameworks.add('ChromaDB');
+  if (allDeps.includes('pinecone-client') || allDeps.includes('pinecone')) frameworks.add('Pinecone');
+  if (allDeps.includes('weaviate-client') || allDeps.includes('weaviate')) frameworks.add('Weaviate');
+  if (allDeps.includes('qdrant-client') || allDeps.includes('qdrant')) frameworks.add('Qdrant');
+  if (allDeps.includes('milvus') || allDeps.includes('pymilvus')) frameworks.add('Milvus');
+
+  // Data processing frameworks (architectural for data pipelines)
+  if (allDeps.includes('pandas')) frameworks.add('Pandas');
+  if (allDeps.includes('polars')) frameworks.add('Polars');
+  if (allDeps.includes('dask')) frameworks.add('Dask');
+  if (allDeps.includes('pyspark') || allDeps.includes('spark')) frameworks.add('PySpark');
+  if (allDeps.includes('ray')) frameworks.add('Ray');
+
+  // Document processing (architectural for document pipelines)
+  if (allDeps.includes('docling') || allDeps.includes('docling-core')) frameworks.add('Docling');
+  if (allDeps.includes('unstructured')) frameworks.add('Unstructured');
+  if (allDeps.includes('pypdf') || allDeps.includes('pypdf2')) frameworks.add('PyPDF');
+  if (allDeps.includes('pdfplumber')) frameworks.add('pdfplumber');
+
+  // Web scraping frameworks (architectural)
+  if (allDeps.includes('scrapy')) frameworks.add('Scrapy');
+  if (allDeps.includes('playwright')) frameworks.add('Playwright');
+  if (allDeps.includes('selenium')) frameworks.add('Selenium');
+
+  // CLI frameworks (architectural)
+  if (allDeps.includes('click')) frameworks.add('Click');
+  if (allDeps.includes('typer')) frameworks.add('Typer');
+  if (allDeps.includes('argparse')) frameworks.add('argparse');
+  if (allDeps.includes('fire')) frameworks.add('Fire');
+
+  // Data validation (shapes data handling)
+  if (allDeps.includes('pydantic') || allDeps.includes('pydantic-core')) frameworks.add('Pydantic');
+
+  // ORM/Database (architectural)
+  if (allDeps.includes('sqlalchemy')) frameworks.add('SQLAlchemy');
+  if (allDeps.includes('tortoise-orm')) frameworks.add('Tortoise ORM');
+  if (allDeps.includes('peewee')) frameworks.add('Peewee');
+
+  // Async frameworks
+  if (allDeps.includes('asyncio')) frameworks.add('asyncio');
+  if (allDeps.includes('trio')) frameworks.add('Trio');
+
+  // Test frameworks
   if (allDeps.includes('pytest')) frameworks.add('Pytest');
   if (allDeps.includes('unittest')) frameworks.add('unittest');
+  if (allDeps.includes('hypothesis')) frameworks.add('Hypothesis');
+
+  // ==========================================================================
+  // Go
+  // ==========================================================================
+  if (allDeps.includes('gin-gonic/gin') || allDeps.some(d => d.includes('gin-gonic'))) frameworks.add('Gin');
+  if (allDeps.includes('gofiber/fiber') || allDeps.some(d => d.includes('gofiber'))) frameworks.add('Fiber');
+  if (allDeps.includes('labstack/echo') || allDeps.some(d => d.includes('labstack/echo'))) frameworks.add('Echo');
+
+  // ==========================================================================
+  // Rust
+  // ==========================================================================
+  if (allDeps.includes('actix-web')) frameworks.add('Actix');
+  if (allDeps.includes('axum')) frameworks.add('Axum');
+  if (allDeps.includes('rocket')) frameworks.add('Rocket');
+  if (allDeps.includes('tokio')) frameworks.add('Tokio');
 
   return Array.from(frameworks).sort();
 }

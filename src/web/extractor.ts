@@ -28,22 +28,143 @@ const turndown = new TurndownService({
   linkStyle: 'inlined',
 });
 
+function extractLanguageFromClass(className: string | null | undefined): string {
+  if (!className) return '';
+  const match = className.match(/(?:language|lang)-([\w-]+)/i);
+  return match?.[1] ?? '';
+}
+function extractLanguageFromNode(node: Element | null): string {
+  if (!node) return '';
+  const dataLang = node.getAttribute?.('data-language');
+  if (dataLang) return dataLang;
+  return extractLanguageFromClass(node.getAttribute?.('class'));
+}
+
+function normalizeCodeText(text: string): string {
+  return text.replace(/\r\n/g, '\n').replace(/^\n+|\n+$/g, '');
+}
+
+function extractCodeText(node: Element): string {
+  const lineNodes = node.querySelectorAll?.('span.line, div.line, div.ec-line');
+  if (lineNodes && lineNodes.length > 0) {
+    const lines = Array.from(lineNodes).map((line) => line.textContent ?? '');
+    return normalizeCodeText(lines.join('\n'));
+  }
+
+  const html = (node as Element).innerHTML ?? '';
+  if (html) {
+    const withBreaks = html.replace(/<br\s*\/?>/gi, '\n');
+    const $ = cheerio.load(`<code>${withBreaks}</code>`);
+    const ecLines = $('div.ec-line');
+    if (ecLines.length > 0) {
+      const lines: string[] = [];
+      ecLines.each((_, el) => {
+        lines.push($(el).text());
+      });
+      return normalizeCodeText(lines.join('\n'));
+    }
+
+    const lineSpans = $('span.line, div.line');
+    if (lineSpans.length > 0) {
+      const lines: string[] = [];
+      lineSpans.each((_, el) => {
+        lines.push($(el).text());
+      });
+      return normalizeCodeText(lines.join('\n'));
+    }
+
+    const text = $('code').text();
+    return normalizeCodeText(text);
+  }
+
+  return normalizeCodeText(node.textContent ?? '');
+}
+
+function escapeTableCell(text: string): string {
+  return text
+    .replace(/\r\n/g, '\n')
+    .replace(/\n+/g, '<br>')
+    .replace(/\|/g, '\\|')
+    .trim();
+}
+
+function tableToMarkdown(table: Element): string {
+  const extractCells = (row: Element): string[] => {
+    const cells = Array.from(row.querySelectorAll('th, td'));
+    return cells.map((cell) => {
+      const html = cell.innerHTML ?? '';
+      const markdown = html ? turndown.turndown(html) : (cell.textContent ?? '');
+      return escapeTableCell(markdown);
+    });
+  };
+
+  let headerCells: string[] = [];
+  let bodyRows: Element[] = [];
+
+  const thead = table.querySelector('thead');
+  if (thead) {
+    const headerRow = thead.querySelector('tr');
+    if (headerRow) headerCells = extractCells(headerRow);
+    bodyRows = Array.from(table.querySelectorAll('tbody tr'));
+    if (bodyRows.length === 0) {
+      bodyRows = Array.from(table.querySelectorAll('tr')).filter((row) => !row.closest('thead'));
+    }
+  } else {
+    const allRows = Array.from(table.querySelectorAll('tr'));
+    if (allRows.length > 0) {
+      const firstRow = allRows.shift();
+      if (firstRow) headerCells = extractCells(firstRow);
+      bodyRows = allRows;
+    }
+  }
+
+  if (headerCells.length === 0 && bodyRows.length > 0) {
+    const firstRow = bodyRows.shift();
+    if (firstRow) headerCells = extractCells(firstRow);
+  }
+
+  const rowCells = bodyRows.map((row) => extractCells(row));
+  const columnCount = Math.max(
+    headerCells.length,
+    ...rowCells.map((cells) => cells.length)
+  );
+
+  if (columnCount === 0) return '';
+
+  const padRow = (cells: string[]): string[] => {
+    const out = [...cells];
+    while (out.length < columnCount) out.push('');
+    return out.slice(0, columnCount);
+  };
+
+  const header = padRow(headerCells);
+  const headerLine = `| ${header.join(' | ')} |`;
+  const separatorLine = `| ${new Array(columnCount).fill('---').join(' | ')} |`;
+  const bodyLines = rowCells.map((cells) => `| ${padRow(cells).join(' | ')} |`);
+
+  return `\n${headerLine}\n${separatorLine}${bodyLines.length > 0 ? `\n${bodyLines.join('\n')}` : ''}\n`;
+}
+
 // Add custom rules for better code block handling
 turndown.addRule('fencedCodeBlock', {
   filter: (node) => {
-    return (
-      node.nodeName === 'PRE' &&
-      node.firstChild !== null &&
-      node.firstChild.nodeName === 'CODE'
-    );
+    return node.nodeName === 'PRE';
   },
-  replacement: (content, node) => {
-    const codeNode = node.firstChild as Element;
-    const className = codeNode.getAttribute?.('class') || '';
-    const langMatch = className.match(/language-(\w+)/);
-    const lang = langMatch?.[1] || '';
-    const code = codeNode.textContent || '';
-    return `\n\`\`\`${lang}\n${code.trim()}\n\`\`\`\n`;
+  replacement: (_content, node) => {
+    const preNode = node as Element;
+    const firstChild = preNode.firstElementChild;
+    const codeNode = firstChild?.nodeName === 'CODE' ? (firstChild as Element) : preNode;
+    const lang =
+      extractLanguageFromNode(codeNode) ||
+      extractLanguageFromNode(preNode);
+    const code = extractCodeText(codeNode);
+    return `\n\`\`\`${lang}\n${code}\n\`\`\`\n`;
+  },
+});
+turndown.addRule('table', {
+  filter: (node) => node.nodeName === 'TABLE',
+  replacement: (_content, node) => {
+    return tableToMarkdown(node as Element);
   },
 });
 

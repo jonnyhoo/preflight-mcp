@@ -35,10 +35,10 @@ import { fetchUrlWithBrowser, closeBrowser, looksLikeSpa } from './spa-fetcher.j
 
 /** Default configuration values */
 const DEFAULTS = {
-  maxPages: 500,
-  maxDepth: 5,
-  rateLimit: 200,
-  concurrency: 3,
+  maxPages: 50,
+  maxDepth: 3,
+  rateLimit: 100,
+  concurrency: 6,
   timeout: 30000,
   userAgent: 'Preflight-Web-Crawler/1.0 (+https://github.com/jonnyhoo/preflight-mcp)',
   respectRobotsTxt: true,

@@ -46,7 +46,18 @@ export type LanguageStats = {
 };
 
 export type EntryPoint = {
-  type: 'package-main' | 'package-bin' | 'index-file' | 'main-file';
+  type: 
+    | 'package-main' 
+    | 'package-bin' 
+    | 'index-file' 
+    | 'main-file'
+    // Python entry points
+    | 'package-setup'
+    | 'package-pyproject' 
+    | 'python-main'
+    | 'python-cli'
+    | 'python-entry'
+    | 'python-run-script';
   file: string;
   evidence: string;
 };

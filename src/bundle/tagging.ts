@@ -114,6 +114,52 @@ export function autoDetectTags(params: {
         tags.add('ai-tools');
       }
 
+      // Deep Learning frameworks
+      if (lowerFw.includes('pytorch') || lowerFw.includes('tensorflow') || lowerFw.includes('jax') || lowerFw.includes('keras')) {
+        tags.add('ai');
+        tags.add('deep-learning');
+      }
+
+      // ML/NLP frameworks (these indicate AI/ML projects)
+      if (lowerFw.includes('transformers') || lowerFw.includes('sentence-transformers') || 
+          lowerFw.includes('spacy') || lowerFw.includes('nltk') || lowerFw.includes('huggingface')) {
+        tags.add('ai');
+        tags.add('nlp');
+      }
+
+      // Topic modeling / embeddings (indicates ML/NLP)
+      if (lowerFw.includes('bertopic') || lowerFw.includes('gensim')) {
+        tags.add('ai');
+        tags.add('nlp');
+        tags.add('embeddings');
+      }
+
+      // Vector databases / RAG infrastructure
+      if (lowerFw.includes('faiss') || lowerFw.includes('chromadb') || lowerFw.includes('pinecone') ||
+          lowerFw.includes('weaviate') || lowerFw.includes('qdrant') || lowerFw.includes('milvus')) {
+        tags.add('ai');
+        tags.add('vector-search');
+        tags.add('embeddings');
+      }
+
+      // ML frameworks
+      if (lowerFw.includes('scikit-learn') || lowerFw.includes('sklearn') || 
+          lowerFw.includes('xgboost') || lowerFw.includes('lightgbm')) {
+        tags.add('ai');
+        tags.add('machine-learning');
+      }
+
+      // Document processing (often part of RAG/AI pipelines)
+      if (lowerFw.includes('docling') || lowerFw.includes('unstructured')) {
+        tags.add('document-processing');
+      }
+
+      // RAG frameworks
+      if (lowerFw.includes('llamaindex') || lowerFw.includes('haystack')) {
+        tags.add('ai');
+        tags.add('rag');
+      }
+
       // CLI frameworks (Python)
       if (lowerFw.includes('click') || lowerFw.includes('typer')) {
         tags.add('cli');
@@ -166,9 +212,8 @@ export function autoDetectTags(params: {
       tags.add('web-scraping');
     }
 
-    if (allDeps.some((d) => d.includes('axios') || d.includes('fetch') || d.includes('request'))) {
-      tags.add('http-client');
-    }
+    // NOTE: Removed http-client tag - having an HTTP library is too common to be meaningful
+    // Previously: if (allDeps.some((d) => d.includes('axios') || d.includes('fetch') || d.includes('request')))
 
     if (allDeps.some((d) => d.includes('cheerio') || d.includes('beautifulsoup') || d.includes('jsdom'))) {
       tags.add('html-parsing');
@@ -213,19 +258,10 @@ export function autoDetectTags(params: {
     tags.add('devops');
   }
 
-  // Check for CI/CD files - be precise to avoid matching 'circular', 'service', etc.
-  if (fileNames.some((f) => 
-    f.includes('github/workflows') || 
-    f.includes('.github/actions') ||
-    f.includes('/.ci/') ||
-    f.includes('.travis') ||
-    f.includes('.gitlab-ci') ||
-    f.includes('jenkinsfile') ||
-    f.includes('.circleci')
-  )) {
-    tags.add('ci-cd');
-    tags.add('devops');
-  }
+  // NOTE: CI/CD detection removed from auto-tags
+  // Reason: Almost every project has CI/CD, making it noise rather than signal
+  // CI/CD is better detected at the project infrastructure level, not as a semantic tag
+  // Previously detected: github/workflows, .travis, .gitlab-ci, jenkinsfile, .circleci
 
   // Web source documentation detection from file paths
   if (fileNames.some((f) => f.startsWith('repos/web/'))) {
@@ -248,8 +284,10 @@ export function autoDetectTags(params: {
     tags.add('ai-tools');
   }
 
-  // CLI detection by file structure (cli/ directory)
-  if (fileNames.some((f) => f.includes('/cli/') || f.includes('cli.py') || f.includes('cli.ts'))) {
+  // CLI detection - only if it's the PRIMARY interface, not just an entry point
+  // Having cli.py/cli.ts alone doesn't mean it's a CLI tool - most projects have CLI entry points
+  // Only detect CLI if there's a dedicated /cli/ directory structure
+  if (fileNames.some((f) => f.includes('/cli/') && !f.endsWith('/cli/'))) {
     tags.add('cli');
   }
 
@@ -308,11 +346,23 @@ export function generateDescription(params: {
     parts.push(`using ${frameworks}`);
   }
 
-  // Special categories
+  // Special categories - prioritize more specific categories
   if (params.tags.includes('claude-code')) {
     parts.push('(Claude Code Plugin)');
   } else if (params.tags.includes('mcp')) {
     parts.push('(MCP Server)');
+  } else if (params.tags.includes('rag')) {
+    parts.push('(RAG Framework)');
+  } else if (params.tags.includes('vector-search')) {
+    parts.push('(Vector Search / Embeddings)');
+  } else if (params.tags.includes('nlp')) {
+    parts.push('(NLP/AI)');
+  } else if (params.tags.includes('deep-learning')) {
+    parts.push('(Deep Learning)');
+  } else if (params.tags.includes('machine-learning')) {
+    parts.push('(Machine Learning)');
+  } else if (params.tags.includes('ai')) {
+    parts.push('(AI/LLM)');
   } else if (params.tags.includes('agents')) {
     parts.push('(AI Agent)');
   } else if (params.tags.includes('web-scraping')) {

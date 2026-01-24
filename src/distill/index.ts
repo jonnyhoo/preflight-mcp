@@ -25,18 +25,6 @@ export type {
   GenerateCardResult,
 } from './types.js';
 
-// vlm-extractor.ts - VLM extraction types
-export type {
-  VLMConfig,
-  PageDetectionResult,
-  ExtractedFormula,
-  ExtractedTable,
-  ExtractedCode,
-  PageExtraction,
-  ExtractionResult,
-  ExtractOptions,
-} from './vlm-extractor.js';
-
 // llm-client.ts - LLM client types
 export type {
   LLMConfig,
@@ -65,19 +53,6 @@ export type {
 // ============================================================================
 
 export { toSafeRepoId, fromSafeRepoId } from './types.js';
-
-// ============================================================================
-// VLM Extractor Exports
-// ============================================================================
-
-export {
-  getVLMConfig,
-  renderPageToBase64,
-  callVLM,
-  detectStructuredPages,
-  extractFromPDF,
-  formatAsMarkdown,
-} from './vlm-extractor.js';
 
 // ============================================================================
 // LLM Client Exports
@@ -109,10 +84,8 @@ export {
 // ============================================================================
 
 export {
-  extractionResultToChunks,
   modalServiceResultToChunks,
   indexModalChunks,
-  indexVLMExtraction,
   indexModalServiceResult,
 } from './modal-indexer.js';
 

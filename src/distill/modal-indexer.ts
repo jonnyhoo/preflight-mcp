@@ -17,7 +17,6 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 
 import type { BaseEmbedding } from '../embedding/base.js';
-import type { ExtractionResult, PageExtraction, ExtractedFormula, ExtractedTable, ExtractedCode } from './vlm-extractor.js';
 import type { ProcessedModalItem, ModalServiceResult } from '../modal/service.js';
 import type { ContextConfig } from '../modal/types.js';
 import { ContextExtractor } from '../modal/context-extractor.js';
@@ -170,118 +169,6 @@ function buildEmbeddingContent(chunk: ModalChunk, context?: string): string {
   }
 
   return truncateForEmbedding(parts.join('\n\n'));
-}
-
-// ============================================================================
-// VLM Extraction to Chunks Converter
-// ============================================================================
-
-/**
- * Convert VLM ExtractionResult to indexable chunks.
- */
-export function extractionResultToChunks(
-  result: ExtractionResult,
-  options: {
-    repoId: string;
-    contextExtractor?: ContextExtractor;
-    documentContent?: unknown;
-  }
-): ModalChunk[] {
-  const chunks: ModalChunk[] = [];
-  const { repoId, contextExtractor, documentContent } = options;
-
-  for (const page of result.extractions) {
-    const pageIdx = page.pageIndex;
-
-    // Convert formulas
-    page.formulas.forEach((formula, idx) => {
-      const chunk: ModalChunk = {
-        id: generateChunkId(result.pdfPath, 'formula', pageIdx, idx),
-        path: result.pdfPath,
-        repo: repoId,
-        kind: 'formula',
-        pageIndex: pageIdx,
-        content: '', // Will be filled later
-        rawContent: formula.latex,
-        description: formula.description,
-      };
-
-      // Extract context if available
-      let context: string | undefined;
-      if (contextExtractor && documentContent) {
-        context = contextExtractor.extractContext(documentContent, {
-          pageIndex: pageIdx,
-          index: idx,
-          type: 'equation',
-        });
-      }
-
-      chunk.content = buildEmbeddingContent(chunk, context);
-      chunks.push(chunk);
-    });
-
-    // Convert tables
-    page.tables.forEach((table, idx) => {
-      const chunk: ModalChunk = {
-        id: generateChunkId(result.pdfPath, 'table', pageIdx, idx),
-        path: result.pdfPath,
-        repo: repoId,
-        kind: 'table',
-        pageIndex: pageIdx,
-        content: '',
-        rawContent: table.markdown,
-        caption: table.caption,
-      };
-
-      let context: string | undefined;
-      if (contextExtractor && documentContent) {
-        context = contextExtractor.extractContext(documentContent, {
-          pageIndex: pageIdx,
-          index: idx,
-          type: 'table',
-        });
-      }
-
-      chunk.content = buildEmbeddingContent(chunk, context);
-      chunks.push(chunk);
-    });
-
-    // Convert code blocks
-    page.codeBlocks.forEach((code, idx) => {
-      const chunk: ModalChunk = {
-        id: generateChunkId(result.pdfPath, 'code_block', pageIdx, idx),
-        path: result.pdfPath,
-        repo: repoId,
-        kind: 'code_block',
-        pageIndex: pageIdx,
-        content: '',
-        rawContent: code.code,
-        description: code.language ? `Language: ${code.language}` : undefined,
-      };
-
-      let context: string | undefined;
-      if (contextExtractor && documentContent) {
-        context = contextExtractor.extractContext(documentContent, {
-          pageIndex: pageIdx,
-          index: idx,
-          type: 'code',
-        });
-      }
-
-      chunk.content = buildEmbeddingContent(chunk, context);
-      chunks.push(chunk);
-    });
-  }
-
-  logger.info('Converted VLM extraction to chunks', {
-    source: result.pdfPath,
-    totalChunks: chunks.length,
-    formulas: chunks.filter(c => c.kind === 'formula').length,
-    tables: chunks.filter(c => c.kind === 'table').length,
-    codeBlocks: chunks.filter(c => c.kind === 'code_block').length,
-  });
-
-  return chunks;
 }
 
 // ============================================================================
@@ -534,51 +421,6 @@ export async function indexModalChunks(
 // ============================================================================
 // High-Level API
 // ============================================================================
-
-/**
- * Index VLM extraction results into semantic search.
- *
- * @example
- * ```typescript
- * import { extractFromPDF } from './vlm-extractor.js';
- * import { indexVLMExtraction } from './modal-indexer.js';
- *
- * const extraction = await extractFromPDF('paper.pdf');
- * const result = await indexVLMExtraction(extraction, {
- *   bundleRootDir: '/path/to/bundle',
- *   repoId: 'local/papers',
- *   embedding: embeddingProvider,
- * });
- * ```
- */
-export async function indexVLMExtraction(
-  extraction: ExtractionResult,
-  options: Omit<ModalIndexOptions, 'sourcePath'> & {
-    documentContent?: unknown;
-  }
-): Promise<ModalIndexResult> {
-  // Create context extractor if document content provided
-  let contextExtractor: ContextExtractor | undefined;
-  if (options.documentContent) {
-    contextExtractor = new ContextExtractor({
-      maxTokens: options.contextConfig?.maxTokens ?? 2000,
-      windowSize: options.contextConfig?.windowSize ?? 2,
-    });
-  }
-
-  // Convert to chunks
-  const chunks = extractionResultToChunks(extraction, {
-    repoId: options.repoId,
-    contextExtractor,
-    documentContent: options.documentContent,
-  });
-
-  // Index chunks
-  return indexModalChunks(chunks, {
-    ...options,
-    sourcePath: extraction.pdfPath,
-  });
-}
 
 /**
  * Index modal service processing results into semantic search.
