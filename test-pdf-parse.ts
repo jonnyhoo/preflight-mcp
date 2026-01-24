@@ -1,5 +1,5 @@
 /**
- * Debug script to test PDF parsing with forceLocalParser=true
+ * Debug script to test PDF parsing with vlmParser=true
  * Run: npx tsx test-pdf-parse.ts
  */
 import { ingestDocument } from './src/bundle/document-ingest.ts';
@@ -20,12 +20,12 @@ async function main() {
   const hasVlmConfig = config.vlmEnabled && config.vlmApiKey && config.vlmApiBase;
   console.log('hasVlmConfig:', hasVlmConfig);
   
-  console.log('\n--- Testing with forceLocalParser=true ---');
+  console.log('\n--- Testing with vlmParser=true ---');
   const result = await ingestDocument(pdfPath, {
     extractImages: true,
     extractTables: true,
     extractEquations: true,
-    forceLocalParser: true,
+    vlmParser: true,
     vlmConfig: hasVlmConfig ? {
       apiBase: config.vlmApiBase!,
       apiKey: config.vlmApiKey!,

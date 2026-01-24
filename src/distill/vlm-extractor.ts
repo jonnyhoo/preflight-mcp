@@ -15,8 +15,34 @@
  */
 
 import fs from 'fs/promises';
-import { getDocumentProxy } from 'unpdf';
+import { getDocumentProxy, definePDFJSModule } from 'unpdf';
 import { getConfig } from '../config.js';
+
+// ============================================================================
+// PDF.js Initialization
+// ============================================================================
+
+/**
+ * Flag to track if PDF.js module has been initialized.
+ * unpdf requires definePDFJSModule to be called before rendering operations.
+ */
+let pdfjsInitialized = false;
+
+/**
+ * Ensure PDF.js module is initialized before using unpdf render functions.
+ * Uses pdfjs-dist/legacy for broader compatibility.
+ */
+async function ensurePDFJSInitialized(): Promise<void> {
+  if (pdfjsInitialized) return;
+  
+  try {
+    await definePDFJSModule(() => import('pdfjs-dist/legacy/build/pdf.mjs'));
+    pdfjsInitialized = true;
+  } catch (err) {
+    console.error('[vlm-extractor] Failed to initialize PDF.js module:', err);
+    // Continue anyway, let actual render call fail with more context
+  }
+}
 
 // ============================================================================
 // Types
@@ -190,6 +216,7 @@ export function getVLMConfig(): VLMConfig {
 
 /**
  * Render PDF page to base64 image using unpdf + @napi-rs/canvas
+ * Uses pdfjs-dist/legacy for compatibility with serverless and Electron environments.
  */
 export async function renderPageToBase64(
   pdfPath: string,
@@ -197,6 +224,9 @@ export async function renderPageToBase64(
   scale = 1.5
 ): Promise<string | null> {
   try {
+    // Ensure PDF.js is initialized for unpdf rendering
+    await ensurePDFJSInitialized();
+    
     const buffer = await fs.readFile(pdfPath);
     const pdfData = new Uint8Array(buffer);
     
@@ -206,6 +236,12 @@ export async function renderPageToBase64(
       canvasImport: () => import('@napi-rs/canvas'),
       scale,
     });
+    
+    // Validate image data - suspiciously small data suggests blank render
+    if (!imageData || imageData.byteLength < 1000) {
+      console.warn(`[vlm-extractor] Page ${pageNumber} rendered suspiciously small (${imageData?.byteLength || 0} bytes)`);
+      return null;
+    }
     
     return Buffer.from(imageData).toString('base64');
   } catch (err) {

@@ -28,13 +28,9 @@ import {
   groupIntoLines,
   calculatePageStats,
   classifyPageElements,
-  identifyLowConfidenceElements,
   createVLMConfig,
-  processLowConfidenceElements,
   processScannedPage,
   processPageWithVLM,
-  enhanceWithRegionVLM,
-  enhanceInlineFormulas,
 } from './pdf/index.js';
 import type { PageStats } from './pdf/types.js';
 import type {
@@ -252,22 +248,8 @@ export class PdfParser implements IDocumentParser {
         )}`
       );
 
-      // Use region-based VLM enhancement when smart analysis is enabled with VLM
-      // This batch-processes all formula/table regions in a single VLM call
-      if (useSmartAnalysis && vlmConfig?.enabled && !needsOcr) {
-        logger.info('Using region-based VLM enhancement for PDF');
-        const regionResult = await this.parseWithRegionVLM(
-          pdf,
-          freshData, // Pass function, not result - unpdf detaches ArrayBuffers
-          startPage,
-          pagesToProcess,
-          vlmConfig,
-          warnings
-        );
-        contents.push(...regionResult.contents);
-        fullTextParts.push(...regionResult.fullTextParts);
-      } else {
-        // Standard per-page processing
+      // Standard per-page processing
+      {
         for (let pageIdx = startPage; pageIdx < startPage + pagesToProcess; pageIdx++) {
           try {
             // Get page text
@@ -829,7 +811,6 @@ export class PdfParser implements IDocumentParser {
   /**
    * Smart analyze a page using the academic paper analyzer.
    * Detects headings, formulas, code blocks, and tables with higher accuracy.
-   * Returns both contents and stats for batch VLM processing.
    */
   private async smartAnalyzePage(
     pdf: PDFDocumentProxy,
@@ -837,20 +818,6 @@ export class PdfParser implements IDocumentParser {
     vlmConfig: VLMConfig | null,
     warnings: string[]
   ): Promise<ParsedContent[]> {
-    const result = await this.smartAnalyzePageWithStats(pdf, pageIndex, vlmConfig, warnings);
-    return result.contents;
-  }
-
-  /**
-   * Smart analyze a page and return both contents and internal state.
-   * Used for batch VLM processing where we need page stats and raw elements.
-   */
-  private async smartAnalyzePageWithStats(
-    pdf: PDFDocumentProxy,
-    pageIndex: number,
-    vlmConfig: VLMConfig | null,
-    warnings: string[]
-  ): Promise<{ contents: ParsedContent[]; stats: PageStats | null; elements: AnalyzedElement[] }> {
     try {
       const page = await pdf.getPage(pageIndex + 1);
       const viewport = page.getViewport({ scale: 1.0 });
@@ -885,22 +852,14 @@ export class PdfParser implements IDocumentParser {
       if (stats.isScanned && vlmConfig?.enabled) {
         const vlmElements = await processScannedPage(pdf, pageIndex, vlmConfig);
         if (vlmElements.length > 0) {
-          return {
-            contents: this.convertAnalyzedElements(vlmElements),
-            stats,
-            elements: vlmElements,
-          };
+          return this.convertAnalyzedElements(vlmElements);
         }
       }
       
-      // Classify elements (now includes bounds for formulas and tables)
+      // Classify elements using rule-based analysis
       const elements = classifyPageElements(lines, stats);
       
-      return {
-        contents: this.convertAnalyzedElements(elements),
-        stats,
-        elements,
-      };
+      return this.convertAnalyzedElements(elements);
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
       warnings.push(`Smart analysis failed for page ${pageIndex}: ${errMsg}`);
@@ -913,137 +872,8 @@ export class PdfParser implements IDocumentParser {
         )
         .map((item: { str: string }) => item.str)
         .join(' ');
-      return {
-        contents: this.parsePageContent(pageText, pageIndex),
-        stats: null,
-        elements: [],
-      };
+      return this.parsePageContent(pageText, pageIndex);
     }
-  }
-
-  /**
-   * Parse PDF with region-based VLM enhancement.
-   * Collects all formula/table regions across pages, then batch processes with VLM.
-   * 
-   * @param freshData - Function that returns fresh Uint8Array (unpdf detaches ArrayBuffers)
-   */
-  private async parseWithRegionVLM(
-    pdf: PDFDocumentProxy,
-    freshData: () => Uint8Array,
-    startPage: number,
-    pagesToProcess: number,
-    vlmConfig: VLMConfig,
-    warnings: string[]
-  ): Promise<{ contents: ParsedContent[]; fullTextParts: string[] }> {
-    const allElements: AnalyzedElement[] = [];
-    const allStats: PageStats[] = [];
-
-    // Phase 1: Rule-based analysis of all pages
-    logger.info(`Phase 1: Rule-based analysis of ${pagesToProcess} pages`);
-    for (let pageIdx = startPage; pageIdx < startPage + pagesToProcess; pageIdx++) {
-      const result = await this.smartAnalyzePageWithStats(pdf, pageIdx, null, warnings);
-      allElements.push(...result.elements);
-      if (result.stats) {
-        // Ensure stats array is indexed by pageIndex
-        allStats[pageIdx] = result.stats;
-      }
-    }
-
-    // Phase 2: Enhance formulas/tables with VLM
-    logger.info(`Phase 2: VLM enhancement for formulas/tables`);
-    const enhanced = await enhanceWithRegionVLM(
-      freshData,
-      allElements,
-      allStats,
-      vlmConfig
-    );
-
-    if (enhanced.vlmErrors.length > 0) {
-      warnings.push(...enhanced.vlmErrors.map(e => `VLM: ${e}`));
-    }
-    if (enhanced.vlmRegions > 0) {
-      warnings.push(`VLM enhanced ${enhanced.vlmRegions} formula/table regions`);
-    }
-
-    // Phase 2.5: Enhance paragraphs with inline formulas (Unicode math -> LaTeX)
-    logger.info(`Phase 2.5: Inline formula enhancement for paragraphs`);
-    let inlineEnhanced: { elements: AnalyzedElement[]; enhanced: number };
-    try {
-      inlineEnhanced = await enhanceInlineFormulas(enhanced.elements, vlmConfig);
-      
-      if (inlineEnhanced.enhanced > 0) {
-        warnings.push(`Inline formula: ${inlineEnhanced.enhanced} paragraphs enhanced`);
-      }
-    } catch (err) {
-      // Phase 2.5 failure is non-fatal - just use elements from Phase 2
-      logger.warn(`Phase 2.5 failed: ${err instanceof Error ? err.message : String(err)}`);
-      warnings.push(`Phase 2.5 inline formula enhancement failed - using rule-based only`);
-      inlineEnhanced = { elements: enhanced.elements, enhanced: 0 };
-    }
-
-    // Phase 3: Generate fullText from ENHANCED elements (including VLM results)
-    const fullTextParts = this.generateFullTextFromElements(inlineEnhanced.elements, pagesToProcess, startPage);
-
-    return {
-      contents: this.convertAnalyzedElements(inlineEnhanced.elements),
-      fullTextParts,
-    };
-  }
-
-  /**
-   * Generate full text parts from enhanced elements, organized by page.
-   * Includes VLM-enhanced formulas (LaTeX) and tables (Markdown).
-   */
-  private generateFullTextFromElements(
-    elements: AnalyzedElement[],
-    pagesToProcess: number,
-    startPage: number
-  ): string[] {
-    const fullTextParts: string[] = [];
-    
-    // Group elements by page
-    for (let pageIdx = startPage; pageIdx < startPage + pagesToProcess; pageIdx++) {
-      const pageElements = elements.filter(el => el.pageIndex === pageIdx);
-      if (pageElements.length === 0) continue;
-      
-      const parts: string[] = [];
-      for (const el of pageElements) {
-        switch (el.type) {
-          case 'heading':
-            // Use markdown heading syntax
-            const level = el.level ?? 1;
-            parts.push(`${'#'.repeat(Math.min(level, 6))} ${el.content}`);
-            break;
-          case 'formula':
-            // Wrap in $$ for display math if VLM processed (LaTeX)
-            if (el.vlmProcessed) {
-              parts.push(`$$\n${el.content}\n$$`);
-            } else {
-              parts.push(el.content);
-            }
-            break;
-          case 'table':
-            // VLM returns markdown table, use as-is
-            parts.push(el.content);
-            break;
-          case 'code':
-            parts.push(`\`\`\`\n${el.content}\n\`\`\``);
-            break;
-          case 'list':
-            parts.push(el.content);
-            break;
-          default:
-            // paragraph, caption, footnote, etc.
-            parts.push(el.content);
-        }
-      }
-      
-      if (parts.length > 0) {
-        fullTextParts.push(parts.join('\n\n'));
-      }
-    }
-    
-    return fullTextParts;
   }
 
   /**

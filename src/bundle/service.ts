@@ -466,15 +466,15 @@ async function createBundleInternal(
         await ensureDir(pdfDocsDir);
 
         // Parse PDF document
-        // forceLocalParser skips MinerU and uses unpdf+VLM instead
-        const forceLocalParser = 'forceLocalParser' in repoInput && repoInput.forceLocalParser === true;
+        // vlmParser=true uses parallel VLM processing instead of MinerU
+        const useVlmParser = 'vlmParser' in repoInput && repoInput.vlmParser === true;
         
         // VLM config requires all three: enabled flag, API key, and API base URL
         const hasVlmConfig = cfg.vlmEnabled && cfg.vlmApiKey && cfg.vlmApiBase;
-        if (forceLocalParser) {
+        if (useVlmParser) {
           // DEBUG: print actual key prefix to verify config is loaded correctly
           const keyPreview = cfg.vlmApiKey ? `${cfg.vlmApiKey.slice(0, 12)}...` : 'NONE';
-          logger.info(`forceLocalParser=true, VLM config: enabled=${cfg.vlmEnabled}, apiBase=${cfg.vlmApiBase}, keyPreview=${keyPreview}`);
+          logger.info(`vlmParser=true, VLM config: enabled=${cfg.vlmEnabled}, apiBase=${cfg.vlmApiBase}, keyPreview=${keyPreview}`);
         }
         
         const parseResult = await ingestDocument(localPdfPath!, {
@@ -482,7 +482,7 @@ async function createBundleInternal(
           extractTables: true,
           extractEquations: true,
           outputDir: pdfDocsDir,
-          forceLocalParser,
+          vlmParser: useVlmParser,
           vlmConfig: hasVlmConfig ? {
             apiBase: cfg.vlmApiBase!,
             apiKey: cfg.vlmApiKey!,
@@ -498,9 +498,9 @@ async function createBundleInternal(
         }
         
         if (!parseResult.success) {
-          // When forceLocalParser is used, failure is fatal - don't create empty bundle
-          if (forceLocalParser) {
-            throw new Error(`PDF parsing failed (forceLocalParser=true): ${parseResult.error}`);
+          // When vlmParser is used, failure is fatal - don't create empty bundle
+          if (useVlmParser) {
+            throw new Error(`PDF parsing failed (vlmParser=true): ${parseResult.error}`);
           }
           notes.push(`Parse warning: ${parseResult.error}`);
         }

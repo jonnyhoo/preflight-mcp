@@ -15,10 +15,39 @@ import type { AnalyzedElement, VLMConfig, VLMTaskType } from './types.js';
 import { createModuleLogger } from '../../logging/logger.js';
 
 // ============================================================================
-// Types
+// PDF.js Initialization
 // ============================================================================
 
 const logger = createModuleLogger('vlm-fallback');
+
+/**
+ * Flag to track if PDF.js has been initialized with the legacy build.
+ * The unpdf serverless build has issues with renderPageAsImage on some PDFs,
+ * so we need to use the official pdfjs-dist legacy build instead.
+ */
+let pdfjsInitialized = false;
+
+/**
+ * Initialize PDF.js with the legacy build for proper page rendering.
+ * This must be called before using renderPageAsImage.
+ * Safe to call multiple times - only initializes once.
+ */
+async function ensurePDFJSInitialized(): Promise<void> {
+  if (pdfjsInitialized) return;
+  
+  try {
+    const { definePDFJSModule } = await import('unpdf');
+    // Use the legacy build which works in Node.js without DOMMatrix
+    await definePDFJSModule(() => import('pdfjs-dist/legacy/build/pdf.mjs'));
+    pdfjsInitialized = true;
+    logger.debug('PDF.js initialized with legacy build');
+  } catch (err) {
+    // If initialization fails, log warning but continue
+    // The serverless build may still work for some PDFs
+    logger.warn('Failed to initialize PDF.js legacy build, falling back to serverless build:', 
+      err instanceof Error ? err : undefined);
+  }
+}
 
 /** PDF document proxy from unpdf */
 export type PDFDocumentProxy = Awaited<ReturnType<typeof import('unpdf').getDocumentProxy>>;
@@ -102,9 +131,14 @@ export function createVLMConfig(opts?: Partial<VLMConfig>): VLMConfig {
 
 /**
  * Render PDF page to base64 image using @napi-rs/canvas.
+ * 
+ * Uses the pdfjs-dist legacy build for reliable rendering across all PDF types.
+ * The unpdf serverless build has known issues with some PDFs (renders blank).
+ * 
  * @param pdfData - PDF file data as Uint8Array
  * @param pageNumber - 1-based page number
  * @param scale - Render scale (default 1.5 for good quality)
+ * @returns Base64 encoded PNG image, or null on failure
  */
 export async function renderPageToBase64(
   pdfData: Uint8Array,
@@ -112,12 +146,21 @@ export async function renderPageToBase64(
   scale = 1.5
 ): Promise<string | null> {
   try {
+    // Ensure PDF.js is initialized with legacy build
+    await ensurePDFJSInitialized();
+    
     const { renderPageAsImage } = await import('unpdf');
 
     const imageData = await renderPageAsImage(pdfData, pageNumber, {
       canvasImport: () => import('@napi-rs/canvas'),
       scale,
     });
+
+    // Validate that we got actual image data (not empty/tiny)
+    if (!imageData || imageData.byteLength < 1000) {
+      logger.warn(`Page ${pageNumber} rendered but image data is suspiciously small (${imageData?.byteLength ?? 0} bytes)`);
+      return null;
+    }
 
     return Buffer.from(imageData).toString('base64');
   } catch (err) {

@@ -37,6 +37,66 @@ import type {
 const logger = createModuleLogger('mineru-parser');
 
 // ============================================================================
+// LLM-Friendly Error Messages
+// ============================================================================
+
+/**
+ * Detailed error messages for LLM context.
+ * These help users understand configuration issues and how to fix them.
+ */
+const LLM_ERRORS = {
+  NOT_CONFIGURED: `[MinerU Configuration Error]
+MinerU API is not configured. To use MinerU (default PDF parser):
+
+1. Add to ~/.preflight/config.json:
+   {
+     "mineruEnabled": true,
+     "mineruApiBase": "https://mineru-api.example.com",
+     "mineruApiKey": "your-api-key"
+   }
+
+2. Or set environment variables:
+   MINERU_API_BASE, MINERU_API_KEY
+
+Alternatively:
+  - Use vlmParser=true for local VLM processing (requires vlmConfigs)
+  - Will automatically fallback to PdfParser (rule-based) if unconfigured`,
+
+  API_ERROR: (status: number, message: string) => `[MinerU API Error]
+MinerU API returned error (HTTP ${status}): ${message}
+
+Possible causes:
+  - API key is invalid or expired
+  - API service is temporarily unavailable
+  - Rate limit exceeded
+
+Please verify your mineruApiKey and try again.`,
+
+  ENDPOINT_UNREACHABLE: (apiBase: string, error: string) => `[MinerU Connection Error]
+Cannot connect to MinerU API: ${apiBase}
+
+Error: ${error}
+
+Please verify:
+  1. mineruApiBase URL is correct
+  2. Network connectivity is working
+  3. API service is available`,
+
+  TASK_TIMEOUT: (taskId: string, timeoutMs: number) => `[MinerU Task Timeout]
+Task ${taskId} did not complete within ${Math.round(timeoutMs / 1000)}s.
+
+The PDF may be too large or complex. Consider:
+  - Using vlmParser=true for local processing
+  - Splitting the PDF into smaller parts`,
+
+  TASK_FAILED: (taskId: string, error: string) => `[MinerU Task Failed]
+Task ${taskId} failed: ${error}
+
+The PDF may be corrupted or in an unsupported format.
+Fallback to PdfParser will be attempted automatically.`,
+} as const;
+
+// ============================================================================
 // Types
 // ============================================================================
 
@@ -150,13 +210,13 @@ export class MineruParser implements IDocumentParser {
   async parse(filePath: string, options?: PdfParseOptions): Promise<ParseResult> {
     const startTime = Date.now();
 
-    // Validate configuration
+    // Validate configuration with detailed error for LLM
     if (!this.config.enabled || !this.config.apiKey) {
       return this.createErrorResult(
         filePath,
         startTime,
         'MINERU_NOT_CONFIGURED',
-        'MinerU API is not configured. Set mineruApiKey in config.'
+        LLM_ERRORS.NOT_CONFIGURED
       );
     }
 
@@ -220,13 +280,13 @@ export class MineruParser implements IDocumentParser {
   async parseUrl(url: string, options?: PdfParseOptions): Promise<ParseResult> {
     const startTime = Date.now();
 
-    // Validate configuration
+    // Validate configuration with detailed error for LLM
     if (!this.config.enabled || !this.config.apiKey) {
       return this.createErrorResult(
         url,
         startTime,
         'MINERU_NOT_CONFIGURED',
-        'MinerU API is not configured. Set mineruApiKey in config.'
+        LLM_ERRORS.NOT_CONFIGURED
       );
     }
 

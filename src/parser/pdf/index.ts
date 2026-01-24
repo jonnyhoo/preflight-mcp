@@ -43,20 +43,6 @@ export {
   extractContentWithVLM,
 } from './vlm-fallback.js';
 
-export {
-  enhanceWithRegionVLM,
-  processFullPageVLM,
-  collectVLMRegions,
-  batchProcessRegions,
-  enhanceInlineFormulas,
-  containsUnicodeMath,
-  findParagraphsWithInlineFormulas,
-  unicodeToLatex,
-  addLatexDelimiters,
-  type VLMRegion,
-  type VLMBatchResult,
-} from './region-vlm.js';
-
 /**
  * Options for PDF analysis.
  */

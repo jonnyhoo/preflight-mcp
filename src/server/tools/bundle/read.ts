@@ -497,14 +497,15 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
         const isDocumentBundle = manifest.type === 'document';
         
         if (isDocumentBundle) {
-          // For document bundles, read docs/*.md files directly
-          const docsDir = safeJoin(bundleRoot, 'docs');
+          // For document bundles, read docs/*.md AND root pdf_*.md files
           const files: Record<string, string | null> = {};
           const sections: string[] = ['manifest.json'];
           
           files['manifest.json'] = JSON.stringify(manifest, null, 2);
           
+          // 1) Read docs/*.md if exists
           try {
+            const docsDir = safeJoin(bundleRoot, 'docs');
             const docFiles = await fs.readdir(docsDir);
             for (const docFile of docFiles) {
               if (docFile.endsWith('.md')) {
@@ -520,7 +521,26 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
               }
             }
           } catch {
-            // docs dir doesn't exist
+            // docs dir doesn't exist - that's okay
+          }
+          
+          // 2) Read root-level pdf_*.md files (PDF bundles store content here)
+          try {
+            const rootEntries = await fs.readdir(bundleRoot, { withFileTypes: true });
+            for (const entry of rootEntries) {
+              if (entry.isFile() && entry.name.toLowerCase().startsWith('pdf_') && entry.name.endsWith('.md')) {
+                try {
+                  const absPath = safeJoin(bundleRoot, entry.name);
+                  const content = await fs.readFile(absPath, 'utf8');
+                  files[entry.name] = content;
+                  sections.push(entry.name);
+                } catch {
+                  files[entry.name] = null;
+                }
+              }
+            }
+          } catch {
+            // root dir read failed - unlikely but handle gracefully
           }
           
           const textParts: string[] = [];
