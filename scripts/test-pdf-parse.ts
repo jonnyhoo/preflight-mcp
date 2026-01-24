@@ -1,12 +1,16 @@
 /**
  * Debug script to test PDF parsing with vlmParser=true
- * Run: npx tsx test-pdf-parse.ts
+ * Run: npx tsx scripts/test-pdf-parse.ts <pdf-path>
  */
-import { ingestDocument } from './src/bundle/document-ingest.ts';
-import { getConfig } from './src/config.ts';
+import { ingestDocument } from '../src/bundle/document-ingest.ts';
+import { getConfig } from '../src/config.ts';
 
 async function main() {
-  const pdfPath = 'E:\\coding\\论文\\DynaDebate.pdf';
+  const pdfPath = process.argv[2];
+  if (!pdfPath) {
+    console.error('Usage: npx tsx scripts/test-pdf-parse.ts <pdf-path>');
+    process.exit(1);
+  }
   
   console.log('Loading config...');
   const config = getConfig();
