@@ -584,16 +584,26 @@ function isDefaultCase(caseNode: Node): boolean {
 
 /**
  * Check if a block node is empty (no statements, only comments/empty statements allowed).
+ * Returns false if comments indicate intentional ignore (e.g., "// ignore", "// expected").
  */
 function isEmptyBlock(node: Node): boolean {
+  let hasIntentionalIgnoreComment = false;
+
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
     if (!child) continue;
 
-    // Skip punctuation and comments
+    // Skip punctuation
     if (child.type === '{' || child.type === '}') continue;
-    if (child.type === 'comment' || child.type === 'line_comment' || child.type === 'block_comment') continue;
     if (child.type === ':') continue;
+
+    // Check comments for intentional ignore patterns
+    if (child.type === 'comment' || child.type === 'line_comment' || child.type === 'block_comment') {
+      if (isIntentionalIgnoreComment(child.text)) {
+        hasIntentionalIgnoreComment = true;
+      }
+      continue;
+    }
 
     // Empty statements are also considered "empty" (JS/TS/Java `;`, Python `pass`)
     if (child.type === 'empty_statement' || child.type === 'pass_statement') continue;
@@ -601,7 +611,47 @@ function isEmptyBlock(node: Node): boolean {
     // Any other node means non-empty
     return false;
   }
-  return true;
+
+  // If there's a comment indicating intentional ignore, don't report as empty
+  return !hasIntentionalIgnoreComment;
+}
+
+/**
+ * Check if a comment indicates intentional error ignoring.
+ * Matches patterns like: // ignore, // expected, // ok, // intentional, // noop, etc.
+ */
+function isIntentionalIgnoreComment(commentText: string): boolean {
+  const normalized = commentText.toLowerCase();
+  
+  // Common patterns for intentional ignoring
+  const ignorePatterns = [
+    /\bignore\b/,
+    /\bignored\b/,
+    /\bexpected\b/,
+    /\bintentional\b/,
+    /\bok\b/,
+    /\bnoop\b/,
+    /\bno-op\b/,
+    /\bskip\b/,
+    /\bsilent\b/,
+    /\bsilently\b/,
+    /\bswallow\b/,
+    /\bsuppress\b/,
+    /\bfall\s*through\b/,
+    /\bfallthrough\b/,
+    /\bnot\s+critical\b/,
+    /\bnon-critical\b/,
+    /\bbest[\s-]effort\b/,
+    /\boptional\b/,
+    /\bcan't\s+fail\b/,
+    /\bcannot\s+fail\b/,
+    /\bwon't\s+fail\b/,
+    /\bnever\s+fails?\b/,
+    /\bfile\s+(doesn't|does\s+not)\s+exist\b/,
+    /\balready\s+(exists?|deleted|removed)\b/,
+  ];
+
+  return ignorePatterns.some(pattern => pattern.test(normalized));
 }
 
 /**
