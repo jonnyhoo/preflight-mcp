@@ -184,18 +184,80 @@ function parseHeadingTree(markdown: string): HeadingNode[] {
 // ============================================================================
 
 /**
- * Detect content blocks with their types.
+ * Check if a heading is a PDF page marker (e.g., "## Page 1", "Page 2").
  */
-function detectContentBlocks(markdown: string, headingPath: string[] = []): ContentBlock[] {
+function isPdfPageMarker(heading: string): boolean {
+  return /^Page\s+\d+$/i.test(heading.trim());
+}
+
+/**
+ * Check if a heading is noise (TOC, figure caption, metadata).
+ */
+function isNoiseHeading(heading: string): boolean {
+  // Skip TOC-like entries
+  if (/^\d+\.?\s*$/.test(heading)) return true; // Just numbers like "1." or "2"
+  // Skip Figure/Table captions used as headings
+  if (/^(figure|table)\s*\d*:?/i.test(heading)) return true;
+  // Skip page references
+  if (/^page\s*\d+$/i.test(heading)) return true;
+  return false;
+}
+
+/**
+ * Infer logical section level from heading text based on academic numbering.
+ * Returns the inferred level or undefined if cannot be determined.
+ * Examples:
+ *   "1 Introduction" -> 1
+ *   "2.1 Related Work" -> 2
+ *   "3.2.1 Details" -> 3
+ *   "Abstract" -> 1
+ *   "Conclusion" -> 1
+ */
+function inferLogicalLevel(headingText: string): number | undefined {
+  // Check for numbered sections like "1", "2.1", "3.2.1"
+  const numberMatch = headingText.match(/^(\d+(?:\.\d+)*)\s+/);
+  if (numberMatch) {
+    const parts = numberMatch[1]!.split('.');
+    return parts.length; // "1" -> 1, "2.1" -> 2, "3.2.1" -> 3
+  }
+  
+  // Top-level sections without numbers
+  const topLevelSections = [
+    'abstract', 'introduction', 'conclusion', 'conclusions',
+    'references', 'appendix', 'acknowledgments', 'acknowledgements'
+  ];
+  if (topLevelSections.includes(headingText.toLowerCase())) {
+    return 1;
+  }
+  
+  return undefined;
+}
+
+/**
+ * Detect content blocks with their types.
+ * Properly tracks section hierarchy and filters PDF artifacts.
+ */
+function detectContentBlocks(markdown: string, _headingPath: string[] = []): ContentBlock[] {
   const blocks: ContentBlock[] = [];
   const lines = markdown.split('\n');
   
   let currentContent: string[] = [];
   let currentType: ChunkType = 'text';
-  let currentHeading: string | undefined;
   let inCodeBlock = false;
   let inTable = false;
   let inFormula = false;
+  
+  // Track section hierarchy: [{level, text}]
+  const sectionStack: { level: number; text: string }[] = [];
+  
+  const getCurrentHeading = (): string | undefined => {
+    if (sectionStack.length === 0) return undefined;
+    return sectionStack[sectionStack.length - 1]!.text;
+  };
+  
+  const getCurrentHeadingPath = (): string[] => {
+    return sectionStack.map(s => s.text);
+  };
 
   const flushBlock = () => {
     const content = currentContent.join('\n').trim();
@@ -204,8 +266,8 @@ function detectContentBlocks(markdown: string, headingPath: string[] = []): Cont
       blocks.push({
         type: currentType,
         content,
-        heading: currentHeading,
-        headingPath: [...headingPath],
+        heading: getCurrentHeading(),
+        headingPath: getCurrentHeadingPath(),
         isSpecial,
       });
     }
@@ -217,12 +279,33 @@ function detectContentBlocks(markdown: string, headingPath: string[] = []): Cont
     const line = lines[i]!;
     const trimmed = line.trim();
 
-    // Skip headings (they're handled separately)
-    if (trimmed.match(/^#{1,6}\s+/)) {
-      const headingMatch = trimmed.match(/^#{1,6}\s+(.+)$/);
-      if (headingMatch) {
-        currentHeading = headingMatch[1];
+    // Handle headings - track section hierarchy
+    const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      const markdownLevel = headingMatch[1]!.length;
+      const headingText = headingMatch[2]!.trim();
+      
+      // Skip PDF page markers and noise headings
+      if (isPdfPageMarker(headingText) || isNoiseHeading(headingText)) {
+        continue;
       }
+      
+      // Use logical level based on section numbering, fallback to markdown level
+      const logicalLevel = inferLogicalLevel(headingText) ?? markdownLevel;
+      
+      // Flush current content before section change
+      flushBlock();
+      
+      // Update section stack: pop all sections with level >= current
+      while (sectionStack.length > 0 && sectionStack[sectionStack.length - 1]!.level >= logicalLevel) {
+        sectionStack.pop();
+      }
+      sectionStack.push({ level: logicalLevel, text: headingText });
+      continue;
+    }
+
+    // Skip metadata/frontmatter lines
+    if (trimmed.startsWith('> Source:') || trimmed.startsWith('> Pages:') || trimmed === '---') {
       continue;
     }
 
@@ -248,38 +331,40 @@ function detectContentBlocks(markdown: string, headingPath: string[] = []): Cont
     }
 
     // Formula detection ($$...$$, \[...\])
-    if (trimmed.startsWith('$$') || trimmed.startsWith('\\[')) {
-      if (!inFormula) {
+    // Handle formula end first (important: check this before formula start)
+    if (inFormula) {
+      currentContent.push(line);
+      // Check for end markers
+      if (trimmed === '$$' || trimmed === '\\]' || trimmed.endsWith('$$') || trimmed.endsWith('\\]')) {
         flushBlock();
-        inFormula = true;
-        currentType = 'formula';
-        currentContent.push(line);
-        // Check if single-line formula
-        if ((trimmed.startsWith('$$') && trimmed.endsWith('$$') && trimmed.length > 4) ||
-            (trimmed.startsWith('\\[') && trimmed.endsWith('\\]'))) {
-          flushBlock();
-          inFormula = false;
-          currentType = 'text';
-        }
-      } else {
-        currentContent.push(line);
+        inFormula = false;
+        currentType = 'text';
       }
       continue;
     }
-    if (inFormula && (trimmed.endsWith('$$') || trimmed.endsWith('\\]'))) {
-      currentContent.push(line);
+    
+    // Formula start detection
+    if (trimmed.startsWith('$$') || trimmed.startsWith('\\[')) {
       flushBlock();
-      inFormula = false;
-      currentType = 'text';
-      continue;
-    }
-    if (inFormula) {
+      inFormula = true;
+      currentType = 'formula';
       currentContent.push(line);
+      // Check if single-line formula (e.g., $$ x = y $$)
+      if ((trimmed.startsWith('$$') && trimmed.endsWith('$$') && trimmed.length > 4) ||
+          (trimmed.startsWith('\\[') && trimmed.endsWith('\\]') && trimmed.length > 4)) {
+        flushBlock();
+        inFormula = false;
+        currentType = 'text';
+      }
       continue;
     }
 
-    // Table detection
-    if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
+    // Table detection - more flexible: line contains | and has table-like structure
+    const isTableRow = trimmed.includes('|') && 
+      (trimmed.startsWith('|') || trimmed.match(/^[^|]+\|/)) &&
+      trimmed.split('|').length >= 3;
+    
+    if (isTableRow) {
       if (!inTable) {
         flushBlock();
         inTable = true;
@@ -288,9 +373,12 @@ function detectContentBlocks(markdown: string, headingPath: string[] = []): Cont
       currentContent.push(line);
       continue;
     } else if (inTable) {
-      flushBlock();
-      inTable = false;
-      currentType = 'text';
+      // End table on empty line or non-table content
+      if (trimmed === '' || !trimmed.includes('|')) {
+        flushBlock();
+        inTable = false;
+        currentType = 'text';
+      }
     }
 
     // Figure detection
@@ -340,28 +428,6 @@ function splitAtSentences(text: string): string[] {
   return sentences.map(s => s.trim()).filter(s => s.length > 0);
 }
 
-/**
- * Create overlap by taking sentences from the end of previous chunk.
- */
-function createOverlapPrefix(prevContent: string, overlapTokens: number): string {
-  const sentences = splitAtSentences(prevContent);
-  let overlap = '';
-  let tokens = 0;
-  
-  // Take sentences from the end
-  for (let i = sentences.length - 1; i >= 0 && tokens < overlapTokens; i--) {
-    const sentence = sentences[i]!;
-    const sentenceTokens = estimateTokens(sentence);
-    if (tokens + sentenceTokens <= overlapTokens) {
-      overlap = sentence + ' ' + overlap;
-      tokens += sentenceTokens;
-    } else {
-      break;
-    }
-  }
-
-  return overlap.trim();
-}
 
 // ============================================================================
 // Adaptive Chunking
@@ -374,15 +440,13 @@ function adaptiveChunk(
   blocks: ContentBlock[],
   maxTokens: number,
   minTokens: number,
-  overlapPercent: number
+  _overlapPercent: number  // Reserved for future overlap support
 ): ContentBlock[] {
   const result: ContentBlock[] = [];
-  const overlapTokens = Math.floor(maxTokens * overlapPercent / 100);
 
   let pendingContent: string[] = [];
   let pendingTokens = 0;
   let pendingBlock: ContentBlock | null = null;
-  let prevChunkContent = '';
 
   const flushPending = () => {
     if (pendingContent.length === 0 || !pendingBlock) return;
@@ -392,7 +456,6 @@ function adaptiveChunk(
       ...pendingBlock,
       content,
     });
-    prevChunkContent = content;
     pendingContent = [];
     pendingTokens = 0;
   };
@@ -404,20 +467,10 @@ function adaptiveChunk(
     if (block.isSpecial) {
       flushPending();
       
-      // Add overlap prefix if we have previous content
-      let content = block.content;
-      if (prevChunkContent && overlapTokens > 0) {
-        const overlap = createOverlapPrefix(prevChunkContent, overlapTokens);
-        if (overlap) {
-          content = `[...] ${overlap}\n\n${content}`;
-        }
-      }
-
+      // Special blocks don't need overlap - they're self-contained
       result.push({
         ...block,
-        content,
       });
-      prevChunkContent = block.content;
       continue;
     }
 
@@ -428,48 +481,31 @@ function adaptiveChunk(
       const paragraphs = block.content.split(/\n\n+/);
       let current: string[] = [];
       let currentTokens = 0;
-      let isFirst = true;
 
       for (const para of paragraphs) {
         const paraTokens = estimateTokens(para);
 
         if (currentTokens + paraTokens > maxTokens && current.length > 0) {
-          // Flush current
-          let content = current.join('\n\n');
-          if (!isFirst && prevChunkContent && overlapTokens > 0) {
-            const overlap = createOverlapPrefix(prevChunkContent, overlapTokens);
-            if (overlap) {
-              content = `[...] ${overlap}\n\n${content}`;
-            }
-          }
+          // Flush current (no artificial overlap markers)
+          const content = current.join('\n\n');
           result.push({
             ...block,
             content,
           });
-          prevChunkContent = current.join('\n\n');
           current = [];
           currentTokens = 0;
-          isFirst = false;
         }
 
         // If single paragraph is too large, split by sentences
         if (paraTokens > maxTokens) {
           if (current.length > 0) {
-            let content = current.join('\n\n');
-            if (!isFirst && prevChunkContent && overlapTokens > 0) {
-              const overlap = createOverlapPrefix(prevChunkContent, overlapTokens);
-              if (overlap) {
-                content = `[...] ${overlap}\n\n${content}`;
-              }
-            }
+            const content = current.join('\n\n');
             result.push({
               ...block,
               content,
             });
-            prevChunkContent = current.join('\n\n');
             current = [];
             currentTokens = 0;
-            isFirst = false;
           }
 
           const sentences = splitAtSentences(para);
@@ -479,21 +515,13 @@ function adaptiveChunk(
           for (const sent of sentences) {
             const sTokens = estimateTokens(sent);
             if (sentTokens + sTokens > maxTokens && sentChunk.length > 0) {
-              let content = sentChunk.join(' ');
-              if (!isFirst && prevChunkContent && overlapTokens > 0) {
-                const overlap = createOverlapPrefix(prevChunkContent, overlapTokens);
-                if (overlap) {
-                  content = `[...] ${overlap}\n\n${content}`;
-                }
-              }
+              const content = sentChunk.join(' ');
               result.push({
                 ...block,
                 content,
               });
-              prevChunkContent = sentChunk.join(' ');
               sentChunk = [];
               sentTokens = 0;
-              isFirst = false;
             }
             sentChunk.push(sent);
             sentTokens += sTokens;
@@ -509,18 +537,11 @@ function adaptiveChunk(
       }
 
       if (current.length > 0) {
-        let content = current.join('\n\n');
-        if (!isFirst && prevChunkContent && overlapTokens > 0) {
-          const overlap = createOverlapPrefix(prevChunkContent, overlapTokens);
-          if (overlap) {
-            content = `[...] ${overlap}\n\n${content}`;
-          }
-        }
+        const content = current.join('\n\n');
         result.push({
           ...block,
           content,
         });
-        prevChunkContent = current.join('\n\n');
       }
       continue;
     }
@@ -536,15 +557,7 @@ function adaptiveChunk(
       pendingBlock = block;
     }
 
-    // Add overlap prefix for first block after flush
-    if (pendingContent.length === 0 && prevChunkContent && overlapTokens > 0) {
-      const overlap = createOverlapPrefix(prevChunkContent, overlapTokens);
-      if (overlap) {
-        pendingContent.push(`[...] ${overlap}`);
-        pendingTokens += estimateTokens(overlap);
-      }
-    }
-
+    // Simply accumulate content (contextual prefix provides sufficient context)
     pendingContent.push(block.content);
     pendingTokens += tokens;
   }
@@ -595,6 +608,7 @@ export function academicChunk(
   // 2. Detect content blocks
   const blocks = detectContentBlocks(markdown);
   logger.debug(`Detected ${blocks.length} content blocks`);
+  
 
   // 3. Apply adaptive chunking with overlap
   const chunkedBlocks = adaptiveChunk(blocks, opts.maxTokens, opts.minTokens, opts.overlapPercent);
