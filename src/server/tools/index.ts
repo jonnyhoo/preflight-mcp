@@ -9,5 +9,6 @@ export { registerSemanticTools } from './semanticTools.js';
 export { registerLspTools } from './lspTools.js';
 export { registerCheckTools } from './checkTools.js';
 export { registerDistillTools } from './distillTools.js';
+export { registerRagTools } from './ragTools.js';
 
 export type { ToolDependencies, ToolResponse } from './types.js';

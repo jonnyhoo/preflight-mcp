@@ -42,6 +42,20 @@ export {
   bridgeOverview,
 } from './repocard-bridge.js';
 
+// Markdown bridge (PDF/Web)
+export type {
+  MarkdownSource,
+  MarkdownBridgeResult,
+  PdfBridgeSource,
+  WebBridgeSource,
+} from './markdown-bridge.js';
+
+export {
+  bridgeMarkdown,
+  bridgePdfMarkdown,
+  bridgeWebMarkdown,
+} from './markdown-bridge.js';
+
 // ============================================================================
 // Unified Bridge Interface
 // ============================================================================

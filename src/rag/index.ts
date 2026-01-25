@@ -30,3 +30,14 @@ export {
   indexBundle, 
   ragQuery,
 } from './query.js';
+
+// Context Completer (TODO: multi-hop enhancement)
+export type {
+  ContextCompletionResult,
+  CompletionOptions,
+} from './context-completer.js';
+
+export {
+  completeContext,
+  verifyChunkCompleteness,
+} from './context-completer.js';

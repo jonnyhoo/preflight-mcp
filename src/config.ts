@@ -28,6 +28,8 @@ interface ConfigFile {
   mineruApiBase?: string;
   mineruApiKey?: string;
   mineruEnabled?: boolean;
+  // ChromaDB for RAG
+  chromaUrl?: string;
 }
 
 let cachedConfigFile: ConfigFile | null = null;
@@ -222,6 +224,11 @@ export type PreflightConfig = {
   mineruTimeoutMs: number;
   /** Polling interval for MinerU task status in milliseconds (default: 3 seconds). */
   mineruPollIntervalMs: number;
+
+  // --- ChromaDB (RAG Vector Database) ---
+
+  /** ChromaDB server URL for RAG (default: http://localhost:8000). */
+  chromaUrl: string;
 };
 
 function envNumber(name: string, fallback: number): number {
@@ -391,5 +398,8 @@ export function getConfig(): PreflightConfig {
     mineruEnabled: envBoolean('PREFLIGHT_MINERU_ENABLED', false) || Boolean(process.env.PREFLIGHT_MINERU_API_KEY ?? process.env.MINERU_API_KEY) || loadConfigFile().mineruEnabled || Boolean(loadConfigFile().mineruApiKey),
     mineruTimeoutMs: envNumber('PREFLIGHT_MINERU_TIMEOUT_MS', 5 * 60_000),
     mineruPollIntervalMs: envNumber('PREFLIGHT_MINERU_POLL_INTERVAL_MS', 3000),
+
+    // ChromaDB for RAG
+    chromaUrl: (process.env.PREFLIGHT_CHROMA_URL ?? loadConfigFile().chromaUrl ?? 'http://localhost:8000').trim(),
   };
 }

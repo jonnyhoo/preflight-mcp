@@ -2,6 +2,20 @@
  * RAG Generator - Generate answers from retrieved context.
  * 
  * @module rag/generator
+ * 
+ * TODO: 可选增强 (MiRAGE 论文)
+ * 
+ * 1. 答案验证 Verifier (enableVerification)
+ *    - 当前: 代码骨架已实现但默认关闭
+ *    - 功能: 用 LLM 验证答案是否忠实于检索内容，检测幻觉
+ *    - 效果: Faithfulness 0.74 → 0.97 (论文数据)
+ *    - 启用: options.enableVerification = true
+ *    - 成本: 每次查询额外 1 次 LLM 调用
+ * 
+ * 2. 低置信度重试 (retryOnLowFaithfulness)
+ *    - 当前: 代码已实现
+ *    - 功能: faithfulness < 0.7 时用改进的 prompt 重新生成
+ *    - 启用: options.retryOnLowFaithfulness = true
  */
 
 import type { ChunkDocument } from '../vectordb/types.js';

@@ -39,6 +39,7 @@ import {
   registerLspTools,
   registerCheckTools,
   registerDistillTools,
+  registerRagTools,
 } from './server/tools/index.js';
 
 // Read version from package.json at startup
@@ -212,6 +213,9 @@ export async function startServer(): Promise<void> {
 
   // Distill tools (1): generate_card
   registerDistillTools(deps);
+
+  // RAG tools (1): preflight_rag (index + query)
+  registerRagTools(deps);
 
   // ==========================================================================
   // PROMPTS - Interactive guidance for users
