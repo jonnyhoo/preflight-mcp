@@ -158,6 +158,8 @@ export class OpenAIEmbedding extends BaseEmbedding {
     const baseBody: Record<string, unknown> = {
       input: processedText,
       encoding_format: 'float',
+      // NVIDIA NIM requires truncate parameter
+      truncate: 'NONE',
     };
 
     const withModelBody = { ...baseBody, model: this.model };
@@ -182,6 +184,7 @@ export class OpenAIEmbedding extends BaseEmbedding {
 
   /**
    * Generate embeddings for multiple texts in batch.
+   * Falls back to sequential processing if batch fails (some providers like NVIDIA don't support batch input).
    */
   async embedBatch(texts: string[]): Promise<EmbeddingVector[]> {
     if (texts.length === 0) return [];
@@ -193,6 +196,8 @@ export class OpenAIEmbedding extends BaseEmbedding {
     const baseBody: Record<string, unknown> = {
       input: processedTexts,
       encoding_format: 'float',
+      // NVIDIA NIM requires truncate parameter
+      truncate: 'NONE',
     };
 
     const withModelBody = { ...baseBody, model: this.model };
@@ -204,13 +209,23 @@ export class OpenAIEmbedding extends BaseEmbedding {
       return vectors.map((v) => ({ vector: v, dimension: v.length }));
     };
 
+    // Try batch first
     try {
       return await run(body);
     } catch (err) {
       if (this.omitModelByDefault) {
-        return await run(withModelBody);
+        try {
+          return await run(withModelBody);
+        } catch { /* fall through to sequential */ }
       }
-      throw err;
+      // Fallback to sequential processing (for providers like NVIDIA that don't support batch)
+      console.log('[embedBatch] Batch failed, falling back to sequential processing...');
+      const results: EmbeddingVector[] = [];
+      for (const text of texts) {
+        const result = await this.embed(text);
+        results.push(result);
+      }
+      return results;
     }
   }
 
