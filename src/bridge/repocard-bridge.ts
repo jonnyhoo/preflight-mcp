@@ -150,12 +150,20 @@ export async function locateFilesToIndex(bundlePath: string): Promise<IndexableF
       const rootReadmePath = path.join(bundlePath, 'repos', repoId, 'README.md');
 
       // PDF markdown path for PDF repos
+      // File naming: pdf_{repoIdWithoutPrefix}.md where prefix is "pdf/"
+      // e.g., repo.id = "pdf/arxiv-2601.14287-v1_xxx" → file = "pdf_arxiv-2601.14287-v1_xxx.md"
       let pdfMarkdownPath: string | undefined;
       if (kind === 'pdf') {
-        const pdfMdPath = path.join(bundlePath, `pdf_${safeRepoId}.md`);
+        // Remove 'pdf/' prefix from repoId to get the actual file name part
+        const repoIdWithoutPrefix = repoId.startsWith('pdf/') 
+          ? repoId.slice(4) 
+          : repoId.replace(/\//g, '_');
+        const pdfMdPath = path.join(bundlePath, `pdf_${repoIdWithoutPrefix}.md`);
         if (await fileExists(pdfMdPath)) {
           pdfMarkdownPath = pdfMdPath;
           logger.debug(`Found PDF markdown: ${pdfMdPath}`);
+        } else {
+          logger.debug(`PDF markdown not found at: ${pdfMdPath}`);
         }
       }
 
