@@ -12,6 +12,9 @@ import { RAGRetriever } from './retriever.js';
 import { RAGGenerator } from './generator.js';
 import { ContextCompleter } from './context-completer.js';
 import type { SemanticChunk } from '../bridge/types.js';
+import path from 'node:path';
+import { readManifest, type BundleManifestV1 } from '../bundle/manifest.js';
+import { extractPaperId } from '../bundle/content-id.js';
 import type { 
   QueryOptions, 
   QueryResult, 
@@ -22,6 +25,18 @@ import type {
 import { createModuleLogger } from '../logging/logger.js';
 
 const logger = createModuleLogger('rag');
+
+// ============================================================================
+// Index Options
+// ============================================================================
+
+/**
+ * Index options for deduplication control.
+ */
+export interface IndexOptions {
+  /** Force re-index even if content already exists (default: false) */
+  force?: boolean;
+}
 
 // ============================================================================
 // RAG Engine
@@ -80,22 +95,103 @@ export class RAGEngine {
 
   /**
    * Index a bundle to ChromaDB.
+   * Performs deduplication check based on source file contentHash.
    */
-  async indexBundle(bundlePath: string, bundleId: string): Promise<IndexResult> {
+  async indexBundle(
+    bundlePath: string,
+    bundleId: string,
+    options?: IndexOptions
+  ): Promise<IndexResult> {
     const startTime = Date.now();
     const errors: string[] = [];
     let chunksWritten = 0;
     let entitiesCount = 0;
     let relationsCount = 0;
+    let contentHash: string | undefined;
+    let paperId: string | undefined;
+    let paperVersion: string | undefined;
+    let existingChunks: number | undefined;
+    let deletedChunks: number | undefined;
 
     try {
+      // Read manifest to get contentHash (headSha) and source URL
+      const manifestPath = path.join(bundlePath, 'manifest.json');
+      let manifest: BundleManifestV1 | undefined;
+      try {
+        manifest = await readManifest(manifestPath);
+      } catch {
+        logger.warn(`Could not read manifest, skipping dedup check`);
+      }
+
+      // Extract contentHash and paperId from manifest
+      if (manifest?.repos?.[0]) {
+        const repo = manifest.repos[0];
+        contentHash = repo.headSha;
+        
+        // Extract paperId from PDF URL if available
+        // Check both repos[].pdfUrl and inputs.repos[].url
+        const inputRepo = manifest.inputs?.repos?.[0] as { url?: string; name?: string } | undefined;
+        const pdfUrl = repo.pdfUrl ?? inputRepo?.url;
+        if (pdfUrl) {
+          const paperInfo = extractPaperId(pdfUrl);
+          paperId = paperInfo.paperId;
+          paperVersion = paperInfo.version;
+        }
+        
+        // Fallback: use name from inputs.repos[].name (user can set this manually)
+        // Format: "arxiv-2601.14287-v1" or just "my-paper-name"
+        if (!paperId && inputRepo?.name) {
+          const paperInfo = extractPaperId(inputRepo.name);
+          if (paperInfo.paperId) {
+            paperId = paperInfo.paperId;
+            paperVersion = paperInfo.version;
+          } else {
+            // Use name as-is if no arXiv/DOI pattern found
+            paperId = `name:${inputRepo.name}`;
+          }
+        }
+      }
+
+      // Deduplication check
+      if (contentHash && !options?.force) {
+        const existing = await this.chromaDB.getChunksByContentHash(contentHash);
+        if (existing.length > 0) {
+          logger.info(`Content already indexed: ${contentHash.slice(0, 12)}... (${existing.length} chunks)`);
+          return {
+            chunksWritten: 0,
+            entitiesCount: 0,
+            relationsCount: 0,
+            errors: [],
+            durationMs: Date.now() - startTime,
+            skipped: true,
+            contentHash,
+            paperId,
+            paperVersion,
+            existingChunks: existing.length,
+          };
+        }
+      }
+
+      // Force replace: delete existing chunks first
+      if (contentHash && options?.force) {
+        deletedChunks = await this.chromaDB.deleteByContentHash(contentHash);
+        if (deletedChunks > 0) {
+          logger.info(`Deleted ${deletedChunks} existing chunks for replacement`);
+        }
+      }
+
       // 1. Bridge: Index documents (CARD.json, README.md, OVERVIEW.md)
       logger.info(`Indexing documents from ${bundlePath}...`);
       const bridgeResult = await bridgeIndexBundle(
         bundlePath,
         bundleId,
         this.chromaDB,
-        { embedding: this.embedding }
+        { 
+          embedding: this.embedding,
+          contentHash,
+          paperId,
+          paperVersion,
+        }
       );
       chunksWritten = bridgeResult.chunksWritten;
       errors.push(...bridgeResult.errors);
@@ -131,6 +227,10 @@ export class RAGEngine {
       relationsCount,
       errors,
       durationMs: Date.now() - startTime,
+      contentHash,
+      paperId,
+      paperVersion,
+      deletedChunks,
     };
   }
 

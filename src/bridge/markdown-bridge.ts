@@ -11,6 +11,7 @@
 import type { ChunkDocument } from '../vectordb/types.js';
 import type { SemanticChunk, BridgeOptions, BridgeResult, ChunkOptions } from './types.js';
 import { semanticChunk } from './semantic-chunker.js';
+import { academicChunk } from './pdf-chunker.js';
 import { createModuleLogger } from '../logging/logger.js';
 
 const logger = createModuleLogger('markdown-bridge');
@@ -183,7 +184,11 @@ export interface PdfBridgeSource {
 /**
  * Bridge PDF parser output (markdown) to ChromaDB chunks.
  * 
- * This is a convenience wrapper for `bridgeMarkdown` with PDF-specific defaults.
+ * Uses academic chunking strategy optimized for research papers:
+ * - Hierarchical: Preserves markdown heading structure
+ * - Contextual: Adds document context prefix to each chunk
+ * - Adaptive: Keeps formulas/tables/code intact
+ * - Overlap: 15% overlap at sentence boundaries
  * 
  * @example
  * ```typescript
@@ -199,16 +204,89 @@ export async function bridgePdfMarkdown(
   source: PdfBridgeSource,
   options: BridgeOptions
 ): Promise<MarkdownBridgeResult> {
-  return bridgeMarkdown(
-    source.markdown,
-    {
-      type: 'pdf',
+  const result: MarkdownBridgeResult = {
+    chunksWritten: 0,
+    chunksByType: {
+      text: 0,
+      heading: 0,
+      table: 0,
+      figure: 0,
+      formula: 0,
+      code: 0,
+      list: 0,
+      summary: 0,
+      api: 0,
+    },
+    errors: [],
+    chunks: [],
+  };
+
+  try {
+    // Use academic chunking strategy for PDFs
+    const chunkOptions: ChunkOptions = {
+      sourceType: 'pdf_text',
       bundleId: source.bundleId,
       repoId: source.repoId,
       filePath: source.pdfPath,
-    },
-    options
-  );
+      maxTokens: options.maxChunkTokens ?? 400,
+      minTokens: options.minChunkTokens ?? 100,
+    };
+
+    const semanticChunks = academicChunk(source.markdown, chunkOptions, {
+      maxTokens: options.maxChunkTokens ?? 400,
+      minTokens: options.minChunkTokens ?? 100,
+      overlapPercent: 15,
+    });
+    logger.info(`Created ${semanticChunks.length} academic chunks from PDF`);
+
+    // Generate embeddings
+    const texts = semanticChunks.map((c) => c.content);
+    const embeddings = await options.embedding.embedBatch(texts);
+    logger.debug(`Generated ${embeddings.length} embeddings`);
+
+    // Convert to ChunkDocument format
+    const chunks: ChunkDocument[] = semanticChunks.map((chunk, i) => {
+      const embedding = embeddings[i];
+      const chunkDoc: ChunkDocument = {
+        id: chunk.id,
+        content: chunk.content,
+        metadata: {
+          sourceType: mapSourceType('pdf', chunk.chunkType),
+          bundleId: source.bundleId,
+          repoId: source.repoId,
+          filePath: source.pdfPath,
+          chunkIndex: chunk.metadata.chunkIndex,
+          chunkType: chunk.chunkType,
+          fieldName: chunk.metadata.fieldName,
+        },
+        embedding: embedding?.vector,
+      };
+      return chunkDoc;
+    });
+
+    // Count by type
+    for (const chunk of semanticChunks) {
+      const type = chunk.chunkType;
+      result.chunksByType[type] = (result.chunksByType[type] ?? 0) + 1;
+    }
+
+    result.chunks = chunks;
+    result.chunksWritten = chunks.length;
+
+    logger.info(
+      `Bridged ${chunks.length} PDF chunks: ` +
+        Object.entries(result.chunksByType)
+          .filter(([_, count]) => count > 0)
+          .map(([type, count]) => `${type}=${count}`)
+          .join(', ')
+    );
+  } catch (err) {
+    const msg = `Failed to bridge PDF markdown: ${err}`;
+    logger.error(msg);
+    result.errors.push(msg);
+  }
+
+  return result;
 }
 
 // ============================================================================

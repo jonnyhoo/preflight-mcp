@@ -51,6 +51,12 @@ export interface BridgeOptions {
   maxChunkTokens?: number;
   /** Min tokens per chunk (avoid tiny chunks) */
   minChunkTokens?: number;
+  /** Source file SHA256 hash for deduplication */
+  contentHash?: string;
+  /** Paper identifier (e.g., 'arxiv:2601.14287') */
+  paperId?: string;
+  /** Paper version (e.g., 'v1') */
+  paperVersion?: string;
 }
 
 export interface BridgeResult {
@@ -65,10 +71,14 @@ export interface BridgeResult {
 
 export interface IndexableRepo {
   repoId: string;
+  /** Repo kind: 'github' | 'pdf' | 'web' etc. */
+  kind?: string;
   /** Path to cards/xxx/CARD.json */
   cardPath: string | null;
   /** Path to repos/xxx/norm/README.md */
   readmePath: string | null;
+  /** Path to pdf_{safeRepoId}.md for PDF repos */
+  pdfMarkdownPath?: string;
 }
 
 export interface IndexableFiles {

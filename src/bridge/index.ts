@@ -3,6 +3,7 @@
  * @module bridge
  */
 
+import * as fs from 'node:fs/promises';
 import type { ChunkDocument } from '../vectordb/types.js';
 import { ChromaVectorDB } from '../vectordb/chroma-client.js';
 import type { BridgeSource, BridgeOptions, BridgeResult } from './types.js';
@@ -12,6 +13,7 @@ import {
   bridgeReadme, 
   bridgeOverview 
 } from './repocard-bridge.js';
+import { bridgePdfMarkdown } from './markdown-bridge.js';
 import { createModuleLogger } from '../logging/logger.js';
 
 const logger = createModuleLogger('bridge');
@@ -128,6 +130,44 @@ export async function indexBundle(
         const msg = `Failed to index ${repo.repoId} README.md: ${err}`;
         logger.error(msg);
         totalResult.errors.push(msg);
+      }
+    }
+
+    // Index PDF markdown (pdf_xxx.md)
+    if (repo.pdfMarkdownPath) {
+      try {
+        const pdfMarkdown = await fs.readFile(repo.pdfMarkdownPath, 'utf8');
+        const pdfResult = await bridgePdfMarkdown(
+          {
+            bundleId,
+            repoId: repo.repoId,
+            pdfPath: repo.pdfMarkdownPath,
+            markdown: pdfMarkdown,
+          },
+          options
+        );
+        allChunks.push(...pdfResult.chunks);
+        mergeResults(totalResult, pdfResult);
+        logger.info(`Indexed ${repo.repoId} PDF markdown: ${pdfResult.chunksWritten} chunks`);
+      } catch (err) {
+        const msg = `Failed to index ${repo.repoId} PDF markdown: ${err}`;
+        logger.error(msg);
+        totalResult.errors.push(msg);
+      }
+    }
+  }
+
+  // Add contentHash, paperId, paperVersion to all chunk metadata (for deduplication)
+  if (options.contentHash || options.paperId) {
+    for (const chunk of allChunks) {
+      if (options.contentHash) {
+        chunk.metadata.contentHash = options.contentHash;
+      }
+      if (options.paperId) {
+        chunk.metadata.paperId = options.paperId;
+      }
+      if (options.paperVersion) {
+        chunk.metadata.paperVersion = options.paperVersion;
       }
     }
   }

@@ -109,7 +109,10 @@ export function repoCardToChunks(card: RepoCard, bundleId: string): SemanticChun
 
 interface BundleManifest {
   bundleId: string;
-  repos?: Array<{ id: string }>;
+  repos?: Array<{
+    id: string;
+    kind?: string; // 'github' | 'pdf' | 'web' etc.
+  }>;
 }
 
 /**
@@ -135,21 +138,37 @@ export async function locateFilesToIndex(bundlePath: string): Promise<IndexableF
   const repos = await Promise.all(
     (manifest.repos ?? []).map(async (repo) => {
       const repoId = repo.id;
-      const safeRepoId = repoId.replace(/\//g, '~');
+      const kind = repo.kind;
+      // PDF repos use '_' as separator, others use '~'
+      const safeRepoId = kind === 'pdf' 
+        ? repoId.replace(/\//g, '_') 
+        : repoId.replace(/\//g, '~');
       
       const cardPath = path.join(bundlePath, 'cards', safeRepoId, 'CARD.json');
       const readmePath = path.join(bundlePath, 'repos', repoId, 'norm', 'README.md');
       // Also check root README
       const rootReadmePath = path.join(bundlePath, 'repos', repoId, 'README.md');
 
+      // PDF markdown path for PDF repos
+      let pdfMarkdownPath: string | undefined;
+      if (kind === 'pdf') {
+        const pdfMdPath = path.join(bundlePath, `pdf_${safeRepoId}.md`);
+        if (await fileExists(pdfMdPath)) {
+          pdfMarkdownPath = pdfMdPath;
+          logger.debug(`Found PDF markdown: ${pdfMdPath}`);
+        }
+      }
+
       return {
         repoId,
+        kind,
         cardPath: await fileExists(cardPath) ? cardPath : null,
         readmePath: await fileExists(readmePath) 
           ? readmePath 
           : await fileExists(rootReadmePath) 
             ? rootReadmePath 
             : null,
+        pdfMarkdownPath,
       };
     })
   );

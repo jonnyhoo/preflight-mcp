@@ -106,6 +106,18 @@ export interface IndexResult {
   relationsCount?: number;
   errors: string[];
   durationMs: number;
+  /** Whether indexing was skipped due to duplicate content */
+  skipped?: boolean;
+  /** Content hash of the indexed/existing content */
+  contentHash?: string;
+  /** Paper identifier if detected */
+  paperId?: string;
+  /** Paper version if detected */
+  paperVersion?: string;
+  /** Number of existing chunks (when skipped=true or replaced) */
+  existingChunks?: number;
+  /** Number of chunks deleted (when force=true) */
+  deletedChunks?: number;
 }
 
 // ============================================================================

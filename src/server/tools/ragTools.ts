@@ -7,6 +7,7 @@ import * as z from 'zod';
 
 import type { ToolDependencies } from './types.js';
 import { RAGEngine } from '../../rag/query.js';
+import { ChromaVectorDB } from '../../vectordb/chroma-client.js';
 import type { RAGConfig, QueryMode } from '../../rag/types.js';
 import { createEmbeddingFromConfig, describeEmbeddingEndpoint } from '../../embedding/preflightEmbedding.js';
 import { findBundleStorageDir } from '../../bundle/service.js';
@@ -90,12 +91,15 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
         '- Index: `{"bundleId": "<id>", "index": true}`\n' +
         '- Query: `{"bundleId": "<id>", "question": "这个项目怎么用？"}`\n' +
         '- Both: `{"bundleId": "<id>", "index": true, "question": "..."}`\n\n' +
+        '**Deduplication:** Same PDF won\'t be indexed twice. If skipped, use `force: true` to replace:\n' +
+        '- Replace: `{"bundleId": "<id>", "index": true, "force": true}`\n\n' +
         '**Query modes:** `naive` (vector only), `local` (vector + neighbor), `hybrid` (vector + AST graph, default)\n' +
         '**Config:** Requires `chromaUrl` and `embeddingEnabled` in `~/.preflight/config.json`\n' +
-        'Use when: "RAG问答", "知识检索", "语义搜索", "index bundle", "向量查询".',
+        'Use when: "RAG问答", "知识检索", "语义搜索", "index bundle", "向量查询", "重新索引", "覆盖旧版本".',
       inputSchema: {
         bundleId: z.string().describe('Bundle ID to index or query'),
-        index: z.boolean().optional().describe('Index bundle to vector DB (default: false)'),
+        index: z.boolean().optional().describe('Index bundle to vector DB (default: false). Skips if content already indexed.'),
+        force: z.boolean().optional().describe('Force replace existing content with same hash. Use when: switching parser (MinerU→VLM), updating paper version, or re-indexing after bundle changes. Deletes old chunks before indexing new ones.'),
         question: z.string().optional().describe('Question to ask about the bundle'),
         mode: z.enum(['naive', 'local', 'hybrid']).optional().describe('Query mode (default: hybrid)'),
         topK: z.number().optional().describe('Number of chunks to retrieve (default: 10)'),
@@ -107,11 +111,18 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
         embeddingEndpoint: z.string().optional().describe('Embedding API endpoint used'),
         // Index result
         indexed: z.boolean().optional(),
+        skipped: z.boolean().optional().describe('Whether indexing was skipped due to duplicate content'),
         chunksWritten: z.number().optional(),
         entitiesCount: z.number().optional(),
         relationsCount: z.number().optional(),
         indexDurationMs: z.number().optional(),
         indexErrors: z.array(z.string()).optional(),
+        // Deduplication info
+        contentHash: z.string().optional().describe('Source file SHA256 hash'),
+        paperId: z.string().optional().describe('Paper identifier (e.g., arxiv:2601.14287)'),
+        paperVersion: z.string().optional().describe('Paper version (e.g., v1)'),
+        existingChunks: z.number().optional().describe('Number of existing chunks (when skipped)'),
+        deletedChunks: z.number().optional().describe('Number of chunks deleted (when force=true)'),
         // Query result
         answer: z.string().optional(),
         sources: z
@@ -138,7 +149,7 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
     },
     async (args) => {
       try {
-        const { bundleId, index, question, mode, topK, repoId } = args;
+        const { bundleId, index, force, question, mode, topK, repoId } = args;
 
         // Validate: at least one action
         if (!index && !question) {
@@ -181,6 +192,12 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
           relationsCount?: number;
           durationMs: number;
           errors: string[];
+          skipped?: boolean;
+          contentHash?: string;
+          paperId?: string;
+          paperVersion?: string;
+          existingChunks?: number;
+          deletedChunks?: number;
         } | null = null;
 
         let queryResult: {
@@ -202,18 +219,28 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
 
         // Index if requested
         if (index) {
-          logger.info(`Indexing bundle: ${bundleId}`);
-          const result = await engine.indexBundle(bundlePath, bundleId);
+          logger.info(`Indexing bundle: ${bundleId}${force ? ' (force)' : ''}`);
+          const result = await engine.indexBundle(bundlePath, bundleId, { force });
           indexResult = {
             chunksWritten: result.chunksWritten,
             entitiesCount: result.entitiesCount,
             relationsCount: result.relationsCount,
             durationMs: result.durationMs,
             errors: result.errors,
+            skipped: result.skipped,
+            contentHash: result.contentHash,
+            paperId: result.paperId,
+            paperVersion: result.paperVersion,
+            existingChunks: result.existingChunks,
+            deletedChunks: result.deletedChunks,
           };
-          logger.info(
-            `Indexed ${result.chunksWritten} chunks, ${result.entitiesCount ?? 0} entities in ${result.durationMs}ms`
-          );
+          if (result.skipped) {
+            logger.info(`Skipped indexing: content already exists (${result.existingChunks} chunks)`);
+          } else {
+            logger.info(
+              `Indexed ${result.chunksWritten} chunks, ${result.entitiesCount ?? 0} entities in ${result.durationMs}ms`
+            );
+          }
         }
 
         // Query if requested
@@ -250,11 +277,32 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
         textResponse += `🔧 Config: ChromaDB=${cfg.chromaUrl} | Embedding=${embeddingEndpoint}\n\n`;
 
         if (indexResult) {
-          textResponse += `✅ Indexed bundle: ${bundleId}\n`;
-          textResponse += `   Chunks: ${indexResult.chunksWritten}\n`;
-          textResponse += `   Entities: ${indexResult.entitiesCount ?? 0}\n`;
-          textResponse += `   Relations: ${indexResult.relationsCount ?? 0}\n`;
-          textResponse += `   Duration: ${indexResult.durationMs}ms\n`;
+          if (indexResult.skipped) {
+            textResponse += `⚠️ Skipped: content already indexed\n`;
+            textResponse += `   contentHash: ${indexResult.contentHash?.slice(0, 12)}...\n`;
+            if (indexResult.paperId) {
+              textResponse += `   paperId: ${indexResult.paperId}${indexResult.paperVersion ? ` (${indexResult.paperVersion})` : ''}\n`;
+            }
+            textResponse += `   existingChunks: ${indexResult.existingChunks}\n`;
+            textResponse += `   Hint: Use force=true to replace.\n`;
+          } else {
+            if (indexResult.deletedChunks) {
+              textResponse += `🔄 Replaced: ${indexResult.contentHash?.slice(0, 12)}...\n`;
+              textResponse += `   Deleted: ${indexResult.deletedChunks} chunks\n`;
+            } else {
+              textResponse += `✅ Indexed bundle: ${bundleId}\n`;
+            }
+            textResponse += `   Chunks: ${indexResult.chunksWritten}\n`;
+            textResponse += `   Entities: ${indexResult.entitiesCount ?? 0}\n`;
+            textResponse += `   Relations: ${indexResult.relationsCount ?? 0}\n`;
+            if (indexResult.contentHash) {
+              textResponse += `   contentHash: ${indexResult.contentHash.slice(0, 12)}...\n`;
+            }
+            if (indexResult.paperId) {
+              textResponse += `   paperId: ${indexResult.paperId}${indexResult.paperVersion ? ` (${indexResult.paperVersion})` : ''}\n`;
+            }
+            textResponse += `   Duration: ${indexResult.durationMs}ms\n`;
+          }
           if (indexResult.errors.length > 0) {
             textResponse += `   ⚠️ Errors: ${indexResult.errors.length}\n`;
             indexResult.errors.slice(0, 3).forEach((e) => {
@@ -291,11 +339,17 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
         };
 
         if (indexResult) {
-          structuredContent.indexed = true;
+          structuredContent.indexed = !indexResult.skipped;
+          structuredContent.skipped = indexResult.skipped;
           structuredContent.chunksWritten = indexResult.chunksWritten;
           structuredContent.entitiesCount = indexResult.entitiesCount;
           structuredContent.relationsCount = indexResult.relationsCount;
           structuredContent.indexDurationMs = indexResult.durationMs;
+          structuredContent.contentHash = indexResult.contentHash;
+          structuredContent.paperId = indexResult.paperId;
+          structuredContent.paperVersion = indexResult.paperVersion;
+          structuredContent.existingChunks = indexResult.existingChunks;
+          structuredContent.deletedChunks = indexResult.deletedChunks;
           if (indexResult.errors.length > 0) {
             structuredContent.indexErrors = indexResult.errors;
           }
@@ -306,6 +360,132 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
           structuredContent.sources = queryResult.sources;
           structuredContent.relatedEntities = queryResult.relatedEntities;
           structuredContent.stats = queryResult.stats;
+        }
+
+        return {
+          content: [{ type: 'text', text: textResponse }],
+          structuredContent,
+        };
+      } catch (err) {
+        throw wrapPreflightError(err);
+      }
+    }
+  );
+
+  // ============================================================================
+  // preflight_rag_manage Tool
+  // ============================================================================
+
+  server.registerTool(
+    'preflight_rag_manage',
+    {
+      title: 'RAG content management',
+      description:
+        'Manage indexed content in ChromaDB: list all indexed PDFs/documents, view statistics, or delete specific content.\n\n' +
+        '**Usage:**\n' +
+        '- List all indexed content: `{"action": "list"}` → shows contentHash, paperId, chunk count\n' +
+        '- View statistics: `{"action": "stats"}` → total chunks, unique documents, by paperId\n' +
+        '- Delete by hash: `{"action": "delete", "contentHash": "77b44fcb..."}` → removes all chunks for that content\n\n' +
+        '**Note:** contentHash is the source file SHA256. Get it from `list` output or `preflight_rag` index result.\n' +
+        '**Tip:** Use `list` before delete to see what\'s indexed. Bundle deletion does NOT affect ChromaDB (by design).\n' +
+        'Use when: "查看RAG索引", "删除向量", "RAG统计", "清理索引", "已索引哪些论文", "删除旧论文".',
+      inputSchema: {
+        action: z.enum(['list', 'stats', 'delete']).describe('Action to perform'),
+        contentHash: z.string().optional().describe('Content hash to delete (required for delete action)'),
+      },
+      outputSchema: {
+        // List result
+        items: z.array(z.object({
+          contentHash: z.string(),
+          paperId: z.string().optional(),
+          paperVersion: z.string().optional(),
+          bundleId: z.string(),
+          chunkCount: z.number(),
+        })).optional(),
+        // Stats result
+        stats: z.object({
+          totalChunks: z.number(),
+          uniqueContentHashes: z.number(),
+          byPaperId: z.array(z.object({
+            paperId: z.string(),
+            chunkCount: z.number(),
+          })),
+        }).optional(),
+        // Delete result
+        deleted: z.boolean().optional(),
+        deletedChunks: z.number().optional(),
+      },
+      annotations: { openWorldHint: true },
+    },
+    async (args) => {
+      try {
+        const { action, contentHash } = args;
+
+        // Check ChromaDB availability
+        const chromaCheck = await checkChromaAvailability(cfg.chromaUrl);
+        if (!chromaCheck.available) {
+          throw new Error(
+            `ChromaDB not available at ${cfg.chromaUrl}. ${chromaCheck.error}`
+          );
+        }
+
+        const chromaDB = new ChromaVectorDB({ url: cfg.chromaUrl });
+        let textResponse = '';
+        const structuredContent: Record<string, unknown> = {};
+
+        switch (action) {
+          case 'list': {
+            const items = await chromaDB.listIndexedContent();
+            structuredContent.items = items;
+
+            textResponse += `📋 Indexed Content (${items.length} items)\n\n`;
+            if (items.length === 0) {
+              textResponse += 'No content indexed yet.\n';
+            } else {
+              for (const item of items) {
+                textResponse += `• ${item.contentHash.slice(0, 12)}...\n`;
+                if (item.paperId) {
+                  textResponse += `  paperId: ${item.paperId}${item.paperVersion ? ` (${item.paperVersion})` : ''}\n`;
+                }
+                textResponse += `  chunks: ${item.chunkCount}\n`;
+              }
+            }
+            break;
+          }
+
+          case 'stats': {
+            const stats = await chromaDB.getCollectionStats();
+            structuredContent.stats = stats;
+
+            textResponse += `📊 RAG Statistics\n\n`;
+            textResponse += `Total chunks: ${stats.totalChunks}\n`;
+            textResponse += `Unique content hashes: ${stats.uniqueContentHashes}\n`;
+            if (stats.byPaperId.length > 0) {
+              textResponse += `\nBy Paper ID:\n`;
+              for (const item of stats.byPaperId) {
+                textResponse += `  • ${item.paperId}: ${item.chunkCount} chunks\n`;
+              }
+            }
+            break;
+          }
+
+          case 'delete': {
+            if (!contentHash) {
+              throw new Error('contentHash is required for delete action');
+            }
+
+            const deletedCount = await chromaDB.deleteByContentHash(contentHash);
+            structuredContent.deleted = deletedCount > 0;
+            structuredContent.deletedChunks = deletedCount;
+
+            if (deletedCount > 0) {
+              textResponse += `🗑️ Deleted ${deletedCount} chunks\n`;
+              textResponse += `   contentHash: ${contentHash.slice(0, 12)}...\n`;
+            } else {
+              textResponse += `⚠️ No chunks found with contentHash: ${contentHash.slice(0, 12)}...\n`;
+            }
+            break;
+          }
         }
 
         return {

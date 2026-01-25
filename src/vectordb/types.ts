@@ -21,6 +21,12 @@ export interface ChunkMetadata {
   chunkType: ChunkType;
   /** Original field name in RepoCard (e.g., 'oneLiner', 'useCases') */
   fieldName?: string;
+  /** Source file SHA256 hash for deduplication */
+  contentHash?: string;
+  /** Paper identifier (e.g., 'arxiv:2601.14287', 'doi:10.1234/xxx') */
+  paperId?: string;
+  /** Paper version (e.g., 'v1', 'v2') */
+  paperVersion?: string;
 }
 
 /**

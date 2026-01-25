@@ -199,6 +199,10 @@ export class ChromaVectorDB {
         chunkIndex: c.metadata.chunkIndex,
         chunkType: c.metadata.chunkType,
         fieldName: c.metadata.fieldName ?? '',
+        // Deduplication fields
+        contentHash: c.metadata.contentHash ?? '',
+        paperId: c.metadata.paperId ?? '',
+        paperVersion: c.metadata.paperVersion ?? '',
       }));
 
       await this.request('POST', `${this.getBasePath()}/collections/${collection.id}/upsert`, {
@@ -321,6 +325,151 @@ export class ChromaVectorDB {
       where: { bundleId },
     });
     logger.info(`Deleted chunks for bundle: ${bundleId}`);
+  }
+
+  // --------------------------------------------------------------------------
+  // Content Hash Operations (for deduplication)
+  // --------------------------------------------------------------------------
+
+  /**
+   * Get chunks by contentHash (source file SHA256).
+   * Used for deduplication check before indexing.
+   */
+  async getChunksByContentHash(contentHash: string): Promise<ChunkDocument[]> {
+    const collection = await this.ensureCollection('chunks');
+
+    const response = await this.request<ChromaGetResponse>(
+      'POST',
+      `${this.getBasePath()}/collections/${collection.id}/get`,
+      {
+        where: { contentHash },
+        include: ['documents', 'metadatas'],
+      }
+    );
+
+    const chunks: ChunkDocument[] = [];
+    for (let i = 0; i < response.ids.length; i++) {
+      const id = response.ids[i]!;
+      const document = response.documents?.[i] ?? '';
+      const metadata = response.metadatas?.[i] as ChunkMetadata | null;
+
+      chunks.push({
+        id,
+        content: document,
+        metadata: metadata ?? {
+          sourceType: 'readme',
+          bundleId: '',
+          chunkIndex: 0,
+          chunkType: 'text',
+        },
+      });
+    }
+
+    return chunks;
+  }
+
+  /**
+   * Delete all chunks with a specific contentHash.
+   * Used when force-replacing content.
+   */
+  async deleteByContentHash(contentHash: string): Promise<number> {
+    const collection = await this.ensureCollection('chunks');
+    
+    // First get count of chunks to delete
+    const existing = await this.getChunksByContentHash(contentHash);
+    if (existing.length === 0) return 0;
+
+    await this.request('POST', `${this.getBasePath()}/collections/${collection.id}/delete`, {
+      where: { contentHash },
+    });
+    
+    logger.info(`Deleted ${existing.length} chunks with contentHash: ${contentHash.slice(0, 12)}...`);
+    return existing.length;
+  }
+
+  /**
+   * List all unique contentHash values in the collection.
+   * Returns summary info for each indexed content.
+   */
+  async listIndexedContent(): Promise<Array<{
+    contentHash: string;
+    paperId?: string;
+    paperVersion?: string;
+    bundleId: string;
+    chunkCount: number;
+  }>> {
+    const collection = await this.ensureCollection('chunks');
+
+    // Get all chunks (ChromaDB doesn't support DISTINCT)
+    const response = await this.request<ChromaGetResponse>(
+      'POST',
+      `${this.getBasePath()}/collections/${collection.id}/get`,
+      {
+        include: ['metadatas'],
+      }
+    );
+
+    // Group by contentHash
+    const contentMap = new Map<string, {
+      contentHash: string;
+      paperId?: string;
+      paperVersion?: string;
+      bundleId: string;
+      chunkCount: number;
+    }>();
+
+    for (let i = 0; i < response.ids.length; i++) {
+      const metadata = response.metadatas?.[i] as ChunkMetadata | null;
+      const contentHash = metadata?.contentHash;
+      if (!contentHash) continue;
+
+      const existing = contentMap.get(contentHash);
+      if (existing) {
+        existing.chunkCount++;
+      } else {
+        contentMap.set(contentHash, {
+          contentHash,
+          paperId: metadata?.paperId,
+          paperVersion: metadata?.paperVersion,
+          bundleId: metadata?.bundleId ?? '',
+          chunkCount: 1,
+        });
+      }
+    }
+
+    return Array.from(contentMap.values());
+  }
+
+  /**
+   * Get collection statistics.
+   */
+  async getCollectionStats(): Promise<{
+    totalChunks: number;
+    uniqueContentHashes: number;
+    byPaperId: Array<{ paperId: string; chunkCount: number }>;
+  }> {
+    const indexed = await this.listIndexedContent();
+    
+    // Group by paperId
+    const paperMap = new Map<string, number>();
+    let totalChunks = 0;
+
+    for (const item of indexed) {
+      totalChunks += item.chunkCount;
+      if (item.paperId) {
+        const current = paperMap.get(item.paperId) ?? 0;
+        paperMap.set(item.paperId, current + item.chunkCount);
+      }
+    }
+
+    return {
+      totalChunks,
+      uniqueContentHashes: indexed.length,
+      byPaperId: Array.from(paperMap.entries()).map(([paperId, chunkCount]) => ({
+        paperId,
+        chunkCount,
+      })),
+    };
   }
 
   // --------------------------------------------------------------------------
