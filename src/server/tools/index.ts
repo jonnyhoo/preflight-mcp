@@ -4,8 +4,7 @@
  */
 
 export { registerBundleTools, type BundleToolsOptions } from './bundle/index.js';
-export { registerSearchTools, type SearchToolsOptions } from './searchTools.js';
-export { registerSemanticTools } from './semanticTools.js';
+export { registerSearchTools } from './searchTools.js';
 export { registerLspTools } from './lspTools.js';
 export { registerCheckTools } from './checkTools.js';
 export { registerDistillTools } from './distillTools.js';

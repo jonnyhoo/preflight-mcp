@@ -95,9 +95,8 @@ const LLM_RECOVERY_HINTS: Record<PreflightErrorKind, string> = {
 3. If on Windows, check if another process has locked the file`,
 
   index_missing_or_corrupt: `💡 Recovery steps:
-1. Run preflight_repair_bundle with rebuildIndex=true
-2. If repair fails, delete and recreate the bundle
-3. Check disk space - SQLite needs room for write-ahead log`,
+1. Delete and recreate the bundle with preflight_delete_bundle and preflight_create_bundle
+2. Check disk space - SQLite needs room for write-ahead log`,
 
   deprecated_parameter: `💡 Note:
 This parameter is deprecated. The tool is now strictly read-only.

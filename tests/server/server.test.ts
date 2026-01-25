@@ -58,23 +58,27 @@ describe('MCP Server', () => {
       // the full server lifecycle due to stdio transport. Instead, we verify
       // the tool registration calls.
       
-      // Expected tool names based on server.ts implementation
+      // Expected tool names based on server.ts implementation (coreOnly mode)
+      // Note: LSP tools are conditional on cfg.lsp.enabled
       const expectedTools = [
+        // Bundle Management (6)
+        'preflight_create_bundle',
         'preflight_list_bundles',
+        'preflight_delete_bundle',
         'preflight_get_overview',
         'preflight_read_file',
         'preflight_repo_tree',
-        'preflight_delete_bundle',
-        'preflight_create_bundle',
-        'preflight_repair_bundle',
-        'preflight_update_bundle',
-        'preflight_search_by_tags',
-        'preflight_read_files',
+        // Search (1)
         'preflight_search_and_read',
+        // Code Intelligence (2) - lsp is conditional
+        'preflight_check',
+        // Knowledge Distillation (2)
+        'preflight_generate_card',
+        'preflight_rag',
       ];
 
-      // Verify we have defined the expected tools
-      expect(expectedTools.length).toBeGreaterThan(10);
+      // Verify we have defined the expected tools (10 core + optional lsp)
+      expect(expectedTools.length).toBeGreaterThanOrEqual(10);
       
       // Each tool should have a unique name
       const uniqueTools = new Set(expectedTools);

@@ -15,7 +15,6 @@ import { registerDeleteBundleTool } from './delete.js';
 import { registerGetOverviewTool } from './overview.js';
 import { registerReadFileTool } from './read.js';
 import { registerRepoTreeTool } from './tree.js';
-import { registerRepairBundleTool } from './repair.js';
 import { registerUpdateBundleTool } from './update.js';
 import { registerCleanupOrphansTool } from './cleanup.js';
 import { registerGetTaskStatusTool } from './taskStatus.js';
@@ -40,8 +39,7 @@ export function registerBundleTools(deps: ToolDependencies, options?: BundleTool
   registerReadFileTool(deps, coreOnly);
   registerRepoTreeTool(deps, coreOnly);
 
-  // Non-core tools (4)
-  registerRepairBundleTool(deps, coreOnly);
+  // Non-core tools (3)
   registerUpdateBundleTool(deps, coreOnly);
   registerCleanupOrphansTool(deps, coreOnly);
   registerGetTaskStatusTool(deps, coreOnly);

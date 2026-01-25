@@ -380,9 +380,9 @@ export const RecoveryHints: Record<string, string> = {
   [ErrorCodes.INVALID_PATH]: 
     'Use bundle-relative paths only (no ".." or absolute paths). Format: repos/{owner}/{repo}/norm/{path}.',
   [ErrorCodes.INDEX_MISSING]: 
-    'Run preflight_repair_bundle with rebuildIndex=true to rebuild the search index.',
+    'The search index is missing. Try deleting and recreating the bundle with preflight_delete_bundle and preflight_create_bundle.',
   [ErrorCodes.INDEX_CORRUPT]: 
-    'Run preflight_repair_bundle with rebuildIndex=true to rebuild the search index.',
+    'The search index is corrupt. Try deleting and recreating the bundle with preflight_delete_bundle and preflight_create_bundle.',
   [ErrorCodes.INVALID_CURSOR]: 
     'The cursor is invalid or expired. Start a new search without a cursor.',
   [ErrorCodes.INVALID_RANGE]: 

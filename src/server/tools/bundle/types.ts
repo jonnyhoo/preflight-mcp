@@ -120,14 +120,6 @@ export const DeleteBundleInputSchema = {
   ),
 };
 
-export const RepairBundleInputSchema = {
-  bundleId: z.string().describe('Bundle ID to repair.'),
-  mode: z.enum(['validate', 'repair']).default('repair').describe('validate=report missing components only; repair=fix missing derived artifacts.'),
-  rebuildIndex: z.boolean().optional().describe('If true, rebuild search index when missing/empty.'),
-  rebuildGuides: z.boolean().optional().describe('If true, rebuild START_HERE.md and AGENTS.md when missing/empty.'),
-  rebuildOverview: z.boolean().optional().describe('If true, rebuild OVERVIEW.md when missing/empty.'),
-};
-
 export const GetTaskStatusInputSchema = {
   taskId: z.string().optional().describe('Task ID to query (from BUNDLE_IN_PROGRESS error).'),
   fingerprint: z.string().optional().describe('Fingerprint to query (computed from repos).'),

@@ -494,12 +494,8 @@ export function createSearchAndReadHandler(deps: {
           ctx,
           ErrorCodes.INDEX_CORRUPT,
           'Search index is missing or corrupt',
-          'Run preflight_repair_bundle with rebuildIndex=true to rebuild the index.'
+          'Delete and recreate the bundle with preflight_delete_bundle and preflight_create_bundle.'
         );
-        addNextAction(ctx, 'preflight_repair_bundle', {
-          bundleId: args.bundleId,
-          rebuildIndex: true,
-        }, 'Rebuild the search index');
         return formatResponse(response, format);
       }
 

@@ -11,9 +11,9 @@ import {
   rebuildIndex,
   searchIndex,
   buildFtsQuery,
-  verifyClaimInIndex,
   type SearchScope,
 } from '../../src/search/sqliteFts.js';
+import { verifyClaimInIndex } from '../../src/search/claim-verification.js';
 import type { IngestedFile } from '../../src/bundle/ingest.js';
 
 describe('buildFtsQuery', () => {

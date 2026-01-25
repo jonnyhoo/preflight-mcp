@@ -14,8 +14,8 @@ export default {
       },
     ],
   },
-  testMatch: ['**/tests/**/*.ts'],
-  testPathIgnorePatterns: ['/node_modules/', '/dist/'],
+  testMatch: ['**/tests/**/*.test.ts'],
+  testPathIgnorePatterns: ['/node_modules/', '/dist/', '\.script\.ts$'],
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json', 'node'],
   testTimeout: 30000,
 };

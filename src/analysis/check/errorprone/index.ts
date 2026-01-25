@@ -584,10 +584,14 @@ function isDefaultCase(caseNode: Node): boolean {
 
 /**
  * Check if a block node is empty (no statements, only comments/empty statements allowed).
- * Returns false if comments indicate intentional ignore (e.g., "// ignore", "// expected").
+ * Returns false if:
+ * - Comments indicate intentional ignore (e.g., "// ignore", "// expected")
+ * - Block contains only a single return statement (returning default value pattern)
  */
 function isEmptyBlock(node: Node): boolean {
   let hasIntentionalIgnoreComment = false;
+  let statementCount = 0;
+  let hasOnlyReturnStatement = false;
 
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
@@ -608,12 +612,23 @@ function isEmptyBlock(node: Node): boolean {
     // Empty statements are also considered "empty" (JS/TS/Java `;`, Python `pass`)
     if (child.type === 'empty_statement' || child.type === 'pass_statement') continue;
 
-    // Any other node means non-empty
-    return false;
+    // Count real statements
+    statementCount++;
+
+    // Single return statement is a common "return default value" pattern
+    if (child.type === 'return_statement') {
+      hasOnlyReturnStatement = statementCount === 1;
+    }
   }
 
   // If there's a comment indicating intentional ignore, don't report as empty
-  return !hasIntentionalIgnoreComment;
+  if (hasIntentionalIgnoreComment) return false;
+
+  // If block has only a single return statement, it's intentional (returning default value)
+  if (statementCount === 1 && hasOnlyReturnStatement) return false;
+
+  // Empty (no statements) is problematic
+  return statementCount === 0;
 }
 
 /**
@@ -625,6 +640,7 @@ function isIntentionalIgnoreComment(commentText: string): boolean {
   
   // Common patterns for intentional ignoring
   const ignorePatterns = [
+    // Explicit ignore keywords
     /\bignore\b/,
     /\bignored\b/,
     /\bexpected\b/,
@@ -643,12 +659,29 @@ function isIntentionalIgnoreComment(commentText: string): boolean {
     /\bnon-critical\b/,
     /\bbest[\s-]effort\b/,
     /\boptional\b/,
+    // Failure explanations
     /\bcan't\s+fail\b/,
     /\bcannot\s+fail\b/,
     /\bwon't\s+fail\b/,
     /\bnever\s+fails?\b/,
     /\bfile\s+(doesn't|does\s+not)\s+exist\b/,
     /\balready\s+(exists?|deleted|removed)\b/,
+    // Common explanatory patterns
+    /\bmissing\b/,
+    /\bunreadable\b/,
+    /\binaccessible\b/,
+    /\bcan't\s+be\s+(read|parsed|analyzed)\b/,
+    /\bcannot\s+be\s+(read|parsed|analyzed)\b/,
+    /\bfail(ed)?\s+to\s+(read|parse|open|analyze)\b/,
+    /\bfallback\b/,
+    /\bdefault\b.*\bvalue\b/,
+    /\bproceed\s+without\b/,
+    /\bclean(ed)?\s+(up|on)\b/,
+    /\bshutdown\b/,
+    /\bcorrupt\b/,
+    /\bnot\s+found\b/,
+    /\bdoesn't\s+exist\b/,
+    /\bdoes\s+not\s+exist\b/,
   ];
 
   return ignorePatterns.some(pattern => pattern.test(normalized));

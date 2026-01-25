@@ -201,7 +201,7 @@ export async function startServer(): Promise<void> {
   registerBundleTools(deps, { coreOnly: true });
 
   // Core search tools (1): search_and_read
-  registerSearchTools(deps, { coreOnly: true });
+  registerSearchTools(deps);
 
   // LSP for precise navigation (1)
   if (cfg.lsp.enabled) {
@@ -337,11 +337,9 @@ export async function startServer(): Promise<void> {
 
 1. preflight_create_bundle - 创建 bundle 索引项目
 2. preflight_get_overview - 读取项目概览
-3. preflight_build_call_graph - 构建函数调用关系图
-4. 分析总结：
-   - 项目核心功能
-   - 主要模块及调用关系
-   - 入口函数和关键路径
+3. preflight_search_and_read - 搜索关键代码
+4. preflight_check - 检查代码质量
+5. preflight_lsp - 精确定位（定义、引用）
 \`\`\`
 
 **📚 Bundle 文件结构:**
@@ -441,25 +439,18 @@ export async function startServer(): Promise<void> {
 或: 读取 bundle {bundleId}
 \`\`\`
 
-**更新 bundle**（同步最新代码）
-\`\`\`
-更新 bundle {bundleId}
-或: 检查 {bundleId} 是否有更新
-\`\`\`
-
-**修复 bundle**（重建索引）
-\`\`\`
-修复 bundle {bundleId}
-或: 重建 {bundleId} 的搜索索引
-\`\`\`
-
 **删除 bundle**
 \`\`\`
 删除 bundle {bundleId}
 \`\`\`
 
+**重新创建**（如需更新，先删除再重建）
+\`\`\`
+preflight_delete_bundle + preflight_create_bundle
+\`\`\`
+
 ---
-💡 先运行「列出所有 bundle」获取 bundleId 列表`,
+💡 先运行「列出所有 bundle」获取 bundleId 列表`
             },
           },
         ],
