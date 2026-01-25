@@ -90,6 +90,8 @@ export interface QueryResult {
     chunksRetrieved: number;
     entitiesFound?: number;
     graphExpansion?: number;
+    /** Number of hops in multi-hop context completion */
+    contextCompletionHops?: number;
     durationMs: number;
   };
 }

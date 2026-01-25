@@ -31,13 +31,15 @@ export {
   ragQuery,
 } from './query.js';
 
-// Context Completer (TODO: multi-hop enhancement)
+// Context Completer (multi-hop enhancement)
 export type {
   ContextCompletionResult,
   CompletionOptions,
+  ContextCompleterDeps,
 } from './context-completer.js';
 
 export {
+  ContextCompleter,
   completeContext,
   verifyChunkCompleteness,
 } from './context-completer.js';

@@ -152,12 +152,11 @@ export class LocalStorageAdapter implements StorageAdapter {
 }
 
 /**
- * S3 Storage Adapter - NOT YET IMPLEMENTED
- *
- * TODO: This is a placeholder implementation. To use S3 storage:
+ * S3 Storage Adapter - Placeholder implementation.
+ * 
+ * To use S3 storage:
  * 1. Install AWS SDK: npm install @aws-sdk/client-s3
  * 2. Implement the getS3Client method
- * 3. Remove this warning comment
  *
  * @experimental This adapter is not functional. Use LocalStorageAdapter instead.
  */
@@ -186,8 +185,7 @@ export class S3StorageAdapter implements StorageAdapter {
   }
 
   private async getS3Client(): Promise<any> {
-    // TODO: Import AWS SDK - requires @aws-sdk/client-s3
-    // This is a placeholder that throws to prevent accidental use.
+    // Placeholder - requires @aws-sdk/client-s3
     throw new Error(
       'S3StorageAdapter is not implemented. Install @aws-sdk/client-s3 and implement this method.'
     );
@@ -331,8 +329,7 @@ export class StorageManager {
       this.primaryAdapter = 'default';
     }
 
-    // TODO: Initialize other storage adapters here (S3, GCS, Azure Blob Storage, etc.)
-    // These are not yet implemented.
+    // Additional storage adapters (S3, GCS, Azure) can be added here when implemented.
   }
 
   getAdapter(name = 'default'): StorageAdapter {

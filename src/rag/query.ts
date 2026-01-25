@@ -10,6 +10,8 @@ import { buildAstGraph } from '../kg/ast-graph-builder.js';
 import { KGStorage } from '../kg/storage.js';
 import { RAGRetriever } from './retriever.js';
 import { RAGGenerator } from './generator.js';
+import { ContextCompleter } from './context-completer.js';
+import type { SemanticChunk } from '../bridge/types.js';
 import type { 
   QueryOptions, 
   QueryResult, 
@@ -35,6 +37,7 @@ export class RAGEngine {
   private kgStorage: KGStorage;
   private retriever: RAGRetriever;
   private generator: RAGGenerator;
+  private contextCompleter: ContextCompleter;
 
   constructor(config: RAGConfig) {
     this.chromaDB = new ChromaVectorDB({ url: config.chromaUrl });
@@ -43,6 +46,29 @@ export class RAGEngine {
     this.kgStorage = new KGStorage();
     this.retriever = new RAGRetriever(this.chromaDB, this.embedding, this.kgStorage);
     this.generator = new RAGGenerator(this.llm);
+    this.contextCompleter = new ContextCompleter({
+      chromaDB: this.chromaDB,
+      embedding: this.embedding,
+    });
+  }
+
+  /**
+   * Convert ChunkDocument to SemanticChunk format.
+   */
+  private toSemanticChunk(chunk: { id: string; content: string; metadata: any }): SemanticChunk {
+    return {
+      id: chunk.id,
+      content: chunk.content,
+      chunkType: (chunk.metadata.chunkType as SemanticChunk['chunkType']) ?? 'text',
+      isComplete: true,
+      metadata: {
+        sourceType: chunk.metadata.sourceType,
+        bundleId: chunk.metadata.bundleId,
+        repoId: chunk.metadata.repoId,
+        filePath: chunk.metadata.filePath,
+        chunkIndex: chunk.metadata.chunkIndex,
+      },
+    };
   }
 
   /**
@@ -165,11 +191,70 @@ export class RAGEngine {
 
     logger.info(`Retrieved ${retrieved.chunks.length} chunks`);
 
-    // Generate
-    const generated = await this.generator.generate(question, retrieved, {
-      enableVerification: opts.enableVerification,
-      retryOnLowFaithfulness: opts.retryOnLowFaithfulness,
-    });
+    // Multi-hop context completion (if enabled)
+    let finalChunks = retrieved.chunks;
+    let contextCompletionStats: { hopCount: number; searchHistory: string[] } | undefined;
+
+    if (opts.enableContextCompletion && retrieved.chunks.length > 0) {
+      try {
+        // Set filter for context completer
+        this.contextCompleter.setFilter(filter);
+
+        // Convert to SemanticChunk format for completer
+        const semanticChunks = retrieved.chunks.map(c => this.toSemanticChunk(c));
+
+        const completionResult = await this.contextCompleter.complete(
+          semanticChunks,
+          { maxDepth: opts.maxHops, maxBreadth: 5 }
+        );
+
+        // Add new chunks with lower score
+        if (completionResult.chunks.length > retrieved.chunks.length) {
+          const existingIds = new Set(retrieved.chunks.map(c => c.id));
+          
+          finalChunks = [...retrieved.chunks];
+          for (const chunk of completionResult.chunks) {
+            if (!existingIds.has(chunk.id)) {
+              finalChunks.push({
+                id: chunk.id,
+                content: chunk.content,
+                metadata: {
+                  sourceType: chunk.metadata.sourceType,
+                  bundleId: chunk.metadata.bundleId,
+                  repoId: chunk.metadata.repoId,
+                  filePath: chunk.metadata.filePath,
+                  chunkIndex: chunk.metadata.chunkIndex,
+                  chunkType: chunk.chunkType,
+                },
+                score: 0.5, // Lower score for hop-retrieved chunks
+              });
+            }
+          }
+          
+          logger.info(
+            `Context completion: ${completionResult.hopCount} hops, ` +
+            `added ${finalChunks.length - retrieved.chunks.length} chunks`
+          );
+        }
+
+        contextCompletionStats = {
+          hopCount: completionResult.hopCount,
+          searchHistory: completionResult.searchHistory,
+        };
+      } catch (err) {
+        logger.warn(`Context completion failed: ${err}`);
+      }
+    }
+
+    // Generate with final context
+    const generated = await this.generator.generate(
+      question,
+      { ...retrieved, chunks: finalChunks },
+      {
+        enableVerification: opts.enableVerification,
+        retryOnLowFaithfulness: opts.retryOnLowFaithfulness,
+      }
+    );
 
     return {
       answer: generated.answer,
@@ -177,9 +262,10 @@ export class RAGEngine {
       relatedEntities: generated.relatedEntities,
       faithfulnessScore: generated.faithfulnessScore,
       stats: {
-        chunksRetrieved: retrieved.chunks.length,
+        chunksRetrieved: finalChunks.length,
         entitiesFound: retrieved.expandedTypes?.length,
         graphExpansion: retrieved.expandedTypes?.length ?? 0,
+        contextCompletionHops: contextCompletionStats?.hopCount,
         durationMs: Date.now() - startTime,
       },
     };
