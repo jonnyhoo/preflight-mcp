@@ -16,10 +16,81 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as os from 'node:os';
 import { createModuleLogger } from '../logging/logger.js';
 import { getConfig } from '../config.js';
 
 const logger = createModuleLogger('pdf-preprocessor');
+
+// ============================================================================
+// VLM Config Loading (reuse vlmConfigs from config.json)
+// ============================================================================
+
+interface VLMWorkerConfig {
+  apiBase: string;
+  apiKey: string;
+  model: string;
+}
+
+/**
+ * Load VLM configs from config.json.
+ * Prefers vlmConfigs array for parallel processing, falls back to single config.
+ */
+function loadVlmConfigs(): VLMWorkerConfig[] {
+  const configPaths = [
+    process.env.PREFLIGHT_CONFIG_PATH,
+    path.join(os.homedir(), '.preflight', 'config.json'),
+    path.join(os.homedir(), '.preflight-mcp', 'config.json'),
+  ].filter(Boolean) as string[];
+  
+  for (const configPath of configPaths) {
+    try {
+      if (!fs.existsSync(configPath)) continue;
+      
+      const content = fs.readFileSync(configPath, 'utf8');
+      const config = JSON.parse(content) as {
+        vlmConfigs?: VLMWorkerConfig[];
+        vlmApiBase?: string;
+        vlmApiKey?: string;
+        vlmModel?: string;
+      };
+      
+      // Prefer vlmConfigs array
+      if (config.vlmConfigs && Array.isArray(config.vlmConfigs)) {
+        const valid = config.vlmConfigs.filter(
+          (c): c is VLMWorkerConfig => !!(c?.apiBase && c?.apiKey && c?.model)
+        );
+        if (valid.length > 0) {
+          logger.info(`[Image Description] Loaded ${valid.length} VLM configs for parallel processing`);
+          return valid;
+        }
+      }
+      
+      // Fallback to single config
+      if (config.vlmApiBase && config.vlmApiKey) {
+        return [{
+          apiBase: config.vlmApiBase,
+          apiKey: config.vlmApiKey,
+          model: config.vlmModel || 'qwen3-vl-plus',
+        }];
+      }
+    } catch {
+      // Continue to next config path
+    }
+  }
+  
+  // Final fallback: environment variables
+  const cfg = getConfig();
+  if (cfg.vlmApiBase && cfg.vlmApiKey) {
+    return [{
+      apiBase: cfg.vlmApiBase,
+      apiKey: cfg.vlmApiKey,
+      model: cfg.vlmModel,
+    }];
+  }
+  
+  return [];
+}
 
 // ============================================================================
 // Types
@@ -235,15 +306,16 @@ function dehyphenate(markdown: string, useLLM = false): { result: string; count:
 }
 
 // ============================================================================
-// Image Description (VLM)
+// Image Description (VLM) - Parallel Processing
 // ============================================================================
 
 /**
  * Generate VLM descriptions for images referenced in markdown.
+ * Uses all available VLM configs for parallel processing (round-robin).
  * 
  * For each ![](images/xxx.jpg) reference:
  * 1. Read the image file from bundle
- * 2. Call VLM to generate a detailed description
+ * 2. Call VLM to generate a detailed description (parallel across configs)
  * 3. Insert the description as a searchable [Figure: ...] block
  * 
  * This makes image content searchable via embedding.
@@ -252,13 +324,11 @@ async function describeImages(
   markdown: string,
   bundlePath?: string
 ): Promise<{ result: string; count: number }> {
-  let count = 0;
+  // Load VLM configs (reuses vlmConfigs array if available)
+  const vlmConfigs = loadVlmConfigs();
   
-  const cfg = getConfig();
-  
-  // Check if VLM is available
-  if (!cfg.vlmEnabled || !cfg.vlmApiKey || !cfg.vlmApiBase) {
-    logger.debug('VLM not configured, skipping image description');
+  if (vlmConfigs.length === 0) {
+    logger.debug('No VLM configured, skipping image description');
     return { result: markdown, count: 0 };
   }
   
@@ -270,41 +340,67 @@ async function describeImages(
     return { result: markdown, count: 0 };
   }
   
-  logger.info(`Found ${matches.length} images to describe`);
+  // Filter images that need description
+  interface ImageTask {
+    fullMatch: string;
+    altText: string;
+    imagePath: string;
+    resolvedPath: string;
+  }
   
-  // Process images (could be parallelized for speed)
-  let result = markdown;
+  const tasks: ImageTask[] = [];
   for (const match of matches) {
     const [fullMatch, altText, imagePath] = match;
     if (!fullMatch || !imagePath) continue;
     
-    try {
-      // Skip if already has description
-      if (altText && altText.length > 20) {
-        continue;
-      }
+    // Skip if already has description
+    if (altText && altText.length > 20) continue;
+    
+    // Try to resolve image path
+    const resolvedPath = resolveImagePath(bundlePath, imagePath);
+    if (!resolvedPath) {
+      logger.debug(`Cannot resolve image path: ${imagePath}`);
+      continue;
+    }
+    
+    tasks.push({ fullMatch, altText: altText ?? '', imagePath, resolvedPath });
+  }
+  
+  if (tasks.length === 0) {
+    return { result: markdown, count: 0 };
+  }
+  
+  logger.info(`[Image Description] Processing ${tasks.length} images with ${vlmConfigs.length} VLM workers`);
+  
+  // Process all images in parallel using Promise.all with round-robin config assignment
+  const results = await Promise.all(
+    tasks.map(async (task, index) => {
+      // Round-robin: assign each task to a different VLM config
+      const config = vlmConfigs[index % vlmConfigs.length]!;
       
-      // Try to resolve image path
-      const resolvedPath = resolveImagePath(bundlePath, imagePath);
-      if (!resolvedPath) {
-        logger.debug(`Cannot resolve image path: ${imagePath}`);
-        continue;
+      try {
+        const description = await callVlmForImage(task.resolvedPath, config);
+        return { task, description };
+      } catch (err) {
+        logger.warn(`Failed to describe image ${task.imagePath}: ${err}`);
+        return { task, description: null };
       }
-      
-      // Generate description using VLM
-      const description = await generateImageDescription(resolvedPath, cfg);
-      
-      if (description) {
-        count++;
-        // Append description after the image reference
-        const enhancedBlock = `${fullMatch}\n\n[Figure: ${description}]\n`;
-        result = result.replace(fullMatch, enhancedBlock);
-      }
-    } catch (err) {
-      logger.warn(`Failed to describe image ${imagePath}: ${err}`);
+    })
+  );
+  
+  // Apply descriptions to markdown
+  let result = markdown;
+  let count = 0;
+  
+  for (const { task, description } of results) {
+    if (description) {
+      count++;
+      const enhancedBlock = `${task.fullMatch}\n\n[Figure: ${description}]\n`;
+      result = result.replace(task.fullMatch, enhancedBlock);
     }
   }
   
+  logger.info(`[Image Description] Successfully described ${count}/${tasks.length} images`);
   return { result, count };
 }
 
@@ -338,11 +434,13 @@ function resolveImagePath(bundlePath: string, imagePath: string): string | null 
 }
 
 /**
- * Generate image description using VLM API.
+ * Call VLM API to generate image description.
+ * @param imagePath - Path to image file
+ * @param config - VLM worker config to use
  */
-async function generateImageDescription(
+async function callVlmForImage(
   imagePath: string,
-  cfg: ReturnType<typeof getConfig>
+  config: VLMWorkerConfig
 ): Promise<string | null> {
   // Read and encode image
   const imageBuffer = fs.readFileSync(imagePath);
@@ -358,15 +456,15 @@ async function generateImageDescription(
 Be specific and detailed. Output only the description, no preamble.`;
 
   try {
-    const url = `${cfg.vlmApiBase?.replace(/\/$/, '')}/chat/completions`;
+    const url = `${config.apiBase.replace(/\/$/, '')}/chat/completions`;
     const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${cfg.vlmApiKey}`,
+        'Authorization': `Bearer ${config.apiKey}`,
       },
       body: JSON.stringify({
-        model: cfg.vlmModel,
+        model: config.model,
         messages: [
           {
             role: 'user',
@@ -379,11 +477,11 @@ Be specific and detailed. Output only the description, no preamble.`;
         temperature: 0.3,
         max_tokens: 500,
       }),
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.timeout(60000), // 60s timeout per image
     });
     
     if (!response.ok) {
-      logger.warn(`VLM API error: ${response.status}`);
+      logger.warn(`VLM API error: ${response.status} from ${config.apiBase}`);
       return null;
     }
     
@@ -393,7 +491,7 @@ Be specific and detailed. Output only the description, no preamble.`;
     
     return data.choices?.[0]?.message?.content?.trim() ?? null;
   } catch (err) {
-    logger.warn(`VLM request failed: ${err}`);
+    logger.warn(`VLM request to ${config.apiBase} failed: ${err}`);
     return null;
   }
 }
