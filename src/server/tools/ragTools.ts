@@ -14,7 +14,7 @@ import { findBundleStorageDir } from '../../bundle/service.js';
 import { getBundlePaths } from '../../bundle/paths.js';
 import { wrapPreflightError } from '../../mcp/errorKinds.js';
 import { createModuleLogger } from '../../logging/logger.js';
-import { callLLM, getLLMConfig } from '../../distill/llm-client.js';
+import { callLLM, getLLMConfig, getVerifierLLMConfig, type LLMConfig } from '../../distill/llm-client.js';
 
 const logger = createModuleLogger('rag-tool');
 
@@ -48,21 +48,24 @@ const engineCache = new Map<string, RAGEngine>();
 
 async function getOrCreateEngine(
   bundleId: string,
-  cfg: ToolDependencies['cfg']
-): Promise<{ engine: RAGEngine; embeddingEndpoint: string; llmEnabled: boolean }> {
+  cfg: ToolDependencies['cfg'],
+  options?: { useVerifierLlm?: boolean }
+): Promise<{ engine: RAGEngine; embeddingEndpoint: string; llmEnabled: boolean; llmModel: string }> {
   // Create embedding provider using unified config
   const { embedding, embeddingConfig } = createEmbeddingFromConfig(cfg);
   const embeddingEndpoint = describeEmbeddingEndpoint(embeddingConfig) ?? cfg.ollamaHost ?? 'ollama';
 
-  // Check LLM availability (reuse repocard LLM config)
-  const llmConfig = getLLMConfig();
+  // Check LLM availability - use verifier LLM if requested
+  const llmConfig: LLMConfig = options?.useVerifierLlm ? getVerifierLLMConfig() : getLLMConfig();
   const llmEnabled = llmConfig.enabled && !!llmConfig.apiKey;
+  const llmModel = llmConfig.model;
 
   // Check cache - use a combined key since LLM state can affect engine behavior
-  const cacheKey = `${bundleId}_llm${llmEnabled ? '1' : '0'}`;
+  const llmKey = options?.useVerifierLlm ? 'verifier' : 'main';
+  const cacheKey = `${bundleId}_${llmKey}_llm${llmEnabled ? '1' : '0'}`;
   let engine = engineCache.get(cacheKey);
   if (engine) {
-    return { engine, embeddingEndpoint, llmEnabled };
+    return { engine, embeddingEndpoint, llmEnabled, llmModel };
   }
 
   // Create RAG config using config.chromaUrl
@@ -77,7 +80,7 @@ async function getOrCreateEngine(
     llm: llmEnabled
       ? {
           complete: async (prompt: string) => {
-            const response = await callLLM(prompt);
+            const response = await callLLM(prompt, undefined, llmConfig);
             return response.content;
           },
         }
@@ -85,7 +88,8 @@ async function getOrCreateEngine(
   };
 
   if (llmEnabled) {
-    logger.info('RAG engine initialized with LLM generation enabled');
+    const llmType = options?.useVerifierLlm ? 'verifier' : 'main';
+    logger.info(`RAG engine initialized with ${llmType} LLM (${llmModel})`);
   } else {
     logger.warn('RAG engine running without LLM - answers will be retrieval snippets only');
   }
@@ -95,7 +99,7 @@ async function getOrCreateEngine(
 
   // Cache it
   engineCache.set(cacheKey, engine);
-  return { engine, embeddingEndpoint, llmEnabled };
+  return { engine, embeddingEndpoint, llmEnabled, llmModel };
 }
 
 // ============================================================================
@@ -115,8 +119,15 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
         '- Both: `{"bundleId": "<id>", "index": true, "question": "..."}`\n\n' +
         '**Deduplication:** Same PDF won\'t be indexed twice. If skipped, use `force: true` to replace:\n' +
         '- Replace: `{"bundleId": "<id>", "index": true, "force": true}`\n\n' +
-        '**Query modes:** `naive` (vector only), `local` (vector + neighbor), `hybrid` (vector + AST graph, default)\n' +
+        '**Query modes:** `naive` (vector only), `local` (vector + neighbor), `hybrid` (vector + AST graph, default)\n\n' +
+        '**Cross-validation (recommended for important queries):**\n' +
+        'For higher answer reliability, call this tool twice with `useVerifierLlm: true` on the second call. ' +
+        'This uses a different LLM (configured as `verifierLlm*` in config.json) to independently answer the same question. ' +
+        'Compare both answers to verify correctness.\n' +
+        '- First call: `{"bundleId": "<id>", "question": "..."}` (uses default LLM)\n' +
+        '- Second call: `{"bundleId": "<id>", "question": "...", "useVerifierLlm": true}` (uses verifier LLM)\n\n' +
         '**Config:** Requires `chromaUrl` and `embeddingEnabled` in `~/.preflight/config.json`\n' +
+        'Optional: `verifierLlmApiBase`, `verifierLlmApiKey`, `verifierLlmModel` for cross-validation.\n' +
         'Use when: "RAG问答", "知识检索", "语义搜索", "index bundle", "向量查询", "重新索引", "覆盖旧版本".',
       inputSchema: {
         bundleId: z.string().describe('Bundle ID to index or query'),
@@ -126,6 +137,9 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
         mode: z.enum(['naive', 'local', 'hybrid']).optional().describe('Query mode (default: hybrid)'),
         topK: z.number().optional().describe('Number of chunks to retrieve (default: 10)'),
         repoId: z.string().optional().describe('Filter by repo ID'),
+        expandToParent: z.boolean().optional().describe('Expand to parent chunks for more context (default: true)'),
+        expandToSiblings: z.boolean().optional().describe('Expand to sibling chunks at same level (default: true)'),
+        useVerifierLlm: z.boolean().optional().describe('Use verifier LLM instead of default LLM for cross-validation. Configure verifierLlm* in config.json. Call twice (once without, once with this flag) and compare answers for reliability.'),
       },
       outputSchema: {
         // Config info
@@ -171,7 +185,7 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
     },
     async (args) => {
       try {
-        const { bundleId, index, force, question, mode, topK, repoId } = args;
+        const { bundleId, index, force, question, mode, topK, repoId, expandToParent, expandToSiblings, useVerifierLlm } = args;
 
         // Validate: at least one action
         if (!index && !question) {
@@ -205,8 +219,8 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
         const paths = getBundlePaths(storageDir, bundleId);
         const bundlePath = paths.rootDir;
 
-        // Get RAG engine
-        const { engine, embeddingEndpoint, llmEnabled } = await getOrCreateEngine(bundleId, cfg);
+        // Get RAG engine (use verifier LLM if requested for cross-validation)
+        const { engine, embeddingEndpoint, llmEnabled, llmModel } = await getOrCreateEngine(bundleId, cfg, { useVerifierLlm });
 
         let indexResult: {
           chunksWritten: number;
@@ -267,7 +281,8 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
 
         // Query if requested
         if (question) {
-          logger.info(`Querying: "${question}" (mode: ${mode ?? 'hybrid'}, llm: ${llmEnabled})`);
+          const llmType = useVerifierLlm ? 'verifier' : 'main';
+          logger.info(`Querying: "${question}" (mode: ${mode ?? 'hybrid'}, llm: ${llmType}/${llmModel})`);
 
           // Try to load AST graph if not indexing in same call
           if (!index) {
@@ -285,6 +300,9 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
             retryOnLowFaithfulness: llmEnabled,
             enableContextCompletion: true,
             maxHops: 3, // Multi-hop for complete context
+            // Hierarchical expansion (default: true)
+            expandToParent: expandToParent ?? true,
+            expandToSiblings: expandToSiblings ?? true,
           });
 
           queryResult = {
@@ -302,7 +320,8 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
         let textResponse = '';
 
         // Show config info
-        textResponse += `🔧 Config: ChromaDB=${cfg.chromaUrl} | Embedding=${embeddingEndpoint}\n\n`;
+        const llmInfo = useVerifierLlm ? `VerifierLLM=${llmModel}` : `LLM=${llmModel}`;
+        textResponse += `🔧 Config: ChromaDB=${cfg.chromaUrl} | Embedding=${embeddingEndpoint} | ${llmInfo}\n\n`;
 
         if (indexResult) {
           if (indexResult.skipped) {

@@ -48,8 +48,30 @@ export function getLLMConfig(): LLMConfig {
   };
 }
 
-export async function callLLM(prompt: string, systemPrompt?: string): Promise<LLMResponse> {
-  const config = getLLMConfig();
+/**
+ * Get verifier LLM config for cross-validation.
+ * Falls back to main LLM config if verifier-specific config not set.
+ */
+export function getVerifierLLMConfig(): LLMConfig {
+  const cfg = getConfig();
+  const mainConfig = getLLMConfig();
+  
+  // If verifier LLM is explicitly configured, use it
+  if (cfg.verifierLlmEnabled) {
+    return {
+      apiBase: cfg.verifierLlmApiBase || mainConfig.apiBase,
+      apiKey: cfg.verifierLlmApiKey || mainConfig.apiKey,
+      model: cfg.verifierLlmModel || mainConfig.model,
+      enabled: true,
+    };
+  }
+  
+  // Otherwise fall back to main LLM (cross-validation still works, just same model)
+  return mainConfig;
+}
+
+export async function callLLM(prompt: string, systemPrompt?: string, configOverride?: LLMConfig): Promise<LLMResponse> {
+  const config = configOverride ?? getLLMConfig();
   if (!config.enabled || !config.apiKey) {
     throw new Error('LLM not enabled or API key not configured');
   }

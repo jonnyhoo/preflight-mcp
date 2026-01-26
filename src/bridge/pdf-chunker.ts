@@ -665,6 +665,9 @@ function semanticChunkByLevel(
         // Detect content blocks within this section
         const blocks = detectContentBlocks(node.content, currentPath);
         
+        // Track whether parent chunk was actually created (for child traversal)
+        let parentChunkCreated = false;
+        
         if (extractSubChunks) {
           // Separate text content from special blocks (table/formula/figure/code/list)
           const textBlocks: ContentBlock[] = [];
@@ -680,8 +683,6 @@ function semanticChunkByLevel(
           
           // Create main section chunk (text only)
           const textContent = textBlocks.map(b => b.content).join('\n\n');
-          // Track whether parent chunk was actually created
-          let parentChunkCreated = false;
           if (textContent.trim()) {
             result.push({
               type: 'text',
@@ -728,22 +729,27 @@ function semanticChunkByLevel(
         } else {
           // Original behavior: merge all blocks into one chunk
           const mergedContent = blocks.map(b => b.content).join('\n\n');
-          result.push({
-            type: 'text',
-            content: mergedContent,
-            heading: node.text,
-            headingPath: currentPath,
-            isSpecial: false,
-            parentPath: parentPath.length > 0 ? parentPath : undefined,
-            chunkId,
-            parentChunkId: trackHierarchy ? parentChunkId : undefined,
-            granularity,
-          });
+          // Only create chunk if there's actual content
+          if (mergedContent.trim()) {
+            result.push({
+              type: 'text',
+              content: mergedContent,
+              heading: node.text,
+              headingPath: currentPath,
+              isSpecial: false,
+              parentPath: parentPath.length > 0 ? parentPath : undefined,
+              chunkId,
+              parentChunkId: trackHierarchy ? parentChunkId : undefined,
+              granularity,
+            });
+            parentChunkCreated = true;
+          }
         }
         
-        // Continue traversing children with this chunk as parent
+        // Continue traversing children - only use this chunk as parent if it was actually created
         if (node.children.length > 0) {
-          traverse(node.children, currentPath, chunkId);
+          const nextParentId = parentChunkCreated ? chunkId : parentChunkId;
+          traverse(node.children, currentPath, nextParentId);
         }
       } else if (logicalLevel < targetLevel) {
         // This is a higher-level section, keep traversing
@@ -782,7 +788,9 @@ function multiScaleChunk(
   result.push(...coarseChunks);
   
   // Fine: level=4 (paragraphs) without sub-chunks (already extracted at coarse level)
-  const fineChunks = semanticChunkByLevel(tree, 4, trackHierarchy, false, 'paragraph');
+  // Note: trackHierarchy=false for fine chunks to avoid invalid parentChunkId references
+  // (fine chunks are independent and don't need parent-child linking)
+  const fineChunks = semanticChunkByLevel(tree, 4, false, false, 'paragraph');
   result.push(...fineChunks);
   
   logger.debug(`Multi-scale chunking: ${coarseChunks.length} coarse + ${fineChunks.length} fine chunks`);
@@ -855,7 +863,9 @@ export function academicChunk(
   }
 
   // 3. Convert to SemanticChunk with contextual prefix
-  const chunks: SemanticChunk[] = chunkedBlocks.map((block, index) => {
+  // First pass: generate chunk IDs and build mapping from raw chunkId to full ID
+  const chunkIdMap = new Map<string, string>();
+  const chunksWithIds = chunkedBlocks.map((block, index) => {
     // Build contextual prefix
     const sectionPath = block.headingPath?.join(' > ') || block.heading;
     let prefix = opts.includeParentContext && sectionPath
@@ -869,9 +879,34 @@ export function academicChunk(
     
     // Add prefix to content
     const contentWithContext = `${prefix}\n\n${block.content}`;
+    
+    // Generate full chunk ID
+    const fullChunkId = block.chunkId 
+      ? `${block.chunkId}_${generateChunkId(contentWithContext, index).slice(0, 8)}` 
+      : generateChunkId(contentWithContext, index);
+    
+    // Map raw chunkId to full ID for parent reference resolution
+    if (block.chunkId) {
+      chunkIdMap.set(block.chunkId, fullChunkId);
+    }
 
     return {
-      id: block.chunkId ? `${block.chunkId}_${generateChunkId(contentWithContext, index).slice(0, 8)}` : generateChunkId(contentWithContext, index),
+      block,
+      fullChunkId,
+      contentWithContext,
+      index,
+    };
+  });
+  
+  // Second pass: resolve parentChunkId to full format
+  const chunks: SemanticChunk[] = chunksWithIds.map(({ block, fullChunkId, contentWithContext, index }) => {
+    // Resolve parentChunkId to full format if it exists
+    const resolvedParentChunkId = block.parentChunkId 
+      ? chunkIdMap.get(block.parentChunkId) 
+      : undefined;
+    
+    return {
+      id: fullChunkId,
       content: contentWithContext,
       chunkType: block.type,
       isComplete: true, // Academic chunks are self-contained with context
@@ -884,7 +919,7 @@ export function academicChunk(
         sectionHeading: block.heading,
         headingLevel: block.headingPath ? block.headingPath.length : undefined,
         headingPath: block.headingPath,
-        parentChunkId: block.parentChunkId,
+        parentChunkId: resolvedParentChunkId,
         // NEW: Additional metadata for quality and traceability
         granularity: block.granularity,
         assetId: block.assetId,

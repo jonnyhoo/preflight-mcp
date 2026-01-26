@@ -15,6 +15,10 @@ interface ConfigFile {
   llmApiKey?: string;
   llmModel?: string;
   llmEnabled?: boolean;
+  // Verifier LLM for cross-validation (optional, separate from main LLM)
+  verifierLlmApiBase?: string;
+  verifierLlmApiKey?: string;
+  verifierLlmModel?: string;
   storageDir?: string;
   storageDirs?: string[];
   githubToken?: string;
@@ -215,6 +219,17 @@ export type PreflightConfig = {
   /** Enable LLM for card generation (auto-enabled if API key set). */
   llmEnabled: boolean;
 
+  // --- Verifier LLM (for RAG cross-validation) ---
+
+  /** Verifier LLM API base URL (optional, falls back to llmApiBase). */
+  verifierLlmApiBase?: string;
+  /** Verifier LLM API key (optional, falls back to llmApiKey). */
+  verifierLlmApiKey?: string;
+  /** Verifier LLM model name (optional, falls back to llmModel). */
+  verifierLlmModel?: string;
+  /** Enable verifier LLM (auto-enabled if verifierLlmApiKey or verifierLlmModel set). */
+  verifierLlmEnabled: boolean;
+
   // --- MinerU (PDF parsing via MinerU API) ---
 
   /** MinerU API base URL (default: https://mineru.net). */
@@ -402,6 +417,13 @@ export function getConfig(): PreflightConfig {
     llmApiKey: loadConfigFile().llmApiKey ?? process.env.PREFLIGHT_LLM_API_KEY ?? process.env.PREFLIGHT_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY,
     llmModel: (loadConfigFile().llmModel ?? process.env.PREFLIGHT_LLM_MODEL ?? 'gpt-4o-mini').trim(),
     llmEnabled: loadConfigFile().llmEnabled || Boolean(loadConfigFile().llmApiKey) || envBoolean('PREFLIGHT_LLM_ENABLED', false) || Boolean(process.env.PREFLIGHT_LLM_API_KEY) || Boolean(process.env.PREFLIGHT_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY),
+
+    // Verifier LLM for RAG cross-validation (optional, falls back to main LLM)
+    // Priority: config file > env > fallback to main LLM
+    verifierLlmApiBase: loadConfigFile().verifierLlmApiBase ?? process.env.PREFLIGHT_VERIFIER_LLM_API_BASE,
+    verifierLlmApiKey: loadConfigFile().verifierLlmApiKey ?? process.env.PREFLIGHT_VERIFIER_LLM_API_KEY,
+    verifierLlmModel: loadConfigFile().verifierLlmModel ?? process.env.PREFLIGHT_VERIFIER_LLM_MODEL,
+    verifierLlmEnabled: Boolean(loadConfigFile().verifierLlmApiKey) || Boolean(loadConfigFile().verifierLlmModel) || Boolean(process.env.PREFLIGHT_VERIFIER_LLM_API_KEY) || Boolean(process.env.PREFLIGHT_VERIFIER_LLM_MODEL),
 
     // MinerU for PDF parsing (high-quality extraction)
     // Priority: config file > env > default

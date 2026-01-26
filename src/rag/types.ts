@@ -44,8 +44,8 @@ export const DEFAULT_QUERY_OPTIONS: Required<Omit<QueryOptions, 'bundleId' | 're
   maxHops: 2,
   enableVerification: false,
   retryOnLowFaithfulness: false,
-  expandToParent: false,
-  expandToSiblings: false,
+  expandToParent: true,
+  expandToSiblings: true,
 };
 
 // ============================================================================
