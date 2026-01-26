@@ -680,6 +680,8 @@ function semanticChunkByLevel(
           
           // Create main section chunk (text only)
           const textContent = textBlocks.map(b => b.content).join('\n\n');
+          // Track whether parent chunk was actually created
+          let parentChunkCreated = false;
           if (textContent.trim()) {
             result.push({
               type: 'text',
@@ -692,6 +694,7 @@ function semanticChunkByLevel(
               parentChunkId: trackHierarchy ? parentChunkId : undefined,
               granularity,
             });
+            parentChunkCreated = true;
           }
           
           // Create independent sub-chunks for special blocks
@@ -716,7 +719,8 @@ function semanticChunkByLevel(
               isSpecial: true,
               parentPath: parentPath.length > 0 ? parentPath : undefined,
               chunkId: subChunkId,
-              parentChunkId: chunkId, // Link to parent section chunk
+              // Only link to parent if parent chunk was actually created
+              parentChunkId: parentChunkCreated ? chunkId : undefined,
               granularity: 'element',
               assetId,
             });

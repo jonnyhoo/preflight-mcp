@@ -193,16 +193,9 @@ export function runChunkQA(chunks: ChunkDocument[]): ChunkQAResult {
     }
     
     // Check for invalid parent references
+    // A parentChunkId is invalid if it's set but the referenced chunk doesn't exist
     if (meta.parentChunkId && !chunkIds.has(meta.parentChunkId)) {
-      // Parent might be in a different granularity level, so check more carefully
-      // Only flag if parent ID format suggests it should exist in this set
-      const parentPrefix = meta.parentChunkId.split('_')[0] ?? '';
-      if (parentPrefix) {
-        const hasMatchingPrefix = chunks.some(c => c.id.startsWith(parentPrefix));
-        if (hasMatchingPrefix) {
-          invalidParentRefs++;
-        }
-      }
+      invalidParentRefs++;
     }
     
     // Check for page marker pollution
