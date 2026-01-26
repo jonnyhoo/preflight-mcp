@@ -27,6 +27,18 @@ export interface ChunkMetadata {
   paperId?: string;
   /** Paper version (e.g., 'v1', 'v2') */
   paperVersion?: string;
+  
+  // Hierarchical chunking metadata (for semantic PDF chunking)
+  /** Section heading (e.g., 'Introduction', 'Related Work') */
+  sectionHeading?: string;
+  /** Markdown heading level (1-6) */
+  headingLevel?: number;
+  /** Full heading path from root (e.g., ['Introduction', 'Background', 'Related Work']) */
+  headingPath?: string[];
+  /** Parent chunk ID for hierarchical navigation */
+  parentChunkId?: string;
+  /** Child chunk IDs (for parent chunks) */
+  childChunkIds?: string[];
 }
 
 /**

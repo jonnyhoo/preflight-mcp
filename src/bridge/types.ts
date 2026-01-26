@@ -29,6 +29,14 @@ export interface SemanticChunkMetadata {
   fieldName?: string;
   /** Section heading if applicable */
   sectionHeading?: string;
+  
+  // Hierarchical chunking metadata (for semantic PDF chunking)
+  /** Markdown heading level (1-6) */
+  headingLevel?: number;
+  /** Full heading path from root (e.g., ['Introduction', 'Background']) */
+  headingPath?: string[];
+  /** Parent chunk ID for hierarchical navigation */
+  parentChunkId?: string;
 }
 
 // ============================================================================

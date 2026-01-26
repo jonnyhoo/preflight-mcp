@@ -203,6 +203,12 @@ export class ChromaVectorDB {
         contentHash: c.metadata.contentHash ?? '',
         paperId: c.metadata.paperId ?? '',
         paperVersion: c.metadata.paperVersion ?? '',
+        // Hierarchical chunking fields (for semantic PDF chunking)
+        sectionHeading: c.metadata.sectionHeading ?? '',
+        headingLevel: c.metadata.headingLevel ?? 0,
+        // ChromaDB doesn't support array values, so join headingPath
+        headingPath: c.metadata.headingPath?.join(' > ') ?? '',
+        parentChunkId: c.metadata.parentChunkId ?? '',
       }));
 
       await this.request('POST', `${this.getBasePath()}/collections/${collection.id}/upsert`, {

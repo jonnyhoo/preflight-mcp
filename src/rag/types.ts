@@ -29,6 +29,12 @@ export interface QueryOptions {
   bundleId?: string;
   /** Filter by repo ID */
   repoId?: string;
+  
+  // Hierarchical retrieval options
+  /** Expand to parent chunks when retrieving children (default: false) */
+  expandToParent?: boolean;
+  /** Expand to sibling chunks at the same level (default: false) */
+  expandToSiblings?: boolean;
 }
 
 export const DEFAULT_QUERY_OPTIONS: Required<Omit<QueryOptions, 'bundleId' | 'repoId'>> = {
@@ -38,6 +44,8 @@ export const DEFAULT_QUERY_OPTIONS: Required<Omit<QueryOptions, 'bundleId' | 're
   maxHops: 2,
   enableVerification: false,
   retryOnLowFaithfulness: false,
+  expandToParent: false,
+  expandToSiblings: false,
 };
 
 // ============================================================================

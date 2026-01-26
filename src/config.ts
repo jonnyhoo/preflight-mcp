@@ -30,6 +30,9 @@ interface ConfigFile {
   mineruEnabled?: boolean;
   // ChromaDB for RAG
   chromaUrl?: string;
+  // PDF Chunking configuration
+  pdfChunkingStrategy?: 'semantic' | 'token-based' | 'hybrid';
+  pdfChunkLevel?: 1 | 2 | 3 | 4;
 }
 
 let cachedConfigFile: ConfigFile | null = null;
@@ -229,6 +232,13 @@ export type PreflightConfig = {
 
   /** ChromaDB server URL for RAG (default: http://localhost:8000). */
   chromaUrl: string;
+  
+  // --- PDF Chunking Strategy ---
+  
+  /** PDF chunking strategy: 'semantic' (by headings), 'token-based' (legacy), 'hybrid' (default: semantic) */
+  pdfChunkingStrategy: 'semantic' | 'token-based' | 'hybrid';
+  /** Heading level to chunk at: 1=章, 2=节, 3=小节, 4=段 (default: 2) */
+  pdfChunkLevel: 1 | 2 | 3 | 4;
 };
 
 function envNumber(name: string, fallback: number): number {
@@ -351,26 +361,26 @@ export function getConfig(): PreflightConfig {
     manifestCacheMaxSize: envNumber('PREFLIGHT_MANIFEST_CACHE_MAX_SIZE', 100),
 
     // Semantic search (optional, disabled by default)
-    // Priority: env > config file > default
-    semanticSearchEnabled: envBoolean('PREFLIGHT_SEMANTIC_SEARCH', false) || loadConfigFile().embeddingEnabled || Boolean(loadConfigFile().embeddingApiKey),
-    embeddingProvider: parseEmbeddingProvider(process.env.PREFLIGHT_EMBEDDING_PROVIDER ?? loadConfigFile().embeddingProvider),
-    ollamaHost: (process.env.PREFLIGHT_OLLAMA_HOST ?? loadConfigFile().embeddingApiBase ?? 'http://localhost:11434').trim(),
-    ollamaModel: (process.env.PREFLIGHT_OLLAMA_MODEL ?? loadConfigFile().embeddingModel ?? 'nomic-embed-text').trim(),
+    // Priority: config file > env > default
+    semanticSearchEnabled: loadConfigFile().embeddingEnabled || Boolean(loadConfigFile().embeddingApiKey) || envBoolean('PREFLIGHT_SEMANTIC_SEARCH', false),
+    embeddingProvider: parseEmbeddingProvider(loadConfigFile().embeddingProvider ?? process.env.PREFLIGHT_EMBEDDING_PROVIDER),
+    ollamaHost: (loadConfigFile().embeddingApiBase ?? process.env.PREFLIGHT_OLLAMA_HOST ?? 'http://localhost:11434').trim(),
+    ollamaModel: (loadConfigFile().embeddingModel ?? process.env.PREFLIGHT_OLLAMA_MODEL ?? 'nomic-embed-text').trim(),
 
     // OpenAI-compatible (incl Azure) embedding config
-    // Priority: env > config file > default
-    openaiApiKey: process.env.PREFLIGHT_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY ?? loadConfigFile().embeddingApiKey,
-    openaiModel: (process.env.PREFLIGHT_OPENAI_MODEL ?? loadConfigFile().embeddingModel ?? 'text-embedding-3-small').trim(),
-    openaiBaseUrl: process.env.PREFLIGHT_OPENAI_BASE_URL ?? process.env.OPENAI_BASE_URL ?? loadConfigFile().embeddingApiBase,
+    // Priority: config file > env > default
+    openaiApiKey: loadConfigFile().embeddingApiKey ?? process.env.PREFLIGHT_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY,
+    openaiModel: (loadConfigFile().embeddingModel ?? process.env.PREFLIGHT_OPENAI_MODEL ?? 'text-embedding-3-small').trim(),
+    openaiBaseUrl: loadConfigFile().embeddingApiBase ?? process.env.PREFLIGHT_OPENAI_BASE_URL ?? process.env.OPENAI_BASE_URL,
     openaiEmbeddingsUrl: process.env.PREFLIGHT_OPENAI_EMBEDDINGS_URL,
     openaiAuthMode: parseOpenAIAuthMode(process.env.PREFLIGHT_OPENAI_AUTH_MODE),
 
     // VLM for PDF smart analysis (optional)
-    // Priority: env > config file > default
-    vlmApiBase: process.env.VLM_API_BASE ?? process.env.PREFLIGHT_VLM_API_BASE ?? loadConfigFile().vlmApiBase,
-    vlmApiKey: process.env.VLM_API_KEY ?? process.env.PREFLIGHT_VLM_API_KEY ?? loadConfigFile().vlmApiKey,
-    vlmModel: (process.env.VLM_MODEL ?? process.env.PREFLIGHT_VLM_MODEL ?? loadConfigFile().vlmModel ?? 'qwen3-vl-plus').trim(),
-    vlmEnabled: envBoolean('PREFLIGHT_VLM_ENABLED', false) || Boolean(process.env.VLM_API_KEY) || loadConfigFile().vlmEnabled || Boolean(loadConfigFile().vlmApiKey),
+    // Priority: config file > env > default
+    vlmApiBase: loadConfigFile().vlmApiBase ?? process.env.VLM_API_BASE ?? process.env.PREFLIGHT_VLM_API_BASE,
+    vlmApiKey: loadConfigFile().vlmApiKey ?? process.env.VLM_API_KEY ?? process.env.PREFLIGHT_VLM_API_KEY,
+    vlmModel: (loadConfigFile().vlmModel ?? process.env.VLM_MODEL ?? process.env.PREFLIGHT_VLM_MODEL ?? 'qwen3-vl-plus').trim(),
+    vlmEnabled: loadConfigFile().vlmEnabled || Boolean(loadConfigFile().vlmApiKey) || envBoolean('PREFLIGHT_VLM_ENABLED', false) || Boolean(process.env.VLM_API_KEY),
 
     // LSP integration (optional, disabled by default)
     lsp: {
@@ -387,19 +397,27 @@ export function getConfig(): PreflightConfig {
     },
 
     // LLM for Repo Card Distillation (fallback to OpenAI config)
-    llmApiBase: process.env.PREFLIGHT_LLM_API_BASE ?? loadConfigFile().llmApiBase ?? (process.env.PREFLIGHT_OPENAI_BASE_URL ?? process.env.OPENAI_BASE_URL),
-    llmApiKey: process.env.PREFLIGHT_LLM_API_KEY ?? loadConfigFile().llmApiKey ?? (process.env.PREFLIGHT_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY),
-    llmModel: (process.env.PREFLIGHT_LLM_MODEL ?? loadConfigFile().llmModel ?? 'gpt-4o-mini').trim(),
-    llmEnabled: envBoolean('PREFLIGHT_LLM_ENABLED', false) || Boolean(process.env.PREFLIGHT_LLM_API_KEY) || loadConfigFile().llmEnabled || Boolean(loadConfigFile().llmApiKey) || Boolean(process.env.PREFLIGHT_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY),
+    // Priority: config file > env > default
+    llmApiBase: loadConfigFile().llmApiBase ?? process.env.PREFLIGHT_LLM_API_BASE ?? process.env.PREFLIGHT_OPENAI_BASE_URL ?? process.env.OPENAI_BASE_URL,
+    llmApiKey: loadConfigFile().llmApiKey ?? process.env.PREFLIGHT_LLM_API_KEY ?? process.env.PREFLIGHT_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY,
+    llmModel: (loadConfigFile().llmModel ?? process.env.PREFLIGHT_LLM_MODEL ?? 'gpt-4o-mini').trim(),
+    llmEnabled: loadConfigFile().llmEnabled || Boolean(loadConfigFile().llmApiKey) || envBoolean('PREFLIGHT_LLM_ENABLED', false) || Boolean(process.env.PREFLIGHT_LLM_API_KEY) || Boolean(process.env.PREFLIGHT_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY),
 
     // MinerU for PDF parsing (high-quality extraction)
-    mineruApiBase: (process.env.PREFLIGHT_MINERU_API_BASE ?? process.env.MINERU_API_BASE ?? loadConfigFile().mineruApiBase ?? 'https://mineru.net').trim(),
-    mineruApiKey: process.env.PREFLIGHT_MINERU_API_KEY ?? process.env.MINERU_API_KEY ?? loadConfigFile().mineruApiKey,
-    mineruEnabled: envBoolean('PREFLIGHT_MINERU_ENABLED', false) || Boolean(process.env.PREFLIGHT_MINERU_API_KEY ?? process.env.MINERU_API_KEY) || loadConfigFile().mineruEnabled || Boolean(loadConfigFile().mineruApiKey),
+    // Priority: config file > env > default
+    mineruApiBase: (loadConfigFile().mineruApiBase ?? process.env.PREFLIGHT_MINERU_API_BASE ?? process.env.MINERU_API_BASE ?? 'https://mineru.net').trim(),
+    mineruApiKey: loadConfigFile().mineruApiKey ?? process.env.PREFLIGHT_MINERU_API_KEY ?? process.env.MINERU_API_KEY,
+    mineruEnabled: loadConfigFile().mineruEnabled || Boolean(loadConfigFile().mineruApiKey) || envBoolean('PREFLIGHT_MINERU_ENABLED', false) || Boolean(process.env.PREFLIGHT_MINERU_API_KEY ?? process.env.MINERU_API_KEY),
     mineruTimeoutMs: envNumber('PREFLIGHT_MINERU_TIMEOUT_MS', 5 * 60_000),
     mineruPollIntervalMs: envNumber('PREFLIGHT_MINERU_POLL_INTERVAL_MS', 3000),
 
     // ChromaDB for RAG
-    chromaUrl: (process.env.PREFLIGHT_CHROMA_URL ?? loadConfigFile().chromaUrl ?? 'http://localhost:8000').trim(),
+    // Priority: config file > env > default
+    chromaUrl: (loadConfigFile().chromaUrl ?? process.env.PREFLIGHT_CHROMA_URL ?? 'http://localhost:8000').trim(),
+    
+    // PDF Chunking Strategy
+    // Priority: config file > env > default
+    pdfChunkingStrategy: loadConfigFile().pdfChunkingStrategy ?? (process.env.PREFLIGHT_PDF_CHUNK_STRATEGY as 'semantic' | 'token-based' | 'hybrid' | undefined) ?? 'semantic',
+    pdfChunkLevel: loadConfigFile().pdfChunkLevel ?? (parseInt(process.env.PREFLIGHT_PDF_CHUNK_LEVEL ?? '2', 10) as 1 | 2 | 3 | 4),
   };
 }

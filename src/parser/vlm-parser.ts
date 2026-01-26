@@ -327,49 +327,79 @@ export class VlmParser implements IDocumentParser {
   
   /**
    * Check endpoint connectivity before processing.
-   * Tests the first VLM endpoint to ensure it's reachable.
+   * Tests ALL VLM endpoints in parallel and filters out unavailable ones.
+   * Returns ok if at least one endpoint is available.
    */
-  async checkEndpointConnectivity(): Promise<{ ok: boolean; error?: string }> {
+  async checkEndpointConnectivity(): Promise<{ ok: boolean; error?: string; availableCount?: number; failedEndpoints?: string[] }> {
     if (this.vlmConfigs.length === 0) {
       return { ok: false, error: this.configLoadError || LLM_ERRORS.CONFIG_NOT_FOUND };
     }
     
-    const config = this.vlmConfigs[0]!;
-    const testUrl = `${config.apiBase}/models`;
+    // Test all endpoints in parallel
+    const results = await Promise.all(
+      this.vlmConfigs.map(async (config, index) => {
+        const testUrl = `${config.apiBase}/models`;
+        
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 10_000); // 10s timeout
+          
+          const response = await fetch(testUrl, {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${config.apiKey}`,
+            },
+            signal: controller.signal,
+          });
+          
+          clearTimeout(timeoutId);
+          
+          if (response.status === 401 || response.status === 403) {
+            return { index, ok: false, error: `Auth failed: ${config.apiBase}` };
+          }
+          
+          // Any 2xx or 4xx (except auth) means endpoint is reachable
+          if (response.ok || response.status === 404 || response.status === 405) {
+            logger.info(`[VLM Parser] Endpoint ${index + 1} OK: ${config.apiBase}`);
+            return { index, ok: true };
+          }
+          
+          return { index, ok: false, error: `HTTP ${response.status}: ${config.apiBase}` };
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          const reason = errMsg.includes('abort') ? 'timeout' : errMsg;
+          return { index, ok: false, error: `${reason}: ${config.apiBase}` };
+        }
+      })
+    );
     
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10_000); // 10s timeout
-      
-      const response = await fetch(testUrl, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${config.apiKey}`,
-        },
-        signal: controller.signal,
-      });
-      
-      clearTimeout(timeoutId);
-      
-      if (response.status === 401 || response.status === 403) {
-        return { ok: false, error: LLM_ERRORS.ENDPOINT_AUTH_FAILED(config.apiBase) };
-      }
-      
-      // Any 2xx or 4xx (except auth) means endpoint is reachable
-      // Some APIs return 404 for /models but still work for /chat/completions
-      if (response.ok || response.status === 404 || response.status === 405) {
-        logger.info(`[VLM Parser] Endpoint connectivity verified: ${config.apiBase}`);
-        return { ok: true };
-      }
-      
-      return { ok: false, error: LLM_ERRORS.ENDPOINT_UNREACHABLE(config.apiBase, `HTTP ${response.status}`) };
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      if (errMsg.includes('abort')) {
-        return { ok: false, error: LLM_ERRORS.ENDPOINT_UNREACHABLE(config.apiBase, 'Connection timeout (10s)') };
-      }
-      return { ok: false, error: LLM_ERRORS.ENDPOINT_UNREACHABLE(config.apiBase, errMsg) };
+    // Filter available endpoints
+    const available = results.filter(r => r.ok);
+    const failed = results.filter(r => !r.ok);
+    const failedEndpoints = failed.map(r => r.error!);
+    
+    if (available.length === 0) {
+      // All endpoints failed
+      return {
+        ok: false,
+        error: `All ${this.vlmConfigs.length} VLM endpoints unavailable:\n${failedEndpoints.map(e => `  - ${e}`).join('\n')}`,
+        failedEndpoints,
+      };
     }
+    
+    // Keep only available endpoints
+    if (failed.length > 0) {
+      logger.warn(`[VLM Parser] ${failed.length}/${this.vlmConfigs.length} endpoints unavailable, using ${available.length} available`);
+      // Reorder vlmConfigs to only include available ones
+      this.vlmConfigs = available.map(r => this.vlmConfigs[r.index]!);
+    }
+    
+    logger.info(`[VLM Parser] ${available.length} endpoints available for parallel processing`);
+    return {
+      ok: true,
+      availableCount: available.length,
+      failedEndpoints: failedEndpoints.length > 0 ? failedEndpoints : undefined,
+    };
   }
   
   /**

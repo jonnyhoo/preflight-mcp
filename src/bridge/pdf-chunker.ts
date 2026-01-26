@@ -23,7 +23,28 @@ const logger = createModuleLogger('pdf-chunker');
 // ============================================================================
 
 export interface PdfChunkOptions {
-  /** Max tokens per chunk (default: 400 for academic papers) */
+  /**
+   * Chunking strategy (default: 'semantic')
+   * - 'semantic': Split by heading structure only, ignore token limits
+   * - 'token-based': Legacy mode, split by maxTokens
+   * - 'hybrid': Semantic split with soft token limit warning
+   */
+  strategy?: 'semantic' | 'token-based' | 'hybrid';
+  /**
+   * Heading level to chunk at (default: 2)
+   * - 1: Split by # (章节 - Chapter)
+   * - 2: Split by ## (节 - Section)
+   * - 3: Split by ### (小节 - Subsection)
+   * - 4: Split by #### (段 - Paragraph)
+   */
+  chunkLevel?: 1 | 2 | 3 | 4;
+  /** Keep parent section context in chunk prefix (default: true) */
+  includeParentContext?: boolean;
+  /** Store parent-child chunk relationships in metadata (default: true) */
+  trackHierarchy?: boolean;
+  
+  // Legacy token-based options (for backward compatibility)
+  /** Max tokens per chunk (default: 2000, only used in 'token-based' and 'hybrid' modes) */
   maxTokens?: number;
   /** Min tokens per chunk (default: 100) */
   minTokens?: number;
@@ -381,13 +402,36 @@ function detectContentBlocks(markdown: string, _headingPath: string[] = []): Con
       }
     }
 
-    // Figure detection
+    // Figure detection - both markdown images and VLM figure descriptions
     if (trimmed.match(/^!\[.*\]\(.*\)$/)) {
       flushBlock();
       currentType = 'figure';
       currentContent.push(line);
       flushBlock();
       currentType = 'text';
+      continue;
+    }
+    
+    // VLM/MinerU figure/table descriptions - keep them intact
+    // Match: [Figure: ...] or [Table: ...] (may span multiple lines)
+    if (trimmed.match(/^\[(Figure|Table):/i)) {
+      flushBlock();
+      currentType = trimmed.match(/^\[Figure:/i) ? 'figure' : 'table';
+      currentContent.push(line);
+      // If description ends on same line, flush immediately
+      if (trimmed.endsWith(']')) {
+        flushBlock();
+        currentType = 'text';
+      }
+      continue;
+    }
+    // Continue collecting figure/table description until closing ]
+    if (currentType === 'figure' || currentType === 'table') {
+      currentContent.push(line);
+      if (trimmed.endsWith(']')) {
+        flushBlock();
+        currentType = 'text';
+      }
       continue;
     }
 
@@ -567,6 +611,78 @@ function adaptiveChunk(
 }
 
 // ============================================================================
+// Semantic Chunking by Heading Level
+// ============================================================================
+
+/**
+ * Chunk content by heading structure without token limits.
+ * Each chunk corresponds to a section at the specified heading level.
+ * 
+ * @param tree - Heading tree from parseHeadingTree
+ * @param targetLevel - Target heading level to chunk at (1-4)
+ * @param trackHierarchy - Whether to track parent-child relationships
+ * @returns Array of content blocks with hierarchy info
+ */
+function semanticChunkByLevel(
+  tree: HeadingNode[],
+  targetLevel: number,
+  trackHierarchy: boolean
+): Array<ContentBlock & { parentPath?: string[]; chunkId?: string; parentChunkId?: string }> {
+  const result: Array<ContentBlock & { parentPath?: string[]; chunkId?: string; parentChunkId?: string }> = [];
+  let chunkIndex = 0;
+  
+  // Recursive traversal to collect chunks at target level
+  function traverse(
+    nodes: HeadingNode[],
+    parentPath: string[] = [],
+    parentChunkId?: string
+  ) {
+    for (const node of nodes) {
+      const currentPath = [...parentPath, node.text];
+      const logicalLevel = inferLogicalLevel(node.text) ?? node.level;
+      
+      // If this node is at target level, create a chunk
+      if (logicalLevel === targetLevel) {
+        const chunkId = `semantic_${chunkIndex++}`;
+        
+        // Detect content blocks within this section
+        const blocks = detectContentBlocks(node.content, currentPath);
+        
+        // Merge all blocks from this section into one chunk
+        // (special blocks like figures/formulas are kept, but not split into separate chunks)
+        const mergedContent = blocks.map(b => b.content).join('\n\n');
+        
+        result.push({
+          type: 'text', // Main type is text, but may contain embedded formulas/figures
+          content: mergedContent,
+          heading: node.text,
+          headingPath: currentPath,
+          isSpecial: false,
+          parentPath: parentPath.length > 0 ? parentPath : undefined,
+          chunkId,
+          parentChunkId: trackHierarchy ? parentChunkId : undefined,
+        });
+        
+        // Continue traversing children with this chunk as parent
+        if (node.children.length > 0) {
+          traverse(node.children, currentPath, chunkId);
+        }
+      } else if (logicalLevel < targetLevel) {
+        // This is a higher-level section, keep traversing
+        traverse(node.children, currentPath, parentChunkId);
+      } else {
+        // This is a lower-level section (deeper than target)
+        // Include it in the parent chunk's content (already included via node.content)
+        continue;
+      }
+    }
+  }
+  
+  traverse(tree);
+  return result;
+}
+
+// ============================================================================
 // Main Export
 // ============================================================================
 
@@ -596,7 +712,11 @@ export function academicChunk(
   pdfOptions?: PdfChunkOptions
 ): SemanticChunk[] {
   const opts = {
-    maxTokens: pdfOptions?.maxTokens ?? 400,
+    strategy: pdfOptions?.strategy ?? 'semantic',
+    chunkLevel: pdfOptions?.chunkLevel ?? 2,
+    includeParentContext: pdfOptions?.includeParentContext ?? true,
+    trackHierarchy: pdfOptions?.trackHierarchy ?? true,
+    maxTokens: pdfOptions?.maxTokens ?? 2000,
     minTokens: pdfOptions?.minTokens ?? 100,
     overlapPercent: pdfOptions?.overlapPercent ?? 15,
   };
@@ -605,29 +725,47 @@ export function academicChunk(
   const context = extractDocumentContext(markdown);
   logger.debug(`Extracted context: title="${context.title}"`);
 
-  // 2. Detect content blocks
-  const blocks = detectContentBlocks(markdown);
-  logger.debug(`Detected ${blocks.length} content blocks`);
-  
+  let chunkedBlocks: Array<ContentBlock & { parentPath?: string[]; chunkId?: string; parentChunkId?: string }>;
 
-  // 3. Apply adaptive chunking with overlap
-  const chunkedBlocks = adaptiveChunk(blocks, opts.maxTokens, opts.minTokens, opts.overlapPercent);
-  logger.debug(`After adaptive chunking: ${chunkedBlocks.length} chunks`);
+  // 2. Choose chunking strategy
+  if (opts.strategy === 'semantic') {
+    // Semantic: Parse heading tree and chunk by level
+    const tree = parseHeadingTree(markdown);
+    chunkedBlocks = semanticChunkByLevel(tree, opts.chunkLevel, opts.trackHierarchy);
+    logger.debug(`Semantic chunking (level=${opts.chunkLevel}): ${chunkedBlocks.length} chunks`);
+  } else if (opts.strategy === 'token-based') {
+    // Legacy: Token-based with adaptive sizing
+    const blocks = detectContentBlocks(markdown);
+    chunkedBlocks = adaptiveChunk(blocks, opts.maxTokens, opts.minTokens, opts.overlapPercent);
+    logger.debug(`Token-based chunking: ${chunkedBlocks.length} chunks`);
+  } else {
+    // Hybrid: Semantic with soft token warning
+    const tree = parseHeadingTree(markdown);
+    chunkedBlocks = semanticChunkByLevel(tree, opts.chunkLevel, opts.trackHierarchy);
+    // Log warning for oversized chunks
+    const oversized = chunkedBlocks.filter(b => estimateTokens(b.content) > opts.maxTokens);
+    if (oversized.length > 0) {
+      logger.warn(
+        `Hybrid mode: ${oversized.length}/${chunkedBlocks.length} chunks exceed ${opts.maxTokens} tokens ` +
+        `(consider using chunkLevel=${opts.chunkLevel + 1} for finer granularity)`
+      );
+    }
+    logger.debug(`Hybrid chunking (level=${opts.chunkLevel}): ${chunkedBlocks.length} chunks`);
+  }
 
-  // 4. Convert to SemanticChunk with contextual prefix
+  // 3. Convert to SemanticChunk with contextual prefix
   const chunks: SemanticChunk[] = chunkedBlocks.map((block, index) => {
     // Build contextual prefix
     const sectionPath = block.headingPath?.join(' > ') || block.heading;
-    let prefix = `[Paper: ${context.title}]`;
-    if (sectionPath) {
-      prefix += ` [Section: ${sectionPath}]`;
-    }
+    let prefix = opts.includeParentContext && sectionPath
+      ? `[Paper: ${context.title}] [Section: ${sectionPath}]`
+      : `[Paper: ${context.title}]`;
     
     // Add prefix to content
     const contentWithContext = `${prefix}\n\n${block.content}`;
 
     return {
-      id: generateChunkId(contentWithContext, index),
+      id: block.chunkId ? `${block.chunkId}_${generateChunkId(contentWithContext, index).slice(0, 8)}` : generateChunkId(contentWithContext, index),
       content: contentWithContext,
       chunkType: block.type,
       isComplete: true, // Academic chunks are self-contained with context
@@ -638,13 +776,16 @@ export function academicChunk(
         filePath: chunkOptions.filePath,
         chunkIndex: index,
         sectionHeading: block.heading,
+        headingLevel: block.headingPath ? block.headingPath.length : undefined,
+        headingPath: block.headingPath,
+        parentChunkId: block.parentChunkId,
       },
     };
   });
 
   logger.info(
     `Academic chunking complete: ${chunks.length} chunks from "${context.title}" ` +
-    `(maxTokens=${opts.maxTokens}, overlap=${opts.overlapPercent}%)`
+    `(strategy=${opts.strategy}, level=${opts.chunkLevel})`
   );
 
   return chunks;

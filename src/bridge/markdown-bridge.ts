@@ -233,7 +233,11 @@ export async function bridgePdfMarkdown(
     };
 
     const semanticChunks = academicChunk(source.markdown, chunkOptions, {
-      maxTokens: options.maxChunkTokens ?? 400,
+      strategy: 'semantic', // Use semantic chunking by default for PDFs
+      chunkLevel: 2, // Split by ## (sections)
+      includeParentContext: true,
+      trackHierarchy: true,
+      maxTokens: options.maxChunkTokens ?? 2000, // Soft limit for hybrid mode
       minTokens: options.minChunkTokens ?? 100,
       overlapPercent: 15,
     });
@@ -258,6 +262,11 @@ export async function bridgePdfMarkdown(
           chunkIndex: chunk.metadata.chunkIndex,
           chunkType: chunk.chunkType,
           fieldName: chunk.metadata.fieldName,
+          // Hierarchical metadata
+          sectionHeading: chunk.metadata.sectionHeading,
+          headingLevel: chunk.metadata.headingLevel,
+          headingPath: chunk.metadata.headingPath,
+          parentChunkId: chunk.metadata.parentChunkId,
         },
         embedding: embedding?.vector,
       };

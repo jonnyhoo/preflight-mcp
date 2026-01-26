@@ -268,6 +268,8 @@ export class RAGEngine {
       maxHops: options?.maxHops ?? 2,
       enableVerification: options?.enableVerification ?? false,
       retryOnLowFaithfulness: options?.retryOnLowFaithfulness ?? false,
+      expandToParent: options?.expandToParent ?? false,
+      expandToSiblings: options?.expandToSiblings ?? false,
     };
 
     // If KG is empty and bundleId provided, try to load from ChromaDB
@@ -286,7 +288,11 @@ export class RAGEngine {
       question,
       opts.mode,
       opts.topK,
-      filter
+      filter,
+      {
+        expandToParent: opts.expandToParent,
+        expandToSiblings: opts.expandToSiblings,
+      }
     );
 
     logger.info(`Retrieved ${retrieved.chunks.length} chunks`);

@@ -158,18 +158,92 @@ export class RAGRetriever {
     query: string,
     mode: QueryMode,
     topK: number,
-    filter?: QueryFilter
+    filter?: QueryFilter,
+    options?: {
+      expandToParent?: boolean;
+      expandToSiblings?: boolean;
+    }
   ): Promise<RetrieveResult> {
+    let result: RetrieveResult;
+    
     switch (mode) {
       case 'naive':
-        return this.naiveRetrieve(query, topK, filter);
+        result = await this.naiveRetrieve(query, topK, filter);
+        break;
       case 'local':
-        return this.localRetrieve(query, topK, filter);
+        result = await this.localRetrieve(query, topK, filter);
+        break;
       case 'hybrid':
-        return this.hybridRetrieve(query, topK, filter);
+        result = await this.hybridRetrieve(query, topK, filter);
+        break;
       default:
-        return this.hybridRetrieve(query, topK, filter);
+        result = await this.hybridRetrieve(query, topK, filter);
     }
+    
+    // Apply hierarchical expansion if requested
+    if (options?.expandToParent || options?.expandToSiblings) {
+      result = await this.expandHierarchy(result, options);
+    }
+    
+    return result;
+  }
+  
+  /**
+   * Expand chunks hierarchically by adding parent/sibling chunks.
+   */
+  private async expandHierarchy(
+    result: RetrieveResult,
+    options: {
+      expandToParent?: boolean;
+      expandToSiblings?: boolean;
+    }
+  ): Promise<RetrieveResult> {
+    const parentIds = new Set<string>();
+    const siblingParentIds = new Set<string>();
+    
+    // Collect parent IDs from retrieved chunks
+    for (const chunk of result.chunks) {
+      const parentId = chunk.metadata.parentChunkId;
+      if (parentId) {
+        if (options.expandToParent) {
+          parentIds.add(parentId);
+        }
+        if (options.expandToSiblings) {
+          siblingParentIds.add(parentId);
+        }
+      }
+    }
+    
+    const expandedChunks: Array<ChunkDocument & { score: number }> = [...result.chunks];
+    const seenIds = new Set(result.chunks.map(c => c.id));
+    
+    // Fetch parent chunks
+    if (options.expandToParent && parentIds.size > 0) {
+      const parents = await this.chromaDB.getChunks([...parentIds]);
+      for (const parent of parents) {
+        if (!seenIds.has(parent.id)) {
+          expandedChunks.push({
+            ...parent,
+            score: 0.7, // Lower score for parent context
+          });
+          seenIds.add(parent.id);
+          logger.debug(`Added parent chunk: ${parent.id}`);
+        }
+      }
+    }
+    
+    // Fetch sibling chunks (chunks sharing the same parent)
+    if (options.expandToSiblings && siblingParentIds.size > 0) {
+      // Query chunks by parentChunkId metadata
+      // Note: This requires querying by metadata filter
+      // For now, we'll skip sibling expansion as it needs metadata query support
+      logger.debug('Sibling expansion not yet implemented (requires metadata query)');
+    }
+    
+    return {
+      ...result,
+      chunks: expandedChunks,
+    };
   }
 
   // --------------------------------------------------------------------------

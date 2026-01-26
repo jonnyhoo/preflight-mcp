@@ -35,7 +35,7 @@ Add to your MCP client config:
 4. preflight_lsp             → Navigate code (definitions, references)
 ```
 
-## Tools Reference (11 tools)
+## Tools Reference (12 tools)
 
 ### Bundle Management (6)
 
@@ -61,12 +61,13 @@ Add to your MCP client config:
 | `preflight_lsp` | Go-to-definition, find references, hover, symbols (requires `PREFLIGHT_LSP_ENABLED=true`) |
 | `preflight_check` | Code quality checks (duplicates, deadcode, circular, complexity, security) |
 
-### Knowledge Distillation (2)
+### Knowledge Distillation (3)
 
 | Tool | Description |
 |------|-------------|
 | `preflight_generate_card` | Extract knowledge card from bundle (requires LLM config) |
 | `preflight_rag` | Index to ChromaDB and RAG query (requires ChromaDB + embedding config) |
+| `preflight_rag_manage` | Manage ChromaDB: list indexed content, stats, delete by hash |
 
 ## Tool Examples
 
@@ -117,6 +118,19 @@ Available checks:
 
 Supported: `.py`, `.go`, `.rs`, `.ts`, `.tsx`, `.js`, `.jsx`
 
+### RAG Management
+
+```json
+// List all indexed content
+{"action": "list"}
+
+// View statistics
+{"action": "stats"}
+
+// Delete by content hash
+{"action": "delete", "contentHash": "77b44fcb..."}
+```
+
 ## Configuration
 
 ### Config File
@@ -141,7 +155,10 @@ Create `~/.preflight/config.json` (Windows: `C:\Users\<username>\.preflight\conf
   "embeddingApiKey": "sk-xxx",
   "embeddingModel": "text-embedding-3-small",
 
-  "chromaUrl": "http://localhost:8000"
+  "chromaUrl": "http://localhost:8000",
+
+  "pdfChunkingStrategy": "semantic",
+  "pdfChunkLevel": 2
 }
 ```
 
@@ -150,6 +167,28 @@ Create `~/.preflight/config.json` (Windows: `C:\Users\<username>\.preflight\conf
 | VLM | PDF extraction (formulas, tables) |
 | LLM | Knowledge card generation |
 | Embedding | Semantic search |
+
+### PDF Chunking Strategy
+
+Control how PDFs are split into chunks for RAG:
+
+| Option | Values | Default | Description |
+|--------|--------|---------|-------------|
+| `pdfChunkingStrategy` | `semantic`, `token-based`, `hybrid` | `semantic` | Chunking algorithm |
+| `pdfChunkLevel` | `1`, `2`, `3`, `4` | `2` | Heading level to split at |
+
+**Strategies:**
+- `semantic` - Split by markdown headings only, no token limits (recommended for long-context models)
+- `token-based` - Legacy mode, split by fixed token count
+- `hybrid` - Semantic split with warnings for oversized chunks
+
+**Chunk Levels:**
+- `1` - Split by `#` (chapters) → ~10-20 chunks per paper
+- `2` - Split by `##` (sections) → ~50-80 chunks per paper (**recommended**)
+- `3` - Split by `###` (subsections) → ~100-150 chunks per paper
+- `4` - Split by `####` (paragraphs) → finer granularity
+
+The semantic strategy preserves complete sections with figures, formulas, and tables intact.
 
 > ⚠️ Do NOT use "thinking" models (o1, DeepSeek-R1) for LLM - they output reasoning in `reasoning_content` instead of `content`.
 
