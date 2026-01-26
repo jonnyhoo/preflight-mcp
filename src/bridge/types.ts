@@ -37,6 +37,12 @@ export interface SemanticChunkMetadata {
   headingPath?: string[];
   /** Parent chunk ID for hierarchical navigation */
   parentChunkId?: string;
+  
+  // Multi-scale chunking metadata (for best quality retrieval)
+  /** Chunk granularity: section, subsection, paragraph, element */
+  granularity?: 'section' | 'subsection' | 'paragraph' | 'element';
+  /** Asset ID for figures (image filename) */
+  assetId?: string;
 }
 
 // ============================================================================

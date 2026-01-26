@@ -43,8 +43,9 @@ Preflight supports three PDF parsing modes:
    - Requires: vlmConfigs array in config.json
    - Best for: When MinerU is unavailable or you prefer local processing
 
-3. PdfParser (Fallback): Rule-based text extraction using unpdf
-   - No configuration required
+3. PdfParser (Fallback ONLY): Rule-based text extraction using unpdf
+   - Only used as automatic fallback when MinerU/VLM parsing fails
+   - NOT available as primary parser without explicit configuration
    - Limitations: May miss complex layouts, formulas rendered as images`,
 
   FALLBACK_TO_PDFPARSER: (primaryParser: string, reason: string) => `[PDF Parser Fallback Warning]
@@ -61,17 +62,29 @@ For better quality, consider:
   - If using MinerU: Check your mineruApiBase and mineruApiKey configuration
   - If using VLM Parser: Verify vlmConfigs in config.json and API connectivity`,
 
-  MINERU_NOT_CONFIGURED: `[MinerU Configuration Notice]
-MinerU parser is not configured. Using PdfParser (rule-based) as fallback.
+  PDF_NO_PARSER_AVAILABLE: `[PDF Parsing Error]
+Cannot parse PDF: No high-quality parser is configured.
 
-To enable MinerU (recommended for high-quality PDF parsing):
-1. Add to ~/.preflight/config.json:
+PdfParser (rule-based) is only available as a fallback when MinerU or VLM parsing fails.
+To parse PDFs, you must configure at least one of:
+
+1. MinerU (Recommended):
+   Add to ~/.preflight/config.json:
    {
      "mineruApiBase": "https://your-mineru-api.com",
      "mineruApiKey": "your-api-key"
    }
 
-Alternatively, use vlmParser=true with configured vlmConfigs for local VLM processing.`,
+2. VLM Parser:
+   Add to ~/.preflight/config.json:
+   {
+     "vlmApiBase": "https://your-vlm-api.com",
+     "vlmApiKey": "your-api-key",
+     "vlmEnabled": true
+   }
+   Then use vlmParser=true when ingesting.
+
+Note: PdfParser will still be used as automatic fallback if MinerU/VLM fails.`,
 } as const;
 
 // ============================================================================
@@ -164,12 +177,15 @@ export interface DocumentIngestOptions {
 /**
  * Get appropriate parser for a file extension.
  * 
- * PDF parsing has three modes:
+ * PDF parsing has two primary modes:
  * 1. MinerU (default): Cloud API with highest quality extraction
  * 2. VLM Parser (vlmParser=true): Local parallel VLM processing, requires vlmConfigs in config.json
- * 3. PdfParser: Rule-based fallback when others fail or are not configured
+ * 
+ * PdfParser (rule-based) is ONLY used as automatic fallback when primary parsing fails.
+ * It is NOT returned as a primary parser when neither MinerU nor VLM is configured.
  * 
  * @param useVlmParser - If true, use VlmParser for parallel VLM processing
+ * @returns Parser instance, or null if no parser available (PDF without MinerU/VLM)
  */
 function getParserForExtension(ext: string, useVlmParser = false): IDocumentParser | null {
   const lowerExt = ext.toLowerCase();
@@ -186,10 +202,11 @@ function getParserForExtension(ext: string, useVlmParser = false): IDocumentPars
         logger.info('[PDF] Using MinerU Parser (cloud API) - default mode');
         return new MineruParser();
       }
-      // Fallback to rule-based local PDF parser
-      // Log detailed message for LLM context
-      logger.warn(LLM_MESSAGES.MINERU_NOT_CONFIGURED);
-      return new PdfParser();
+      // IMPORTANT: Do NOT fall back to PdfParser as primary parser
+      // PdfParser is only for automatic fallback when MinerU/VLM fails (see ingestDocument)
+      // Return null to signal that no high-quality parser is available
+      logger.error(LLM_MESSAGES.PDF_NO_PARSER_AVAILABLE);
+      return null;
     case '.doc':
     case '.docx':
     case '.xls':
@@ -250,12 +267,18 @@ export async function ingestDocument(
   // Get parser for this file type
   const parser = getParserForExtension(ext, options?.vlmParser);
   if (!parser) {
+    // For PDF: provide LLM-friendly message about configuration requirements
+    const isPdf = ext.toLowerCase() === '.pdf';
+    const errorMsg = isPdf
+      ? LLM_MESSAGES.PDF_NO_PARSER_AVAILABLE
+      : `No parser available for extension: ${ext}`;
+    
     return {
       sourcePath: filePath,
       success: false,
       modalContents: [],
       parseTimeMs: Date.now() - startTime,
-      error: `No parser available for extension: ${ext}`,
+      error: errorMsg,
     };
   }
   

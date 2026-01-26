@@ -39,6 +39,12 @@ export interface ChunkMetadata {
   parentChunkId?: string;
   /** Child chunk IDs (for parent chunks) */
   childChunkIds?: string[];
+  
+  // Multi-scale chunking metadata (for best quality retrieval)
+  /** Chunk granularity: section, subsection, paragraph, element */
+  granularity?: 'section' | 'subsection' | 'paragraph' | 'element';
+  /** Asset ID for figures (image filename, for traceability after bundle deletion) */
+  assetId?: string;
 }
 
 /**

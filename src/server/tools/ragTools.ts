@@ -14,6 +14,7 @@ import { findBundleStorageDir } from '../../bundle/service.js';
 import { getBundlePaths } from '../../bundle/paths.js';
 import { wrapPreflightError } from '../../mcp/errorKinds.js';
 import { createModuleLogger } from '../../logging/logger.js';
+import { callLLM, getLLMConfig } from '../../distill/llm-client.js';
 
 const logger = createModuleLogger('rag-tool');
 
@@ -48,32 +49,53 @@ const engineCache = new Map<string, RAGEngine>();
 async function getOrCreateEngine(
   bundleId: string,
   cfg: ToolDependencies['cfg']
-): Promise<{ engine: RAGEngine; embeddingEndpoint: string }> {
+): Promise<{ engine: RAGEngine; embeddingEndpoint: string; llmEnabled: boolean }> {
   // Create embedding provider using unified config
   const { embedding, embeddingConfig } = createEmbeddingFromConfig(cfg);
   const embeddingEndpoint = describeEmbeddingEndpoint(embeddingConfig) ?? cfg.ollamaHost ?? 'ollama';
 
-  // Check cache
-  let engine = engineCache.get(bundleId);
+  // Check LLM availability (reuse repocard LLM config)
+  const llmConfig = getLLMConfig();
+  const llmEnabled = llmConfig.enabled && !!llmConfig.apiKey;
+
+  // Check cache - use a combined key since LLM state can affect engine behavior
+  const cacheKey = `${bundleId}_llm${llmEnabled ? '1' : '0'}`;
+  let engine = engineCache.get(cacheKey);
   if (engine) {
-    return { engine, embeddingEndpoint };
+    return { engine, embeddingEndpoint, llmEnabled };
   }
 
   // Create RAG config using config.chromaUrl
+  // Inject LLM if enabled (reuses llmApiBase/llmApiKey/llmModel from config.json)
   const ragConfig: RAGConfig = {
     chromaUrl: cfg.chromaUrl,
     embedding: {
       embed: async (text: string) => embedding.embed(text),
       embedBatch: async (texts: string[]) => embedding.embedBatch(texts),
     },
+    // Inject LLM for RAG generation (not just retrieval snippet concatenation)
+    llm: llmEnabled
+      ? {
+          complete: async (prompt: string) => {
+            const response = await callLLM(prompt);
+            return response.content;
+          },
+        }
+      : undefined,
   };
+
+  if (llmEnabled) {
+    logger.info('RAG engine initialized with LLM generation enabled');
+  } else {
+    logger.warn('RAG engine running without LLM - answers will be retrieval snippets only');
+  }
 
   // Create engine
   engine = new RAGEngine(ragConfig);
 
   // Cache it
-  engineCache.set(bundleId, engine);
-  return { engine, embeddingEndpoint };
+  engineCache.set(cacheKey, engine);
+  return { engine, embeddingEndpoint, llmEnabled };
 }
 
 // ============================================================================
@@ -184,7 +206,7 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
         const bundlePath = paths.rootDir;
 
         // Get RAG engine
-        const { engine, embeddingEndpoint } = await getOrCreateEngine(bundleId, cfg);
+        const { engine, embeddingEndpoint, llmEnabled } = await getOrCreateEngine(bundleId, cfg);
 
         let indexResult: {
           chunksWritten: number;
@@ -245,18 +267,24 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
 
         // Query if requested
         if (question) {
-          logger.info(`Querying: "${question}" (mode: ${mode ?? 'hybrid'})`);
+          logger.info(`Querying: "${question}" (mode: ${mode ?? 'hybrid'}, llm: ${llmEnabled})`);
 
           // Try to load AST graph if not indexing in same call
           if (!index) {
             await engine.loadAstGraph(bundleId);
           }
 
+          // High-quality defaults (as per plan - don't add new config items, just use best quality)
           const result = await engine.query(question, {
             mode: (mode as QueryMode) ?? 'hybrid',
             topK: topK ?? 10,
             bundleId,
             repoId,
+            // Ultra quality: always enable verification and retry when LLM is available
+            enableVerification: llmEnabled,
+            retryOnLowFaithfulness: llmEnabled,
+            enableContextCompletion: true,
+            maxHops: 3, // Multi-hop for complete context
           });
 
           queryResult = {

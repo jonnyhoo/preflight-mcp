@@ -115,6 +115,8 @@ export class RAGGenerator {
 
   /**
    * Build RAG prompt for LLM.
+   * Supports papers, PDFs, documentation, and code repositories uniformly.
+   * Requires citations for all factual claims.
    */
   private buildRAGPrompt(
     query: string,
@@ -122,23 +124,47 @@ export class RAGGenerator {
   ): string {
     const contextText = chunks
       .map((chunk, i) => {
-        const source = chunk.metadata.repoId 
-          ? `[${chunk.metadata.repoId}]` 
-          : `[${chunk.metadata.sourceType}]`;
-        return `--- Context ${i + 1} ${source} ---\n${chunk.content}`;
+        // Build comprehensive source reference
+        const meta = chunk.metadata;
+        const sourceType = meta.sourceType ?? 'unknown';
+        const repoId = meta.repoId ?? '';
+        const section = meta.sectionHeading ?? '';
+        const headingPath = meta.headingPath ?? '';
+        const chunkId = chunk.id;
+        
+        // Format: [idx][sourceType][repoId|section]
+        let sourceLabel = `[${i + 1}]`;
+        if (sourceType.startsWith('pdf_')) {
+          // PDF content: include section info
+          const sectionInfo = section || headingPath || repoId;
+          sourceLabel = `[${i + 1}][${sourceType}][${sectionInfo}]`;
+        } else if (repoId) {
+          sourceLabel = `[${i + 1}][${sourceType}][${repoId}]`;
+        } else {
+          sourceLabel = `[${i + 1}][${sourceType}]`;
+        }
+        
+        // Include chunkId in context for precise reference
+        return `--- Context ${sourceLabel} (chunkId: ${chunkId}) ---\n${chunk.content}`;
       })
       .join('\n\n');
 
-    return `You are a helpful assistant answering questions about code repositories.
-Use the following context to answer the question. If the context doesn't contain enough information, say so.
-Be concise and direct in your answer.
+    return `You are a knowledgeable assistant answering questions about documents, research papers, and code repositories.
+
+IMPORTANT RULES:
+1. Use ONLY the provided context to answer. Do NOT use external knowledge.
+2. For EVERY factual claim, include a citation in the format [N] where N is the context number.
+3. If information comes from a specific table/figure/formula, mention it explicitly (e.g., "According to Table 1 [3]...").
+4. If the context doesn't contain enough information, say so clearly.
+5. For numerical data or experimental results, quote the exact values from context with citation.
+6. Be concise but complete.
 
 Context:
 ${contextText}
 
 Question: ${query}
 
-Answer:`;
+Provide a well-cited answer:`;
   }
 
   /**

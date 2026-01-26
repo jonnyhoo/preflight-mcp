@@ -34,7 +34,11 @@ const logger = createModuleLogger('rag');
  * Index options for deduplication control.
  */
 export interface IndexOptions {
-  /** Force re-index even if content already exists (default: false) */
+  /** 
+   * Force re-index even if content already exists.
+   * Default: true for PDF content (to handle parser/strategy changes)
+   * Default: false for other content
+   */
   force?: boolean;
 }
 
@@ -152,8 +156,15 @@ export class RAGEngine {
         }
       }
 
-      // Deduplication check
-      if (contentHash && !options?.force) {
+      // Determine if this is PDF content (based on paperId or URL patterns)
+      const isPdfContent = !!(paperId || manifest?.repos?.[0]?.pdfUrl);
+      
+      // For PDF: default to force=true (to handle parser/strategy changes)
+      // User can explicitly set force=false to skip if already indexed
+      const shouldForce = options?.force ?? isPdfContent;
+      
+      // Deduplication check (only if not forcing)
+      if (contentHash && !shouldForce) {
         const existing = await this.chromaDB.getChunksByContentHash(contentHash);
         if (existing.length > 0) {
           logger.info(`Content already indexed: ${contentHash.slice(0, 12)}... (${existing.length} chunks)`);
@@ -173,10 +184,10 @@ export class RAGEngine {
       }
 
       // Force replace: delete existing chunks first
-      if (contentHash && options?.force) {
+      if (contentHash && shouldForce) {
         deletedChunks = await this.chromaDB.deleteByContentHash(contentHash);
         if (deletedChunks > 0) {
-          logger.info(`Deleted ${deletedChunks} existing chunks for replacement`);
+          logger.info(`Deleted ${deletedChunks} existing chunks for replacement (PDF auto-force: ${isPdfContent && options?.force === undefined})`);
         }
       }
 

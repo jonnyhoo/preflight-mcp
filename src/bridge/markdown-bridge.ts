@@ -267,6 +267,9 @@ export async function bridgePdfMarkdown(
           headingLevel: chunk.metadata.headingLevel,
           headingPath: chunk.metadata.headingPath,
           parentChunkId: chunk.metadata.parentChunkId,
+          // Multi-scale metadata (for best quality retrieval)
+          granularity: chunk.metadata.granularity,
+          assetId: chunk.metadata.assetId,
         },
         embedding: embedding?.vector,
       };

@@ -4,6 +4,7 @@
  */
 
 import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import type { ChunkDocument } from '../vectordb/types.js';
 import { ChromaVectorDB } from '../vectordb/chroma-client.js';
 import type { BridgeSource, BridgeOptions, BridgeResult } from './types.js';
@@ -14,6 +15,7 @@ import {
   bridgeOverview 
 } from './repocard-bridge.js';
 import { bridgePdfMarkdown } from './markdown-bridge.js';
+import { preprocessPdfMarkdown } from '../rag/pdf-preprocessor.js';
 import { createModuleLogger } from '../logging/logger.js';
 
 const logger = createModuleLogger('bridge');
@@ -136,7 +138,28 @@ export async function indexBundle(
     // Index PDF markdown (pdf_xxx.md)
     if (repo.pdfMarkdownPath) {
       try {
-        const pdfMarkdown = await fs.readFile(repo.pdfMarkdownPath, 'utf8');
+        let pdfMarkdown = await fs.readFile(repo.pdfMarkdownPath, 'utf8');
+        
+        // Apply Index-Time PDF preprocessing for best quality
+        // This must happen BEFORE chunking (bundle will be deleted after indexing)
+        const bundleDir = path.dirname(path.dirname(repo.pdfMarkdownPath)); // Go up from repos/xxx/
+        const preprocessResult = await preprocessPdfMarkdown(pdfMarkdown, {
+          bundlePath: bundleDir,
+          enableImageDescription: true,
+          enableDehyphenation: true,
+        });
+        pdfMarkdown = preprocessResult.markdown;
+        
+        if (preprocessResult.stats.pageMarkersRemoved > 0 ||
+            preprocessResult.stats.tablesConverted > 0 ||
+            preprocessResult.stats.imagesDescribed > 0) {
+          logger.info(
+            `PDF preprocessing: ${preprocessResult.stats.pageMarkersRemoved} page markers, ` +
+            `${preprocessResult.stats.tablesConverted} tables, ` +
+            `${preprocessResult.stats.imagesDescribed} images`
+          );
+        }
+        
         const pdfResult = await bridgePdfMarkdown(
           {
             bundleId,

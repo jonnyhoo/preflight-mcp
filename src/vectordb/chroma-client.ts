@@ -209,6 +209,10 @@ export class ChromaVectorDB {
         // ChromaDB doesn't support array values, so join headingPath
         headingPath: c.metadata.headingPath?.join(' > ') ?? '',
         parentChunkId: c.metadata.parentChunkId ?? '',
+        // Multi-scale chunking fields (for best quality retrieval)
+        granularity: c.metadata.granularity ?? '',
+        assetId: c.metadata.assetId ?? '',
+        pageIndex: c.metadata.pageIndex ?? 0,
       }));
 
       await this.request('POST', `${this.getBasePath()}/collections/${collection.id}/upsert`, {

@@ -76,6 +76,15 @@ interface ContentBlock {
   isSpecial: boolean; // formula/table/code - don't split
 }
 
+/** Extended block with hierarchy and granularity info */
+interface ExtendedBlock extends ContentBlock {
+  parentPath?: string[];
+  chunkId?: string;
+  parentChunkId?: string;
+  granularity?: 'section' | 'subsection' | 'paragraph' | 'element';
+  assetId?: string; // For figures: image filename
+}
+
 // ============================================================================
 // Token Estimation
 // ============================================================================
@@ -618,18 +627,26 @@ function adaptiveChunk(
  * Chunk content by heading structure without token limits.
  * Each chunk corresponds to a section at the specified heading level.
  * 
+ * NEW: Also extracts table/formula/figure/code/list as independent sub-chunks
+ * with parentChunkId linking back to the section chunk.
+ * 
  * @param tree - Heading tree from parseHeadingTree
  * @param targetLevel - Target heading level to chunk at (1-4)
  * @param trackHierarchy - Whether to track parent-child relationships
+ * @param extractSubChunks - Whether to create independent sub-chunks for special blocks
+ * @param granularity - Label for this chunk level
  * @returns Array of content blocks with hierarchy info
  */
 function semanticChunkByLevel(
   tree: HeadingNode[],
   targetLevel: number,
-  trackHierarchy: boolean
-): Array<ContentBlock & { parentPath?: string[]; chunkId?: string; parentChunkId?: string }> {
-  const result: Array<ContentBlock & { parentPath?: string[]; chunkId?: string; parentChunkId?: string }> = [];
+  trackHierarchy: boolean,
+  extractSubChunks = true,
+  granularity: ExtendedBlock['granularity'] = 'section'
+): ExtendedBlock[] {
+  const result: ExtendedBlock[] = [];
   let chunkIndex = 0;
+  let subChunkIndex = 0;
   
   // Recursive traversal to collect chunks at target level
   function traverse(
@@ -643,25 +660,82 @@ function semanticChunkByLevel(
       
       // If this node is at target level, create a chunk
       if (logicalLevel === targetLevel) {
-        const chunkId = `semantic_${chunkIndex++}`;
+        const chunkId = `semantic_${granularity}_${chunkIndex++}`;
         
         // Detect content blocks within this section
         const blocks = detectContentBlocks(node.content, currentPath);
         
-        // Merge all blocks from this section into one chunk
-        // (special blocks like figures/formulas are kept, but not split into separate chunks)
-        const mergedContent = blocks.map(b => b.content).join('\n\n');
-        
-        result.push({
-          type: 'text', // Main type is text, but may contain embedded formulas/figures
-          content: mergedContent,
-          heading: node.text,
-          headingPath: currentPath,
-          isSpecial: false,
-          parentPath: parentPath.length > 0 ? parentPath : undefined,
-          chunkId,
-          parentChunkId: trackHierarchy ? parentChunkId : undefined,
-        });
+        if (extractSubChunks) {
+          // Separate text content from special blocks (table/formula/figure/code/list)
+          const textBlocks: ContentBlock[] = [];
+          const specialBlocks: ContentBlock[] = [];
+          
+          for (const block of blocks) {
+            if (block.isSpecial || ['table', 'formula', 'figure', 'code', 'list'].includes(block.type)) {
+              specialBlocks.push(block);
+            } else {
+              textBlocks.push(block);
+            }
+          }
+          
+          // Create main section chunk (text only)
+          const textContent = textBlocks.map(b => b.content).join('\n\n');
+          if (textContent.trim()) {
+            result.push({
+              type: 'text',
+              content: textContent,
+              heading: node.text,
+              headingPath: currentPath,
+              isSpecial: false,
+              parentPath: parentPath.length > 0 ? parentPath : undefined,
+              chunkId,
+              parentChunkId: trackHierarchy ? parentChunkId : undefined,
+              granularity,
+            });
+          }
+          
+          // Create independent sub-chunks for special blocks
+          for (const block of specialBlocks) {
+            const subChunkId = `sub_${block.type}_${subChunkIndex++}`;
+            
+            // Extract assetId for figures (image filename)
+            let assetId: string | undefined;
+            if (block.type === 'figure') {
+              const imgMatch = block.content.match(/!\[[^\]]*\]\(([^)]+)\)/);
+              if (imgMatch) {
+                const imgPath = imgMatch[1]!;
+                assetId = imgPath.split('/').pop(); // Get filename
+              }
+            }
+            
+            result.push({
+              type: block.type,
+              content: block.content,
+              heading: block.heading ?? node.text,
+              headingPath: currentPath,
+              isSpecial: true,
+              parentPath: parentPath.length > 0 ? parentPath : undefined,
+              chunkId: subChunkId,
+              parentChunkId: chunkId, // Link to parent section chunk
+              granularity: 'element',
+              assetId,
+            });
+          }
+        } else {
+          // Original behavior: merge all blocks into one chunk
+          const mergedContent = blocks.map(b => b.content).join('\n\n');
+          result.push({
+            type: 'text',
+            content: mergedContent,
+            heading: node.text,
+            headingPath: currentPath,
+            isSpecial: false,
+            parentPath: parentPath.length > 0 ? parentPath : undefined,
+            chunkId,
+            parentChunkId: trackHierarchy ? parentChunkId : undefined,
+            granularity,
+          });
+        }
         
         // Continue traversing children with this chunk as parent
         if (node.children.length > 0) {
@@ -679,6 +753,36 @@ function semanticChunkByLevel(
   }
   
   traverse(tree);
+  return result;
+}
+
+/**
+ * Multi-scale chunking: generates chunks at multiple granularities simultaneously.
+ * 
+ * Produces both coarse (section-level) and fine (paragraph-level) chunks for
+ * optimal retrieval at different query types.
+ * 
+ * @param markdown - Raw markdown content
+ * @param trackHierarchy - Whether to track parent-child relationships
+ * @returns Combined array of chunks at multiple granularities
+ */
+function multiScaleChunk(
+  markdown: string,
+  trackHierarchy: boolean
+): ExtendedBlock[] {
+  const tree = parseHeadingTree(markdown);
+  const result: ExtendedBlock[] = [];
+  
+  // Coarse: level=2 (sections) with sub-chunks extracted
+  const coarseChunks = semanticChunkByLevel(tree, 2, trackHierarchy, true, 'section');
+  result.push(...coarseChunks);
+  
+  // Fine: level=4 (paragraphs) without sub-chunks (already extracted at coarse level)
+  const fineChunks = semanticChunkByLevel(tree, 4, trackHierarchy, false, 'paragraph');
+  result.push(...fineChunks);
+  
+  logger.debug(`Multi-scale chunking: ${coarseChunks.length} coarse + ${fineChunks.length} fine chunks`);
+  
   return result;
 }
 
@@ -719,38 +823,31 @@ export function academicChunk(
     maxTokens: pdfOptions?.maxTokens ?? 2000,
     minTokens: pdfOptions?.minTokens ?? 100,
     overlapPercent: pdfOptions?.overlapPercent ?? 15,
+    // NEW: Enable multi-scale by default for best quality
+    multiScale: pdfOptions?.strategy !== 'token-based', // Always use multi-scale unless token-based
+    extractSubChunks: true, // Always extract sub-chunks for table/formula/figure
   };
 
   // 1. Extract document context
   const context = extractDocumentContext(markdown);
   logger.debug(`Extracted context: title="${context.title}"`);
 
-  let chunkedBlocks: Array<ContentBlock & { parentPath?: string[]; chunkId?: string; parentChunkId?: string }>;
+  let chunkedBlocks: ExtendedBlock[];
 
   // 2. Choose chunking strategy
-  if (opts.strategy === 'semantic') {
-    // Semantic: Parse heading tree and chunk by level
-    const tree = parseHeadingTree(markdown);
-    chunkedBlocks = semanticChunkByLevel(tree, opts.chunkLevel, opts.trackHierarchy);
-    logger.debug(`Semantic chunking (level=${opts.chunkLevel}): ${chunkedBlocks.length} chunks`);
-  } else if (opts.strategy === 'token-based') {
-    // Legacy: Token-based with adaptive sizing
+  if (opts.strategy === 'token-based') {
+    // Legacy: Token-based with adaptive sizing (no multi-scale)
     const blocks = detectContentBlocks(markdown);
-    chunkedBlocks = adaptiveChunk(blocks, opts.maxTokens, opts.minTokens, opts.overlapPercent);
+    chunkedBlocks = adaptiveChunk(blocks, opts.maxTokens, opts.minTokens, opts.overlapPercent).map(b => ({
+      ...b,
+      granularity: 'section' as const,
+    }));
     logger.debug(`Token-based chunking: ${chunkedBlocks.length} chunks`);
   } else {
-    // Hybrid: Semantic with soft token warning
-    const tree = parseHeadingTree(markdown);
-    chunkedBlocks = semanticChunkByLevel(tree, opts.chunkLevel, opts.trackHierarchy);
-    // Log warning for oversized chunks
-    const oversized = chunkedBlocks.filter(b => estimateTokens(b.content) > opts.maxTokens);
-    if (oversized.length > 0) {
-      logger.warn(
-        `Hybrid mode: ${oversized.length}/${chunkedBlocks.length} chunks exceed ${opts.maxTokens} tokens ` +
-        `(consider using chunkLevel=${opts.chunkLevel + 1} for finer granularity)`
-      );
-    }
-    logger.debug(`Hybrid chunking (level=${opts.chunkLevel}): ${chunkedBlocks.length} chunks`);
+    // Semantic/Hybrid: Use multi-scale chunking for best quality
+    // This generates both coarse (section-level) and fine (paragraph-level) chunks
+    chunkedBlocks = multiScaleChunk(markdown, opts.trackHierarchy);
+    logger.info(`Multi-scale chunking: ${chunkedBlocks.length} total chunks (coarse + fine + sub-chunks)`);
   }
 
   // 3. Convert to SemanticChunk with contextual prefix
@@ -760,6 +857,11 @@ export function academicChunk(
     let prefix = opts.includeParentContext && sectionPath
       ? `[Paper: ${context.title}] [Section: ${sectionPath}]`
       : `[Paper: ${context.title}]`;
+    
+    // Add granularity indicator for sub-chunks
+    if (block.granularity === 'element') {
+      prefix += ` [${block.type.toUpperCase()}]`;
+    }
     
     // Add prefix to content
     const contentWithContext = `${prefix}\n\n${block.content}`;
@@ -779,6 +881,9 @@ export function academicChunk(
         headingLevel: block.headingPath ? block.headingPath.length : undefined,
         headingPath: block.headingPath,
         parentChunkId: block.parentChunkId,
+        // NEW: Additional metadata for quality and traceability
+        granularity: block.granularity,
+        assetId: block.assetId,
       },
     };
   });
