@@ -312,6 +312,44 @@ export class ChromaVectorDB {
   }
 
   /**
+   * Get chunks by parent chunk ID (for sibling retrieval).
+   */
+  async getChunksByParentId(parentChunkId: string): Promise<ChunkDocument[]> {
+    if (!parentChunkId) return [];
+
+    const collection = await this.ensureCollection('chunks');
+
+    const response = await this.request<ChromaGetResponse>(
+      'POST',
+      `${this.getBasePath()}/collections/${collection.id}/get`,
+      {
+        where: { parentChunkId },
+        include: ['documents', 'metadatas'],
+      }
+    );
+
+    const chunks: ChunkDocument[] = [];
+    for (let i = 0; i < response.ids.length; i++) {
+      const id = response.ids[i]!;
+      const document = response.documents?.[i] ?? '';
+      const metadata = response.metadatas?.[i] as ChunkMetadata | null;
+
+      chunks.push({
+        id,
+        content: document,
+        metadata: metadata ?? {
+          sourceType: 'readme',
+          bundleId: '',
+          chunkIndex: 0,
+          chunkType: 'text',
+        },
+      });
+    }
+
+    return chunks;
+  }
+
+  /**
    * Delete chunks by IDs.
    */
   async deleteChunks(ids: string[]): Promise<void> {

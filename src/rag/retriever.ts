@@ -234,10 +234,19 @@ export class RAGRetriever {
     
     // Fetch sibling chunks (chunks sharing the same parent)
     if (options.expandToSiblings && siblingParentIds.size > 0) {
-      // Query chunks by parentChunkId metadata
-      // Note: This requires querying by metadata filter
-      // For now, we'll skip sibling expansion as it needs metadata query support
-      logger.debug('Sibling expansion not yet implemented (requires metadata query)');
+      for (const parentId of siblingParentIds) {
+        const siblings = await this.chromaDB.getChunksByParentId(parentId);
+        for (const sibling of siblings) {
+          if (!seenIds.has(sibling.id)) {
+            expandedChunks.push({
+              ...sibling,
+              score: 0.6, // Lower score for sibling context
+            });
+            seenIds.add(sibling.id);
+            logger.debug(`Added sibling chunk: ${sibling.id}`);
+          }
+        }
+      }
     }
     
     return {
