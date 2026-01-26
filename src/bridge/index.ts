@@ -7,7 +7,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { ChunkDocument } from '../vectordb/types.js';
 import { ChromaVectorDB } from '../vectordb/chroma-client.js';
-import type { BridgeSource, BridgeOptions, BridgeResult } from './types.js';
+import type { BridgeSource, BridgeOptions, BridgeResult, PdfIndexArtifact } from './types.js';
 import { 
   locateFilesToIndex, 
   bridgeRepoCard, 
@@ -81,6 +81,7 @@ export async function indexBundle(
   };
 
   const allChunks: ChunkDocument[] = [];
+  const pdfArtifacts: PdfIndexArtifact[] = [];
 
   // Locate all indexable files
   const files = await locateFilesToIndex(bundlePath);
@@ -142,9 +143,10 @@ export async function indexBundle(
         
         // Apply Index-Time PDF preprocessing for best quality
         // This must happen BEFORE chunking (bundle will be deleted after indexing)
-        const bundleDir = path.dirname(path.dirname(repo.pdfMarkdownPath)); // Go up from repos/xxx/
+        // IMPORTANT: repo.pdfMarkdownPath is typically under bundle root (e.g. <bundle>/pdf_xxx.md).
+        // Use the actual bundlePath here; do NOT climb directories, otherwise images won't resolve.
         const preprocessResult = await preprocessPdfMarkdown(pdfMarkdown, {
-          bundlePath: bundleDir,
+          bundlePath,
           enableImageDescription: true,
           enableDehyphenation: true,
         });
@@ -171,6 +173,16 @@ export async function indexBundle(
         );
         allChunks.push(...pdfResult.chunks);
         mergeResults(totalResult, pdfResult);
+
+        // Capture artifacts for index-time QA (exactly what we indexed)
+        pdfArtifacts.push({
+          repoId: repo.repoId,
+          pdfMarkdownPath: repo.pdfMarkdownPath,
+          markdown: pdfMarkdown,
+          preprocessStats: preprocessResult.stats,
+          chunks: pdfResult.chunks,
+        });
+
         logger.info(`Indexed ${repo.repoId} PDF markdown: ${pdfResult.chunksWritten} chunks`);
       } catch (err) {
         const msg = `Failed to index ${repo.repoId} PDF markdown: ${err}`;
@@ -206,6 +218,10 @@ export async function indexBundle(
       logger.error(msg);
       totalResult.errors.push(msg);
     }
+  }
+
+  if (pdfArtifacts.length > 0) {
+    totalResult.pdfArtifacts = pdfArtifacts;
   }
 
   return totalResult;

@@ -23,6 +23,7 @@ import type {
   DEFAULT_QUERY_OPTIONS,
 } from './types.js';
 import { createModuleLogger } from '../logging/logger.js';
+import { persistQAReport, runFullQA } from '../quality/index-qa.js';
 
 const logger = createModuleLogger('rag');
 
@@ -207,6 +208,48 @@ export class RAGEngine {
       chunksWritten = bridgeResult.chunksWritten;
       errors.push(...bridgeResult.errors);
       logger.info(`Indexed ${chunksWritten} document chunks`);
+
+      // 1.1 Index-Time QA for PDF (must run before bundle deletion; persist to vector DB)
+      if (isPdfContent && contentHash && bridgeResult.pdfArtifacts && bridgeResult.pdfArtifacts.length > 0) {
+        for (const artifact of bridgeResult.pdfArtifacts) {
+          try {
+            const queryFn = this.llm
+              ? async (question: string) => {
+                  const r = await this.query(question, {
+                    bundleId,
+                    mode: 'naive',
+                    topK: 12,
+                    enableContextCompletion: true,
+                    maxHops: 3,
+                    enableVerification: true,
+                    retryOnLowFaithfulness: true,
+                  });
+                  return { answer: r.answer, faithfulness: r.faithfulnessScore };
+                }
+              : undefined;
+
+            const report = await runFullQA(
+              artifact.markdown,
+              artifact.chunks,
+              contentHash,
+              paperId,
+              queryFn
+            );
+
+            await persistQAReport(this.chromaDB, report, this.embedding);
+
+            if (!report.passed) {
+              const msg = `Index QA failed for ${paperId ?? contentHash.slice(0, 12)}: ${report.allIssues.join('; ')}`;
+              logger.error(msg);
+              errors.push(msg);
+            }
+          } catch (err) {
+            const msg = `Index QA error: ${err}`;
+            logger.error(msg);
+            errors.push(msg);
+          }
+        }
+      }
 
       // 2. KG: Build AST graph for code repos
       logger.info(`Building AST graph...`);

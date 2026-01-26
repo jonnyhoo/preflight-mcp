@@ -383,7 +383,7 @@ export async function persistQAReport(
   report: QAReport,
   embedding: { embed: (text: string) => Promise<{ vector: number[] }> }
 ): Promise<void> {
-  // Create a searchable summary
+  // Create a searchable summary (embed this, not the full JSON)
   const summary = [
     `QA Report for ${report.paperId ?? report.contentHash.slice(0, 12)}`,
     `Status: ${report.passed ? 'PASSED' : 'FAILED'}`,
@@ -393,27 +393,31 @@ export async function persistQAReport(
     report.ragQA ? `RAG: ${report.ragQA.passedCount}/${report.ragQA.testQuestionCount} passed (avg faith: ${report.ragQA.avgFaithfulness.toFixed(2)})` : '',
     report.allIssues.length > 0 ? `Issues: ${report.allIssues.slice(0, 3).join('; ')}` : 'No issues',
   ].filter(Boolean).join('\n');
-  
+
+  // Store full report JSON in content (not metadata) to avoid metadata size limits
+  const reportJson = JSON.stringify(report);
+  const content = `${summary}\n\n---\nQA_REPORT_JSON:\n${reportJson}`;
+
   // Generate embedding for the summary
   const embeddingResult = await embedding.embed(summary);
-  
+
   // Create chunk document for the QA report
   const qaChunk: ChunkDocument = {
     id: report.reportId,
-    content: summary,
+    content,
     metadata: {
-      sourceType: 'overview', // Use overview as closest match
-      bundleId: report.contentHash, // Use contentHash as pseudo-bundleId for lookup
+      sourceType: 'overview',
+      // Use contentHash as pseudo-bundleId for lookup/audit after bundle deletion
+      bundleId: report.contentHash,
       chunkIndex: 0,
       chunkType: 'summary',
       contentHash: report.contentHash,
       paperId: report.paperId,
-      // Store full report as JSON in fieldName (hack but works)
-      fieldName: JSON.stringify(report),
+      fieldName: 'quality_report_json',
     },
     embedding: embeddingResult.vector,
   };
-  
+
   await chromaDB.upsertChunks([qaChunk]);
   logger.info(`Persisted QA report: ${report.reportId} (${report.passed ? 'PASSED' : 'FAILED'})`);
 }

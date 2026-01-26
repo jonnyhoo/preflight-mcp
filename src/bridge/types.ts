@@ -3,7 +3,7 @@
  * @module bridge/types
  */
 
-import type { ChunkType, SourceType } from '../vectordb/types.js';
+import type { ChunkDocument, ChunkType, SourceType } from '../vectordb/types.js';
 
 // ============================================================================
 // Semantic Chunk Types
@@ -73,10 +73,29 @@ export interface BridgeOptions {
   paperVersion?: string;
 }
 
+export interface PdfIndexArtifact {
+  repoId: string;
+  pdfMarkdownPath: string;
+  markdown: string;
+  preprocessStats?: {
+    pageMarkersRemoved: number;
+    tablesConverted: number;
+    imagesDescribed: number;
+    hyphenationsFixed: number;
+    processingTimeMs: number;
+  };
+  chunks: ChunkDocument[];
+}
+
 export interface BridgeResult {
   chunksWritten: number;
   chunksByType: Record<ChunkType, number>;
   errors: string[];
+  /**
+   * Optional PDF artifacts captured during indexing.
+   * Used for index-time QA so we can evaluate exactly what we indexed (bundle will be deleted).
+   */
+  pdfArtifacts?: PdfIndexArtifact[];
 }
 
 // ============================================================================
