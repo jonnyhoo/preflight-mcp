@@ -381,16 +381,17 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
     {
       title: 'RAG content management',
       description:
-        'Manage indexed content in ChromaDB: list all indexed PDFs/documents, view statistics, or delete specific content.\n\n' +
+        'Manage indexed content in ChromaDB: list all indexed PDFs/documents, view statistics, or delete content.\n\n' +
         '**Usage:**\n' +
-        '- List all indexed content: `{"action": "list"}` → shows contentHash, paperId, chunk count\n' +
+        '- List all indexed content: `{"action": "list"}` → shows full contentHash, paperId, chunk count\n' +
         '- View statistics: `{"action": "stats"}` → total chunks, unique documents, by paperId\n' +
-        '- Delete by hash: `{"action": "delete", "contentHash": "77b44fcb..."}` → removes all chunks for that content\n\n' +
-        '**Note:** contentHash is the source file SHA256. Get it from `list` output or `preflight_rag` index result.\n' +
+        '- Delete by hash: `{"action": "delete", "contentHash": "<full_hash>"}` → removes all chunks for that content\n' +
+        '- Delete all: `{"action": "delete_all"}` → removes ALL indexed content (use with caution)\n\n' +
+        '**Note:** contentHash is the source file SHA256 (64 chars). Get it from `list` output.\n' +
         '**Tip:** Use `list` before delete to see what\'s indexed. Bundle deletion does NOT affect ChromaDB (by design).\n' +
-        'Use when: "查看RAG索引", "删除向量", "RAG统计", "清理索引", "已索引哪些论文", "删除旧论文".',
+        'Use when: "查看RAG索引", "删除向量", "RAG统计", "清理索引", "已索引哪些论文", "删除旧论文", "清空所有RAG数据".',
       inputSchema: {
-        action: z.enum(['list', 'stats', 'delete']).describe('Action to perform'),
+        action: z.enum(['list', 'stats', 'delete', 'delete_all']).describe('Action to perform'),
         contentHash: z.string().optional().describe('Content hash to delete (required for delete action)'),
       },
       outputSchema: {
@@ -443,7 +444,7 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
               textResponse += 'No content indexed yet.\n';
             } else {
               for (const item of items) {
-                textResponse += `• ${item.contentHash.slice(0, 12)}...\n`;
+                textResponse += `• ${item.contentHash}\n`;
                 if (item.paperId) {
                   textResponse += `  paperId: ${item.paperId}${item.paperVersion ? ` (${item.paperVersion})` : ''}\n`;
                 }
@@ -483,6 +484,26 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
               textResponse += `   contentHash: ${contentHash.slice(0, 12)}...\n`;
             } else {
               textResponse += `⚠️ No chunks found with contentHash: ${contentHash.slice(0, 12)}...\n`;
+            }
+            break;
+          }
+
+          case 'delete_all': {
+            const items = await chromaDB.listIndexedContent();
+            if (items.length === 0) {
+              textResponse += '⚠️ No content to delete.\n';
+              structuredContent.deleted = false;
+              structuredContent.deletedChunks = 0;
+            } else {
+              let totalDeleted = 0;
+              for (const item of items) {
+                const count = await chromaDB.deleteByContentHash(item.contentHash);
+                totalDeleted += count;
+              }
+              textResponse += `🗑️ Deleted all content: ${totalDeleted} chunks from ${items.length} documents\n`;
+              structuredContent.deleted = true;
+              structuredContent.deletedChunks = totalDeleted;
+              structuredContent.deletedDocuments = items.length;
             }
             break;
           }
