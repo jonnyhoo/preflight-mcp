@@ -59,6 +59,7 @@ export class RAGGenerator {
       sourceType: chunk.metadata.sourceType,
       filePath: chunk.metadata.filePath,
       repoId: chunk.metadata.repoId,
+      pageIndex: chunk.metadata.pageIndex, // Page number (1-indexed)
     }));
 
     // If no LLM configured, return a simple concatenated answer

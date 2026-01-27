@@ -103,6 +103,42 @@ async function getOrCreateEngine(
 }
 
 // ============================================================================
+// Helper: Get Embedding Provider
+// ============================================================================
+
+function getEmbeddingProvider(cfg: ToolDependencies['cfg']) {
+  const { embedding } = createEmbeddingFromConfig(cfg);
+  return embedding;
+}
+
+// ============================================================================
+// Helper: Inspect Chunks (for debugging)
+// ============================================================================
+
+async function inspectChunks(
+  chromaDB: ChromaVectorDB,
+  cfg: ToolDependencies['cfg'],
+  bundleId?: string,
+  limit: number = 5
+): Promise<{ chunks: Array<{ id: string; content: string; metadata: Record<string, unknown> }> }> {
+  // Use a generic query to fetch some chunks
+  // We need an embedding to query, so use a simple text
+  const embedding = getEmbeddingProvider(cfg);
+  const queryEmbedding = await embedding.embed('document content');
+  
+  const filter = bundleId ? { bundleId } : undefined;
+  const results = await chromaDB.queryChunks(queryEmbedding.vector, limit, filter);
+  
+  return {
+    chunks: results.chunks.map(c => ({
+      id: c.id,
+      content: c.content,
+      metadata: c.metadata as unknown as Record<string, unknown>,
+    })),
+  };
+}
+
+// ============================================================================
 // preflight_rag Tool
 // ============================================================================
 
@@ -169,6 +205,7 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
               sourceType: z.string(),
               filePath: z.string().optional(),
               repoId: z.string().optional(),
+              pageIndex: z.number().optional().describe('Page number (1-indexed) in PDF'),
             })
           )
           .optional(),
@@ -244,6 +281,7 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
             sourceType: string;
             filePath?: string;
             repoId?: string;
+            pageIndex?: number;
           }>;
           relatedEntities?: string[];
           stats: {
@@ -366,7 +404,8 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
           if (queryResult.sources.length > 0) {
             textResponse += '\n📚 Sources:\n';
             queryResult.sources.slice(0, 5).forEach((s, i) => {
-              textResponse += `   ${i + 1}. [${s.sourceType}] ${s.repoId ?? s.filePath ?? s.chunkId}\n`;
+              const pageInfo = s.pageIndex ? ` (p.${s.pageIndex})` : '';
+              textResponse += `   ${i + 1}. [${s.sourceType}] ${s.repoId ?? s.filePath ?? s.chunkId}${pageInfo}\n`;
             });
           }
 
@@ -428,18 +467,31 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
     {
       title: 'RAG content management',
       description:
-        'Manage indexed content in ChromaDB: list all indexed PDFs/documents, view statistics, or delete content.\n\n' +
-        '**Usage:**\n' +
-        '- List all indexed content: `{"action": "list"}` → shows full contentHash, paperId, chunk count\n' +
-        '- View statistics: `{"action": "stats"}` → total chunks, unique documents, by paperId\n' +
-        '- Delete by hash: `{"action": "delete", "contentHash": "<full_hash>"}` → removes all chunks for that content\n' +
-        '- Delete all: `{"action": "delete_all"}` → removes ALL indexed content (use with caution)\n\n' +
-        '**Note:** contentHash is the source file SHA256 (64 chars). Get it from `list` output.\n' +
-        '**Tip:** Use `list` before delete to see what\'s indexed. Bundle deletion does NOT affect ChromaDB (by design).\n' +
-        'Use when: "查看RAG索引", "删除向量", "RAG统计", "清理索引", "已索引哪些论文", "删除旧论文", "清空所有RAG数据".',
+        'Manage and debug indexed content in ChromaDB.\n\n' +
+        '**Actions:**\n' +
+        '- `list` → List all indexed PDFs/documents with contentHash, paperId, chunk count\n' +
+        '- `stats` → View statistics: total chunks, unique documents, breakdown by paperId\n' +
+        '- `inspect` → **Debug tool**: View raw chunk data including content and ALL metadata (pageIndex, sectionHeading, etc.)\n' +
+        '  - Use `bundleId` to filter by bundle, `limit` to control how many chunks (default 5)\n' +
+        '  - Example: `{"action": "inspect", "bundleId": "xxx", "limit": 3}`\n' +
+        '  - **When to use**: 验证索引是否正确、检查 pageIndex 是否存在、调试 chunk 内容\n' +
+        '- `search_raw` → **Debug tool**: Raw vector search without LLM, returns top-k chunks with scores\n' +
+        '  - Requires `query` (search text), optional `bundleId` filter and `limit` (default 5)\n' +
+        '  - Example: `{"action": "search_raw", "query": "abstract", "limit": 3}`\n' +
+        '  - **When to use**: 测试检索质量、验证向量搜索是否工作、调试为什么 RAG 找不到内容\n' +
+        '- `delete` → Delete all chunks for a specific contentHash\n' +
+        '- `delete_all` → **Dangerous**: Remove ALL indexed content\n\n' +
+        '**Tips:**\n' +
+        '- Use `list` first to see what\'s indexed\n' +
+        '- Use `inspect` to verify chunk metadata (especially pageIndex for page localization)\n' +
+        '- Use `search_raw` to debug retrieval issues before blaming the LLM\n' +
+        'Use when: "查看RAG索引", "删除向量", "RAG统计", "调试检索", "检查chunk内容", "验证pageIndex".',
       inputSchema: {
-        action: z.enum(['list', 'stats', 'delete', 'delete_all']).describe('Action to perform'),
+        action: z.enum(['list', 'stats', 'delete', 'delete_all', 'inspect', 'search_raw']).describe('Action to perform'),
         contentHash: z.string().optional().describe('Content hash to delete (required for delete action)'),
+        bundleId: z.string().optional().describe('Filter by bundle ID (for inspect and search_raw)'),
+        query: z.string().optional().describe('Search query text (required for search_raw)'),
+        limit: z.number().optional().describe('Max number of chunks to return (default 5, for inspect and search_raw)'),
       },
       outputSchema: {
         // List result
@@ -467,7 +519,7 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
     },
     async (args) => {
       try {
-        const { action, contentHash } = args;
+        const { action, contentHash, bundleId, query, limit } = args;
 
         // Check ChromaDB availability
         const chromaCheck = await checkChromaAvailability(cfg.chromaUrl);
@@ -551,6 +603,100 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
               structuredContent.deleted = true;
               structuredContent.deletedChunks = totalDeleted;
               structuredContent.deletedDocuments = items.length;
+            }
+            break;
+          }
+
+          case 'inspect': {
+            // Fetch chunks with full metadata for debugging
+            const maxChunks = limit ?? 5;
+            const filter = bundleId ? { bundleId } : undefined;
+            
+            // Use a simple embedding to get some chunks (we just want to inspect, not search)
+            // For inspect, we'll use the getChunks method with a filter workaround
+            const allIndexed = await chromaDB.listIndexedContent();
+            const targetBundles = bundleId 
+              ? allIndexed.filter(i => i.bundleId === bundleId)
+              : allIndexed;
+            
+            if (targetBundles.length === 0) {
+              textResponse += `⚠️ No chunks found${bundleId ? ` for bundleId: ${bundleId}` : ''}.\n`;
+              break;
+            }
+
+            // Get chunks by fetching with a dummy query (we need embedding for this)
+            // For now, use a workaround: fetch all and filter
+            const inspection = await inspectChunks(chromaDB, cfg, bundleId, maxChunks);
+            structuredContent.chunks = inspection.chunks;
+
+            textResponse += `🔍 Inspecting ${inspection.chunks.length} chunks${bundleId ? ` (bundleId: ${bundleId})` : ''}\n\n`;
+            
+            for (let i = 0; i < inspection.chunks.length; i++) {
+              const chunk = inspection.chunks[i]!;
+              textResponse += `--- Chunk ${i + 1} ---\n`;
+              textResponse += `ID: ${chunk.id}\n`;
+              textResponse += `Type: ${chunk.metadata.chunkType} | Source: ${chunk.metadata.sourceType}\n`;
+              if (chunk.metadata.pageIndex) {
+                textResponse += `Page: ${chunk.metadata.pageIndex}\n`;
+              }
+              if (chunk.metadata.sectionHeading) {
+                textResponse += `Section: ${chunk.metadata.sectionHeading}\n`;
+              }
+              if (chunk.metadata.headingPath) {
+                textResponse += `Path: ${chunk.metadata.headingPath}\n`;
+              }
+              if (chunk.metadata.granularity) {
+                textResponse += `Granularity: ${chunk.metadata.granularity}\n`;
+              }
+              // Truncate content for display
+              const contentPreview = chunk.content.length > 300 
+                ? chunk.content.slice(0, 300) + '...' 
+                : chunk.content;
+              textResponse += `Content: ${contentPreview}\n\n`;
+            }
+            break;
+          }
+
+          case 'search_raw': {
+            if (!query) {
+              throw new Error('query is required for search_raw action');
+            }
+
+            // Check embedding configuration
+            if (!cfg.semanticSearchEnabled && !cfg.openaiApiKey && cfg.embeddingProvider !== 'ollama') {
+              throw new Error('Embedding not configured. Cannot perform search_raw.');
+            }
+
+            const maxResults = limit ?? 5;
+            const filter = bundleId ? { bundleId } : undefined;
+
+            // Get embedding for query
+            const embedding = await getEmbeddingProvider(cfg);
+            const queryEmbedding = await embedding.embed(query);
+
+            // Raw vector search
+            const results = await chromaDB.queryChunks(queryEmbedding.vector, maxResults, filter);
+            structuredContent.results = results.chunks;
+
+            textResponse += `🔎 Raw Search Results for: "${query}"\n`;
+            textResponse += `Found ${results.chunks.length} chunks${bundleId ? ` (bundleId: ${bundleId})` : ''}\n\n`;
+
+            for (let i = 0; i < results.chunks.length; i++) {
+              const chunk = results.chunks[i]!;
+              textResponse += `--- Result ${i + 1} (score: ${chunk.score.toFixed(3)}) ---\n`;
+              textResponse += `ID: ${chunk.id}\n`;
+              textResponse += `Type: ${chunk.metadata.chunkType} | Source: ${chunk.metadata.sourceType}\n`;
+              if (chunk.metadata.pageIndex) {
+                textResponse += `Page: ${chunk.metadata.pageIndex}\n`;
+              }
+              if (chunk.metadata.sectionHeading) {
+                textResponse += `Section: ${chunk.metadata.sectionHeading}\n`;
+              }
+              // Truncate content for display
+              const contentPreview = chunk.content.length > 300 
+                ? chunk.content.slice(0, 300) + '...' 
+                : chunk.content;
+              textResponse += `Content: ${contentPreview}\n\n`;
             }
             break;
           }

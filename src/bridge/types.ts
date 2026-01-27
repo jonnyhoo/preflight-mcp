@@ -43,6 +43,8 @@ export interface SemanticChunkMetadata {
   granularity?: 'section' | 'subsection' | 'paragraph' | 'element';
   /** Asset ID for figures (image filename) */
   assetId?: string;
+  /** Page number (1-indexed) where this chunk starts in the PDF */
+  pageNumber?: number;
 }
 
 // ============================================================================

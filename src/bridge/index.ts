@@ -152,6 +152,15 @@ export async function indexBundle(
         });
         pdfMarkdown = preprocessResult.markdown;
         
+        // DEBUG: Check if pagebreak comments exist
+        const pagebreakCount = (pdfMarkdown.match(/<!-- pagebreak:\d+ -->/g) || []).length;
+        logger.info(`[DEBUG] Pagebreak comments in preprocessed markdown: ${pagebreakCount}`);
+        const lines = pdfMarkdown.split('\n');
+        logger.info(`[DEBUG] First 10 lines of preprocessed markdown:`);
+        for (let i = 0; i < Math.min(10, lines.length); i++) {
+          logger.info(`[DEBUG]   Line ${i}: ${lines[i]?.substring(0, 80) ?? ''}`);
+        }
+        
         if (preprocessResult.stats.pageMarkersRemoved > 0 ||
             preprocessResult.stats.tablesConverted > 0 ||
             preprocessResult.stats.imagesDescribed > 0) {

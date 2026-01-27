@@ -50,6 +50,15 @@ function resolveEmbeddingsUrl(cfg: OpenAIEmbeddingConfig): string {
   return `${trimTrailingSlash(baseUrl)}/embeddings`;
 }
 
+function isOpenRouterHost(u: string): boolean {
+  try {
+    const host = new URL(u).host;
+    return host === 'openrouter.ai' || host.endsWith('.openrouter.ai');
+  } catch {
+    return false;
+  }
+}
+
 function buildAuthHeaders(params: { apiKey: string; authMode: OpenAIAuthMode; url: string }): Record<string, string> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -63,6 +72,12 @@ function buildAuthHeaders(params: { apiKey: string; authMode: OpenAIAuthMode; ur
     headers['Authorization'] = `Bearer ${params.apiKey}`;
   }
 
+  // OpenRouter-specific headers (required for embeddings)
+  if (isOpenRouterHost(params.url)) {
+    headers['HTTP-Referer'] = 'https://github.com/jonnyhoo/preflight-mcp';
+    headers['X-Title'] = 'preflight-mcp';
+  }
+
   return headers;
 }
 
@@ -71,12 +86,25 @@ async function postEmbeddings(params: {
   headers: Record<string, string>;
   body: Record<string, unknown>;
 }): Promise<{ vectors: number[][] }> {
-  // Some OpenAI-compatible providers reject encoding_format; try with it first, then retry without.
-  const tryBodies: Array<Record<string, unknown>> = [params.body];
-  if ('encoding_format' in params.body) {
-    const { encoding_format: _enc, ...rest } = params.body as any;
-    tryBodies.push(rest);
-  }
+  // Build a sequence of fallback request bodies to maximize provider compatibility.
+  const tryBodies: Array<Record<string, unknown>> = [];
+
+  const original = params.body as Record<string, unknown>;
+  const withoutEncoding = (() => { const { encoding_format: _enc, ...rest } = original as any; return rest; })();
+  const withoutTruncate = (() => { const { truncate: _tr, ...rest } = original as any; return rest; })();
+  const withoutBoth = (() => { const { encoding_format: _enc, truncate: _tr, ...rest } = original as any; return rest; })();
+
+  // Preferred order: original -> no encoding_format -> no truncate -> no both
+  tryBodies.push(original);
+  // Avoid pushing duplicates
+  const pushUnique = (b: Record<string, unknown>) => {
+    if (JSON.stringify(b) !== JSON.stringify(tryBodies[tryBodies.length - 1])) {
+      tryBodies.push(b);
+    }
+  };
+  pushUnique(withoutEncoding);
+  pushUnique(withoutTruncate);
+  pushUnique(withoutBoth);
 
   let lastErr: Error | null = null;
   for (const body of tryBodies) {
@@ -99,7 +127,9 @@ async function postEmbeddings(params: {
 
       const rows = Array.isArray(data.data) ? data.data : [];
       if (rows.length === 0) {
-        throw new Error('Embeddings response missing data');
+        // Treat empty data as a non-fatal attempt; try next fallback body.
+        lastErr = new Error('Embeddings response missing data');
+        continue;
       }
 
       // Sort by index to ensure stable order.
@@ -107,9 +137,16 @@ async function postEmbeddings(params: {
       const vectors: number[][] = [];
       for (const r of sorted) {
         if (!r.embedding || !Array.isArray(r.embedding)) {
-          throw new Error('Embeddings response missing embedding vector');
+          lastErr = new Error('Embeddings response missing embedding vector');
+          // Try next fallback
+          continue;
         }
         vectors.push(r.embedding);
+      }
+
+      if (vectors.length === 0) {
+        lastErr = new Error('Embeddings response contained no vectors');
+        continue;
       }
 
       return { vectors };

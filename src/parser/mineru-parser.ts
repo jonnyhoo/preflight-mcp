@@ -660,13 +660,17 @@ export class MineruParser implements IDocumentParser {
 
       // Build stats
       const stats = this.buildStats(contents, startTime);
+      
+      // Build fullText with page markers if not already present
+      // MinerU API may not include page markers, so we add them based on parsed content
+      const fullText = this.buildFullTextWithPageMarkers(markdown, contents);
 
       return {
         success: true,
         contents,
         metadata,
         stats,
-        fullText: markdown,
+        fullText,
         warnings: assets.size > 0 ? [`Extracted ${assets.size} assets from PDF`] : undefined,
         assets: assets.size > 0 ? assets : undefined,
       };
@@ -943,6 +947,63 @@ export class MineruParser implements IDocumentParser {
       },
       pageIndex,
     };
+  }
+
+  /**
+   * Build fullText with page markers based on parsed content.
+   * If the markdown already has page markers (<!-- page: N -->), return as-is.
+   * Otherwise, insert page markers before content that starts on a new page.
+   */
+  private buildFullTextWithPageMarkers(markdown: string, contents: ParsedContent[]): string {
+    // Check if markdown already has page markers
+    if (/<!--\s*page[:\s]+\d+\s*-->/i.test(markdown)) {
+      return markdown;
+    }
+    
+    // Group contents by page
+    const pageContents = new Map<number, ParsedContent[]>();
+    for (const content of contents) {
+      const page = content.pageIndex ?? 0;
+      if (!pageContents.has(page)) {
+        pageContents.set(page, []);
+      }
+      pageContents.get(page)!.push(content);
+    }
+    
+    // If only one page or no page info, return original
+    if (pageContents.size <= 1) {
+      return markdown;
+    }
+    
+    // Build fullText with page markers
+    const sortedPages = Array.from(pageContents.keys()).sort((a, b) => a - b);
+    const parts: string[] = [];
+    
+    for (const pageIndex of sortedPages) {
+      // Add page marker (1-indexed for user display)
+      parts.push(`## Page ${pageIndex + 1}`);
+      
+      // Add content for this page
+      const pageContentsList = pageContents.get(pageIndex)!;
+      for (const content of pageContentsList) {
+        if (typeof content.content === 'string') {
+          parts.push(content.content);
+        } else if (content.type === 'table') {
+          const tableData = content.content as { markdown?: string; rows?: string[][] };
+          if (tableData.markdown) {
+            parts.push(tableData.markdown);
+          }
+        } else if (content.type === 'code_block') {
+          const codeData = content.content as { code?: string; language?: string };
+          if (codeData.code) {
+            const lang = codeData.language ?? '';
+            parts.push(`\`\`\`${lang}\n${codeData.code}\n\`\`\``);
+          }
+        }
+      }
+    }
+    
+    return parts.join('\n\n');
   }
 
   /**

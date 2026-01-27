@@ -66,6 +66,7 @@ interface HeadingNode {
   endLine: number;
   content: string;
   children: HeadingNode[];
+  pageNumber?: number; // Page number where this heading starts
 }
 
 interface ContentBlock {
@@ -74,6 +75,7 @@ interface ContentBlock {
   heading?: string;
   headingPath?: string[]; // e.g., ["Introduction", "Background"]
   isSpecial: boolean; // formula/table/code - don't split
+  pageNumber?: number; // Page number (1-indexed) where this block starts
 }
 
 /** Extended block with hierarchy and granularity info */
@@ -83,6 +85,7 @@ interface ExtendedBlock extends ContentBlock {
   parentChunkId?: string;
   granularity?: 'section' | 'subsection' | 'paragraph' | 'element';
   assetId?: string; // For figures: image filename
+  pageNumber?: number; // Page number (1-indexed) where this block starts
 }
 
 // ============================================================================
@@ -148,6 +151,18 @@ function parseHeadingTree(markdown: string): HeadingNode[] {
   
   let currentContent: string[] = [];
   let contentStartLine = 0;
+  
+  // Build a map of line number -> page number
+  const lineToPage = new Map<number, number>();
+  let currentPage = 1;
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i]!.trim();
+    const pagebreakMatch = trimmed.match(/^<!--\s*pagebreak:(\d+)\s*-->$/i);
+    if (pagebreakMatch) {
+      currentPage = parseInt(pagebreakMatch[1]!, 10);
+    }
+    lineToPage.set(i, currentPage);
+  }
 
   const flushContent = (endLine: number) => {
     if (currentContent.length === 0) return;
@@ -175,6 +190,7 @@ function parseHeadingTree(markdown: string): HeadingNode[] {
         endLine: i,
         content: '',
         children: [],
+        pageNumber: lineToPage.get(i) ?? 1, // Assign page number from line map
       };
 
       // Pop stack until we find a parent with lower level
@@ -251,6 +267,15 @@ function inferLogicalLevel(headingText: string): number | undefined {
     return parts.length; // "1" -> 1, "2.1" -> 2, "3.2.1" -> 3
   }
   
+  // Appendix sections: "A Pseudocode", "B Dataset", "G Case Study", etc.
+  // Also handles "A.1 Details" (Appendix subsection)
+  const appendixMatch = headingText.match(/^([A-Z](?:\.[0-9]+)*)\s+/);
+  if (appendixMatch) {
+    const parts = appendixMatch[1]!.split('.');
+    // A, B, C = level 1; A.1, B.2 = level 2
+    return parts.length;
+  }
+  
   // Top-level sections without numbers
   const topLevelSections = [
     'abstract', 'introduction', 'conclusion', 'conclusions',
@@ -265,7 +290,7 @@ function inferLogicalLevel(headingText: string): number | undefined {
 
 /**
  * Detect content blocks with their types.
- * Properly tracks section hierarchy and filters PDF artifacts.
+ * Properly tracks section hierarchy, filters PDF artifacts, and tracks page numbers.
  */
 function detectContentBlocks(markdown: string, _headingPath: string[] = []): ContentBlock[] {
   const blocks: ContentBlock[] = [];
@@ -280,6 +305,10 @@ function detectContentBlocks(markdown: string, _headingPath: string[] = []): Con
   // Track section hierarchy: [{level, text}]
   const sectionStack: { level: number; text: string }[] = [];
   
+  // Track current page number (1-indexed, default to 1)
+  let currentPage = 1;
+  let blockStartPage = 1;
+  
   const getCurrentHeading = (): string | undefined => {
     if (sectionStack.length === 0) return undefined;
     return sectionStack[sectionStack.length - 1]!.text;
@@ -293,21 +322,66 @@ function detectContentBlocks(markdown: string, _headingPath: string[] = []): Con
     const content = currentContent.join('\n').trim();
     if (content) {
       const isSpecial = currentType === 'code' || currentType === 'table' || currentType === 'formula';
+      const heading = getCurrentHeading();
+      logger.debug(`[PageTrack] Flushing block: heading="${heading?.slice(0, 30) || 'none'}" page=${blockStartPage} type=${currentType}`);
       blocks.push({
         type: currentType,
         content,
-        heading: getCurrentHeading(),
+        heading,
         headingPath: getCurrentHeadingPath(),
         isSpecial,
+        pageNumber: blockStartPage,
       });
     }
     currentContent = [];
     currentType = 'text';
+    // Reset block start page to current page for next block
+    blockStartPage = currentPage;
   };
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
     const trimmed = line.trim();
+
+    // Parse pagebreak comments (from preprocessor): <!-- pagebreak:N -->
+    const pagebreakMatch = trimmed.match(/^<!--\s*pagebreak:(\d+)\s*-->$/i);
+    if (pagebreakMatch) {
+      const newPage = parseInt(pagebreakMatch[1]!, 10);
+      logger.debug(`[PageTrack] Found pagebreak at line ${i}: currentPage=${currentPage} -> ${newPage}`);
+      
+      // If we have accumulated content and page is changing, flush the block
+      // This ensures each block is associated with the correct page
+      if (currentContent.length > 0 && newPage !== currentPage) {
+        logger.debug(`[PageTrack] Flushing block before page change (page ${currentPage} -> ${newPage})`);
+        flushBlock();
+      }
+      
+      currentPage = newPage;
+      
+      // Update blockStartPage for next block
+      if (currentContent.length === 0) {
+        blockStartPage = currentPage;
+      }
+      continue; // Don't include pagebreak comment in content
+    }
+    
+    // Also handle MinerU-style page comments: <!-- page: N -->
+    const mineruPageMatch = trimmed.match(/^<!--\s*page[:\s]+(\d+)\s*-->$/i);
+    if (mineruPageMatch) {
+      const newPage = parseInt(mineruPageMatch[1]!, 10);
+      
+      // Flush block before page change (same logic as above)
+      if (currentContent.length > 0 && newPage !== currentPage) {
+        flushBlock();
+      }
+      
+      currentPage = newPage;
+      
+      if (currentContent.length === 0) {
+        blockStartPage = currentPage;
+      }
+      continue;
+    }
 
     // Handle headings - track section hierarchy
     const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
@@ -683,6 +757,9 @@ function semanticChunkByLevel(
           
           // Create main section chunk (text only)
           const textContent = textBlocks.map(b => b.content).join('\n\n');
+          // Use the node's page number (from parseHeadingTree)
+          const sectionPageNumber = node.pageNumber ?? textBlocks[0]?.pageNumber ?? specialBlocks[0]?.pageNumber;
+          
           if (textContent.trim()) {
             result.push({
               type: 'text',
@@ -694,6 +771,23 @@ function semanticChunkByLevel(
               chunkId,
               parentChunkId: trackHierarchy ? parentChunkId : undefined,
               granularity,
+              pageNumber: sectionPageNumber,
+            });
+            parentChunkCreated = true;
+          } else if (specialBlocks.length > 0) {
+            // FIX: Create a minimal parent chunk even if only special blocks exist
+            // This ensures sub-chunks always have a valid parentChunkId
+            result.push({
+              type: 'text',
+              content: `[Section: ${node.text}]`, // Minimal placeholder
+              heading: node.text,
+              headingPath: currentPath,
+              isSpecial: false,
+              parentPath: parentPath.length > 0 ? parentPath : undefined,
+              chunkId,
+              parentChunkId: trackHierarchy ? parentChunkId : undefined,
+              granularity,
+              pageNumber: sectionPageNumber,
             });
             parentChunkCreated = true;
           }
@@ -720,15 +814,18 @@ function semanticChunkByLevel(
               isSpecial: true,
               parentPath: parentPath.length > 0 ? parentPath : undefined,
               chunkId: subChunkId,
-              // Only link to parent if parent chunk was actually created
+              // Parent chunk is now always created when there are special blocks
               parentChunkId: parentChunkCreated ? chunkId : undefined,
               granularity: 'element',
               assetId,
+              pageNumber: block.pageNumber, // Preserve page number from block
             });
           }
         } else {
           // Original behavior: merge all blocks into one chunk
           const mergedContent = blocks.map(b => b.content).join('\n\n');
+          // Use the node's page number (from parseHeadingTree)
+          const blockPageNumber = node.pageNumber ?? blocks[0]?.pageNumber;
           // Only create chunk if there's actual content
           if (mergedContent.trim()) {
             result.push({
@@ -741,6 +838,7 @@ function semanticChunkByLevel(
               chunkId,
               parentChunkId: trackHierarchy ? parentChunkId : undefined,
               granularity,
+              pageNumber: blockPageNumber,
             });
             parentChunkCreated = true;
           }
@@ -769,8 +867,10 @@ function semanticChunkByLevel(
 /**
  * Multi-scale chunking: generates chunks at multiple granularities simultaneously.
  * 
- * Produces both coarse (section-level) and fine (paragraph-level) chunks for
- * optimal retrieval at different query types.
+ * Produces coarse (section-level), medium (subsection), and fine (paragraph-level) chunks
+ * for optimal retrieval at different query types.
+ * 
+ * Also captures leaf sections at any level that have no children matching target levels.
  * 
  * @param markdown - Raw markdown content
  * @param trackHierarchy - Whether to track parent-child relationships
@@ -782,18 +882,37 @@ function multiScaleChunk(
 ): ExtendedBlock[] {
   const tree = parseHeadingTree(markdown);
   const result: ExtendedBlock[] = [];
+  const processedHeadings = new Set<string>(); // Track which headings have been chunked
   
-  // Coarse: level=2 (sections) with sub-chunks extracted
+  // Level 1: Top-level sections (chapters, main Appendix like "# A Pseudocode", "# G Case Study")
+  // These may not have sub-sections, so we need to capture them directly
+  const level1Chunks = semanticChunkByLevel(tree, 1, trackHierarchy, true, 'section');
+  for (const chunk of level1Chunks) {
+    result.push(chunk);
+    if (chunk.heading) processedHeadings.add(chunk.heading);
+  }
+  
+  // Level 2: Sections with sub-chunks extracted (2.1, A.1, etc.)
   const coarseChunks = semanticChunkByLevel(tree, 2, trackHierarchy, true, 'section');
-  result.push(...coarseChunks);
+  for (const chunk of coarseChunks) {
+    // Avoid duplicates from level 1
+    if (!chunk.heading || !processedHeadings.has(chunk.heading)) {
+      result.push(chunk);
+      if (chunk.heading) processedHeadings.add(chunk.heading);
+    }
+  }
   
-  // Fine: level=4 (paragraphs) without sub-chunks (already extracted at coarse level)
-  // Note: trackHierarchy=false for fine chunks to avoid invalid parentChunkId references
-  // (fine chunks are independent and don't need parent-child linking)
+  // Level 4: Fine-grained paragraphs (3.2.1.1, etc.) without sub-chunks
   const fineChunks = semanticChunkByLevel(tree, 4, false, false, 'paragraph');
-  result.push(...fineChunks);
+  for (const chunk of fineChunks) {
+    // Avoid duplicates
+    if (!chunk.heading || !processedHeadings.has(chunk.heading)) {
+      result.push(chunk);
+      if (chunk.heading) processedHeadings.add(chunk.heading);
+    }
+  }
   
-  logger.debug(`Multi-scale chunking: ${coarseChunks.length} coarse + ${fineChunks.length} fine chunks`);
+  logger.debug(`Multi-scale chunking: ${level1Chunks.length} level1 + ${coarseChunks.length} coarse + ${fineChunks.length} fine = ${result.length} total chunks`);
   
   return result;
 }
@@ -923,6 +1042,7 @@ export function academicChunk(
         // NEW: Additional metadata for quality and traceability
         granularity: block.granularity,
         assetId: block.assetId,
+        pageNumber: block.pageNumber,
       },
     };
   });

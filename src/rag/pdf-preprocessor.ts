@@ -118,6 +118,11 @@ export interface PreprocessResult {
   };
   /** Warnings encountered */
   warnings: string[];
+  /** 
+   * Page boundary map: lineNumber (0-indexed in original) → pageNumber (1-indexed).
+   * Used to determine which page each chunk belongs to.
+   */
+  pageMap: Map<number, number>;
 }
 
 // ============================================================================
@@ -125,39 +130,58 @@ export interface PreprocessResult {
 // ============================================================================
 
 /**
- * Remove or downgrade PDF page markers from markdown.
+ * Convert PDF page markers to HTML comments.
  * 
  * VLM parsers often produce "## Page N" headings which pollute the heading tree
  * and cause incorrect section assignments during semantic chunking.
  * 
  * This function:
- * - Removes standalone "## Page N" lines
- * - Converts them to non-heading markers if needed (e.g., for debugging)
+ * - Converts "## Page N" headings to `<!-- pagebreak:N -->` HTML comments
+ * - The chunker can parse these comments to track page numbers
+ * - Returns count of markers converted
  */
-function filterPageMarkers(markdown: string): { result: string; count: number } {
+function filterPageMarkers(markdown: string): { 
+  result: string; 
+  count: number; 
+  pageMap: Map<number, number>;
+} {
+  const lines = markdown.split('\n');
+  const pageMap = new Map<number, number>();
+  let currentPage = 1;
   let count = 0;
   
-  // Match patterns like: ## Page 1, ## Page 2, ### Page 10, etc.
-  // Also match: Page 1, Page 2 (without ##) at line start
-  const pageMarkerPatterns = [
-    /^#{1,6}\s*Page\s+\d+\s*$/gim,  // ## Page 1
-    /^Page\s+\d+\s*$/gim,           // Page 1 (no heading)
-    /^---\s*Page\s+\d+\s*---$/gim,  // --- Page 1 ---
+  // Page marker patterns (capture page number)
+  const pagePatterns = [
+    /^#{1,6}\s*Page\s+(\d+)\s*$/i,   // ## Page 1
+    /^Page\s+(\d+)\s*$/i,            // Page 1 (no heading)
+    /^---\s*Page\s+(\d+)\s*---$/i,   // --- Page 1 ---
   ];
   
-  let result = markdown;
-  for (const pattern of pageMarkerPatterns) {
-    const matches = result.match(pattern);
-    if (matches) {
-      count += matches.length;
+  // Convert page markers to HTML comments (preserves page info for chunker)
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    
+    for (const pattern of pagePatterns) {
+      const match = line.match(pattern);
+      if (match) {
+        currentPage = parseInt(match[1]!, 10);
+        // Convert to HTML comment that chunker can parse
+        lines[i] = `<!-- pagebreak:${currentPage} -->`;
+        count++;
+        if (count <= 3) {
+          logger.debug(`[PageMarker] Converted line ${i}: "${line}" -> page ${currentPage}`);
+        }
+        break;
+      }
     }
-    result = result.replace(pattern, '');
+    
+    // Record current page for this line (for pageMap)
+    pageMap.set(i, currentPage);
   }
   
-  // Clean up multiple consecutive newlines that may result
-  result = result.replace(/\n{3,}/g, '\n\n');
+  const result = lines.join('\n');
   
-  return { result, count };
+  return { result, count, pageMap };
 }
 
 // ============================================================================
@@ -520,6 +544,7 @@ export async function preprocessPdfMarkdown(
   const startTime = Date.now();
   const warnings: string[] = [];
   let result = markdown;
+  let pageMap = new Map<number, number>();
   
   const stats = {
     pageMarkersRemoved: 0,
@@ -530,12 +555,13 @@ export async function preprocessPdfMarkdown(
   };
   
   try {
-    // 1. Filter page markers
+    // 1. Filter page markers (extracts pageMap BEFORE removing markers)
     const pageResult = filterPageMarkers(result);
     result = pageResult.result;
+    pageMap = pageResult.pageMap;
     stats.pageMarkersRemoved = pageResult.count;
     if (pageResult.count > 0) {
-      logger.debug(`Removed ${pageResult.count} page markers`);
+      logger.debug(`Removed ${pageResult.count} page markers, extracted ${pageMap.size} line->page mappings`);
     }
     
     // 2. Convert HTML tables to Markdown
@@ -584,5 +610,5 @@ export async function preprocessPdfMarkdown(
     `(${stats.processingTimeMs}ms)`
   );
   
-  return { markdown: result, stats, warnings };
+  return { markdown: result, stats, warnings, pageMap };
 }

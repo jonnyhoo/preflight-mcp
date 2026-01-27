@@ -28,6 +28,8 @@ interface ConfigFile {
   embeddingApiBase?: string;
   embeddingApiKey?: string;
   embeddingModel?: string;
+  openaiEmbeddingsUrl?: string;
+  openaiAuthMode?: 'auto' | 'bearer' | 'api-key';
   // MinerU PDF parsing configuration
   mineruApiBase?: string;
   mineruApiKey?: string;
@@ -288,9 +290,19 @@ function parseAnalysisMode(raw: string | undefined): AnalysisMode {
   return 'full'; // Default to full for better analysis
 }
 
-function parseEmbeddingProvider(raw: string | undefined): EmbeddingProviderType {
+function parseEmbeddingProvider(raw: string | undefined, embeddingApiBase?: string): EmbeddingProviderType {
   const v = (raw ?? '').trim().toLowerCase();
   if (v === 'openai') return 'openai';
+  if (v === 'ollama') return 'ollama';
+  
+  // Auto-detect: if embeddingApiBase is set and not localhost, use openai provider
+  if (embeddingApiBase) {
+    const base = embeddingApiBase.toLowerCase();
+    if (!base.includes('localhost') && !base.includes('127.0.0.1') && !base.includes('11434')) {
+      return 'openai';
+    }
+  }
+  
   return 'ollama'; // Default to local Ollama
 }
 
@@ -378,7 +390,7 @@ export function getConfig(): PreflightConfig {
     // Semantic search (optional, disabled by default)
     // Priority: config file > env > default
     semanticSearchEnabled: loadConfigFile().embeddingEnabled || Boolean(loadConfigFile().embeddingApiKey) || envBoolean('PREFLIGHT_SEMANTIC_SEARCH', false),
-    embeddingProvider: parseEmbeddingProvider(loadConfigFile().embeddingProvider ?? process.env.PREFLIGHT_EMBEDDING_PROVIDER),
+    embeddingProvider: parseEmbeddingProvider(loadConfigFile().embeddingProvider ?? process.env.PREFLIGHT_EMBEDDING_PROVIDER, loadConfigFile().embeddingApiBase ?? process.env.PREFLIGHT_OLLAMA_HOST),
     ollamaHost: (loadConfigFile().embeddingApiBase ?? process.env.PREFLIGHT_OLLAMA_HOST ?? 'http://localhost:11434').trim(),
     ollamaModel: (loadConfigFile().embeddingModel ?? process.env.PREFLIGHT_OLLAMA_MODEL ?? 'nomic-embed-text').trim(),
 
@@ -387,8 +399,8 @@ export function getConfig(): PreflightConfig {
     openaiApiKey: loadConfigFile().embeddingApiKey ?? process.env.PREFLIGHT_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY,
     openaiModel: (loadConfigFile().embeddingModel ?? process.env.PREFLIGHT_OPENAI_MODEL ?? 'text-embedding-3-small').trim(),
     openaiBaseUrl: loadConfigFile().embeddingApiBase ?? process.env.PREFLIGHT_OPENAI_BASE_URL ?? process.env.OPENAI_BASE_URL,
-    openaiEmbeddingsUrl: process.env.PREFLIGHT_OPENAI_EMBEDDINGS_URL,
-    openaiAuthMode: parseOpenAIAuthMode(process.env.PREFLIGHT_OPENAI_AUTH_MODE),
+    openaiEmbeddingsUrl: loadConfigFile().openaiEmbeddingsUrl ?? process.env.PREFLIGHT_OPENAI_EMBEDDINGS_URL,
+    openaiAuthMode: parseOpenAIAuthMode(loadConfigFile().openaiAuthMode ?? process.env.PREFLIGHT_OPENAI_AUTH_MODE),
 
     // VLM for PDF smart analysis (optional)
     // Priority: config file > env > default

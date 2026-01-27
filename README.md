@@ -66,8 +66,8 @@ Add to your MCP client config:
 | Tool | Description |
 |------|-------------|
 | `preflight_generate_card` | Extract knowledge card from bundle (requires LLM config) |
-| `preflight_rag` | Index to ChromaDB and RAG query (requires ChromaDB + embedding config) |
-| `preflight_rag_manage` | Manage ChromaDB: list indexed content, stats, delete by hash |
+| `preflight_rag` | Index to ChromaDB and RAG query, supports cross-validation (requires ChromaDB + embedding config) |
+| `preflight_rag_manage` | Manage ChromaDB: list indexed content, stats, delete by hash or delete all |
 
 ## Tool Examples
 
@@ -118,6 +118,20 @@ Available checks:
 
 Supported: `.py`, `.go`, `.rs`, `.ts`, `.tsx`, `.js`, `.jsx`
 
+### RAG Query & Cross-Validation
+
+```json
+// Index bundle
+{"bundleId": "abc123", "index": true}
+
+// Query with hierarchical expansion (default)
+{"bundleId": "abc123", "question": "What is the main contribution?"}
+
+// Cross-validation: call twice, compare answers
+{"bundleId": "abc123", "question": "..."}  // First: default LLM
+{"bundleId": "abc123", "question": "...", "useVerifierLlm": true}  // Second: verifier LLM
+```
+
 ### RAG Management
 
 ```json
@@ -129,6 +143,9 @@ Supported: `.py`, `.go`, `.rs`, `.ts`, `.tsx`, `.js`, `.jsx`
 
 // Delete by content hash
 {"action": "delete", "contentHash": "77b44fcb..."}
+
+// Delete ALL indexed content (use with caution)
+{"action": "delete_all"}
 ```
 
 ## Configuration
@@ -149,6 +166,10 @@ Create `~/.preflight/config.json` (Windows: `C:\Users\<username>\.preflight\conf
   "llmApiKey": "sk-xxx",
   "llmModel": "gpt-4o-mini",
 
+  "verifierLlmApiBase": "https://api.openai.com/v1",
+  "verifierLlmApiKey": "sk-xxx",
+  "verifierLlmModel": "gpt-4o",
+
   "embeddingEnabled": true,
   "embeddingProvider": "openai",
   "embeddingApiBase": "https://api.openai.com/v1",
@@ -165,7 +186,8 @@ Create `~/.preflight/config.json` (Windows: `C:\Users\<username>\.preflight\conf
 | Model | Purpose |
 |-------|--------|
 | VLM | PDF extraction (formulas, tables) |
-| LLM | Knowledge card generation |
+| LLM | Knowledge card generation, RAG answer synthesis |
+| Verifier LLM | RAG cross-validation (optional, for higher reliability) |
 | Embedding | Semantic search |
 
 ### PDF Chunking Strategy

@@ -13,6 +13,7 @@ import type { SemanticChunk, BridgeOptions, BridgeResult, ChunkOptions } from '.
 import { semanticChunk } from './semantic-chunker.js';
 import { academicChunk } from './pdf-chunker.js';
 import { createModuleLogger } from '../logging/logger.js';
+import { getConfig } from '../config.js';
 
 const logger = createModuleLogger('markdown-bridge');
 
@@ -232,9 +233,14 @@ export async function bridgePdfMarkdown(
       minTokens: options.minChunkTokens ?? 100,
     };
 
+    // Read PDF chunking preferences from config (fallback to defaults)
+    const cfg = getConfig();
+    const strategy = cfg.pdfChunkingStrategy ?? 'semantic';
+    const chunkLevel = cfg.pdfChunkLevel ?? 2;
+
     const semanticChunks = academicChunk(source.markdown, chunkOptions, {
-      strategy: 'semantic', // Use semantic chunking by default for PDFs
-      chunkLevel: 2, // Split by ## (sections)
+      strategy, // 'semantic' | 'token-based' | 'hybrid'
+      chunkLevel: chunkLevel as 1 | 2 | 3 | 4,
       includeParentContext: true,
       trackHierarchy: true,
       maxTokens: options.maxChunkTokens ?? 2000, // Soft limit for hybrid mode
@@ -270,6 +276,8 @@ export async function bridgePdfMarkdown(
           // Multi-scale metadata (for best quality retrieval)
           granularity: chunk.metadata.granularity,
           assetId: chunk.metadata.assetId,
+          // Page localization
+          pageIndex: chunk.metadata.pageNumber, // Store as pageIndex for ChromaDB compatibility
         },
         embedding: embedding?.vector,
       };

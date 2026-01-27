@@ -68,6 +68,8 @@ export interface SourceEvidence {
   sourceType: string;
   filePath?: string;
   repoId?: string;
+  /** Page number (1-indexed) where this content appears in the PDF */
+  pageIndex?: number;
 }
 
 export interface GenerateResult {
