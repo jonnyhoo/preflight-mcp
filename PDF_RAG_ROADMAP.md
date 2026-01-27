@@ -11,12 +11,9 @@
 - 多层级 chunking（level 1/2/4 全覆盖，Appendix 不再丢失）
 - 孤儿 chunk 修复（所有 element chunks 都有 parentChunkId）
 - 公式/表格/图片独立索引为 element chunks
+- 页码定位（parseHeadingTree 追踪 pagebreak 注释，chunk metadata 包含准确页码）
 
 ## 待实现
-
-### 1. 页码定位
-- **方案**: chunk metadata 加 `pageNumber` 字段
-- **效果**: sources 返回具体页码，用户可直接跳转验证
 
 ### 2. 多 PDF 关联查询
 - **方案**: 去掉 bundleId 强制过滤，支持跨 bundle 检索
