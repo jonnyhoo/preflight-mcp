@@ -22,6 +22,7 @@ import type {
   RAGConfig,
   DEFAULT_QUERY_OPTIONS,
 } from './types.js';
+import { IGPPruner, type IGPOptions } from './pruning/igp-pruner.js';
 import { createModuleLogger } from '../logging/logger.js';
 import { persistQAReport, runFullQA } from '../quality/index-qa.js';
 
@@ -369,6 +370,7 @@ export class RAGEngine {
     // Multi-hop context completion (if enabled)
     let finalChunks = retrieved.chunks;
     let contextCompletionStats: { hopCount: number; searchHistory: string[] } | undefined;
+    let igpStats: { originalCount: number; prunedCount: number; pruningRatio: number; iterations: number; durationMs: number } | undefined;
 
     if (opts.enableContextCompletion && retrieved.chunks.length > 0) {
       try {
@@ -421,6 +423,47 @@ export class RAGEngine {
       }
     }
 
+    // IGP Pruning (Phase 2) - Apply after context completion, before generation
+    // Only enabled when igpOptions.enabled is true
+    if (options?.igpOptions?.enabled && finalChunks.length > 0) {
+      try {
+        const igpPruner = new IGPPruner();
+        // Paper Algorithm 1: default to threshold strategy with Tp=0
+        const igpOptions: IGPOptions = {
+          enabled: true,
+          strategy: options.igpOptions.strategy ?? 'threshold',
+          threshold: options.igpOptions.threshold ?? 0, // Filter negative-IG chunks
+          topK: options.igpOptions.topK ?? 5,
+          keepRatio: options.igpOptions.keepRatio ?? 0.5,
+          maxIterations: options.igpOptions.maxIterations ?? 1,
+          nuOptions: { topK: 5, maxTokens: 20 },
+          batchSize: 5,
+        };
+
+        const igpResult = await igpPruner.prune(question, finalChunks, igpOptions);
+        
+        // Update chunks with pruned result
+        finalChunks = igpResult.chunks.map(c => ({
+          id: c.id,
+          content: c.content,
+          metadata: c.metadata,
+          score: c.score,
+        }));
+
+        igpStats = {
+          originalCount: igpResult.originalCount,
+          prunedCount: igpResult.prunedCount,
+          pruningRatio: igpResult.pruningRatio,
+          iterations: igpResult.iterations,
+          durationMs: igpResult.durationMs,
+        };
+
+        logger.info(`IGP pruning: ${igpResult.originalCount} → ${igpResult.prunedCount} chunks (${(igpResult.pruningRatio * 100).toFixed(1)}%)`);
+      } catch (err) {
+        logger.warn(`IGP pruning failed, using unpruned chunks: ${err}`);
+      }
+    }
+
     // Generate with final context
     const generated = await this.generator.generate(
       question,
@@ -441,6 +484,7 @@ export class RAGEngine {
         entitiesFound: retrieved.expandedTypes?.length,
         graphExpansion: retrieved.expandedTypes?.length ?? 0,
         contextCompletionHops: contextCompletionStats?.hopCount,
+        igpStats,
         durationMs: Date.now() - startTime,
       },
     };

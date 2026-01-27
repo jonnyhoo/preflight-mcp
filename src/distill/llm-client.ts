@@ -20,11 +20,27 @@ export interface LLMConfig {
   enabled: boolean;
 }
 
+/**
+ * Token-level logprob information (for IGP pruning).
+ */
+export interface TokenLogprob {
+  /** The generated token */
+  token: string;
+  /** Log probability of this token (natural log) */
+  logprob: number;
+  /** Byte representation of the token (optional) */
+  bytes?: number[] | null;
+  /** Top-K alternative tokens with their logprobs (for entropy calculation) */
+  topAlternatives?: Array<{ token: string; logprob: number }>;
+}
+
 export interface LLMResponse {
   content: string;
   model: string;
   promptTokens?: number;
   completionTokens?: number;
+  /** Token-level logprobs (only present if requested) */
+  logprobs?: TokenLogprob[];
 }
 
 export interface LLMCallResult<T> {
@@ -70,7 +86,26 @@ export function getVerifierLLMConfig(): LLMConfig {
   return mainConfig;
 }
 
-export async function callLLM(prompt: string, systemPrompt?: string, configOverride?: LLMConfig): Promise<LLMResponse> {
+/**
+ * Options for LLM calls.
+ */
+export interface LLMCallOptions {
+  /** Enable logprobs in response (for IGP pruning) */
+  logprobs?: boolean;
+  /** Number of top alternative tokens to return (1-20, OpenAI spec) */
+  topLogprobs?: number;
+  /** Max tokens to generate (useful for NU computation) */
+  maxTokens?: number;
+  /** Temperature for sampling (0 = greedy, default: 0.3) */
+  temperature?: number;
+}
+
+export async function callLLM(
+  prompt: string,
+  systemPrompt?: string,
+  configOverride?: LLMConfig,
+  options?: LLMCallOptions
+): Promise<LLMResponse> {
   const config = configOverride ?? getLLMConfig();
   if (!config.enabled || !config.apiKey) {
     throw new Error('LLM not enabled or API key not configured');
@@ -81,7 +116,21 @@ export async function callLLM(prompt: string, systemPrompt?: string, configOverr
   messages.push({ role: 'user', content: prompt });
 
   const url = `${config.apiBase.replace(/\/$/, '')}/chat/completions`;
-  logger.debug(`Calling LLM: ${config.model}`);
+  logger.debug(`Calling LLM: ${config.model} (logprobs: ${options?.logprobs ?? false})`);
+
+  // Build request body
+  const requestBody: Record<string, unknown> = {
+    model: config.model,
+    messages,
+    temperature: options?.temperature ?? 0.3,
+  };
+
+  // Add optional parameters
+  if (options?.maxTokens) requestBody.max_tokens = options.maxTokens;
+  if (options?.logprobs) {
+    requestBody.logprobs = true;
+    requestBody.top_logprobs = options.topLogprobs ?? 5; // Default K=5
+  }
 
   const res = await fetch(url, {
     method: 'POST',
@@ -89,11 +138,7 @@ export async function callLLM(prompt: string, systemPrompt?: string, configOverr
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${config.apiKey}`,
     },
-    body: JSON.stringify({
-      model: config.model,
-      messages,
-      temperature: 0.3,
-    }),
+    body: JSON.stringify(requestBody),
   });
 
   if (!res.ok) {
@@ -102,18 +147,47 @@ export async function callLLM(prompt: string, systemPrompt?: string, configOverr
     throw new Error(`LLM API error: ${res.status}`);
   }
 
+  // Response type with logprobs
+  interface LogprobContent {
+    token: string;
+    logprob: number;
+    bytes?: number[] | null;
+    top_logprobs?: Array<{ token: string; logprob: number; bytes?: number[] | null }>;
+  }
+
   const data = await res.json() as {
-    choices: Array<{ message: { content: string } }>;
+    choices: Array<{
+      message: { content: string };
+      logprobs?: {
+        content?: LogprobContent[];
+      } | null;
+    }>;
     model: string;
     usage?: { prompt_tokens: number; completion_tokens: number };
   };
 
-  return {
-    content: data.choices?.[0]?.message?.content ?? '',
+  const choice = data.choices?.[0];
+  const response: LLMResponse = {
+    content: choice?.message?.content ?? '',
     model: data.model,
     promptTokens: data.usage?.prompt_tokens,
     completionTokens: data.usage?.completion_tokens,
   };
+
+  // Extract logprobs if present
+  if (options?.logprobs && choice?.logprobs?.content) {
+    response.logprobs = choice.logprobs.content.map(item => ({
+      token: item.token,
+      logprob: item.logprob,
+      bytes: item.bytes ?? undefined,
+      topAlternatives: item.top_logprobs?.map(alt => ({
+        token: alt.token,
+        logprob: alt.logprob,
+      })),
+    }));
+  }
+
+  return response;
 }
 
 export async function callLLMWithJSON<T>(prompt: string, systemPrompt?: string): Promise<LLMCallResult<T>> {

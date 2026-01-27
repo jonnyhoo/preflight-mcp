@@ -49,9 +49,45 @@ export interface QueryOptions {
   expandToParent?: boolean;
   /** Expand to sibling chunks at the same level (default: false) */
   expandToSiblings?: boolean;
+  
+  // IGP (Iterative Graph Pruning) options (Phase 2)
+  /** IGP pruning options for cross-bundle queries */
+  igpOptions?: IGPQueryOptions;
 }
 
-export const DEFAULT_QUERY_OPTIONS: Required<Omit<QueryOptions, 'bundleId' | 'repoId' | 'bundleIds'>> = {
+/**
+ * IGP options for RAG queries.
+ * 
+ * Based on "Less is More" paper (arXiv:2601.17532) Algorithm 1.
+ * Default strategy is 'threshold' with Tp=0 (filter negative-utility evidence).
+ * 
+ * @see IGPPruner for full options
+ */
+export interface IGPQueryOptions {
+  /** Enable IGP pruning (default: false) */
+  enabled: boolean;
+  /**
+   * Pruning strategy (default: 'threshold' per paper Algorithm 1)
+   * - 'threshold': Keep chunks with IG >= Tp (recommended)
+   * - 'topK': Keep top K chunks by IG score
+   * - 'ratio': Keep top X% of chunks
+   */
+  strategy?: 'threshold' | 'topK' | 'ratio';
+  /**
+   * IG threshold Tp for admission control (default: 0)
+   * - Tp = 0: Filter negative-utility evidence
+   * - Tp = 0.05: Paper's recommended value (more conservative)
+   */
+  threshold?: number;
+  /** Number of top chunks to keep (for 'topK' strategy, default: 5) */
+  topK?: number;
+  /** Ratio of chunks to keep (for 'ratio' strategy, 0-1, default: 0.5) */
+  keepRatio?: number;
+  /** Max iterations for iterative pruning (default: 1) */
+  maxIterations?: number;
+}
+
+export const DEFAULT_QUERY_OPTIONS: Required<Omit<QueryOptions, 'bundleId' | 'repoId' | 'bundleIds' | 'igpOptions'>> & { igpOptions: IGPQueryOptions } = {
   mode: 'hybrid',
   topK: 10,
   enableContextCompletion: true,
@@ -61,6 +97,7 @@ export const DEFAULT_QUERY_OPTIONS: Required<Omit<QueryOptions, 'bundleId' | 're
   crossBundleMode: 'single',
   expandToParent: true,
   expandToSiblings: true,
+  igpOptions: { enabled: false }, // IGP disabled by default
 };
 
 // ============================================================================
@@ -125,6 +162,19 @@ export interface QueryResult {
     graphExpansion?: number;
     /** Number of hops in multi-hop context completion */
     contextCompletionHops?: number;
+    /** IGP pruning statistics (Phase 2) */
+    igpStats?: {
+      /** Original chunk count before IGP */
+      originalCount: number;
+      /** Chunk count after IGP pruning */
+      prunedCount: number;
+      /** Pruning ratio (prunedCount / originalCount) */
+      pruningRatio: number;
+      /** Number of IGP iterations */
+      iterations: number;
+      /** IGP processing time in ms */
+      durationMs: number;
+    };
     durationMs: number;
   };
 }

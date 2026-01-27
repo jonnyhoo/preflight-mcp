@@ -1,0 +1,165 @@
+{
+  "metadata": {
+    "testDate": "2026-01-27T17:09:25.754Z",
+    "phase": "Phase 2.5 - IGP Evaluation",
+    "igpStrategy": "threshold",
+    "igpThreshold": 0,
+    "questionsTotal": 6,
+    "questionsSkipped": 0
+  },
+  "results": [
+    {
+      "questionId": "Q01",
+      "category": "single-pdf",
+      "baselineAnswer": "SimpleMem 在 LoCoMo 基准测试中，相比 Mem0 的 F1 分数提升了 26.4%。这一数据来源于论文的摘要部分，其中明确指出 SimpleMem 在平均 F1 分数上相对于 Mem0 提升了 26.4% [15]。",
+      "baselineScore": 1,
+      "baselineTimeMs": 17908,
+      "baselineChunks": 15,
+      "baselineFaithfulness": 1,
+      "igpAnswer": "SimpleMem 在 LoCoMo 基准测试中相比 Mem0 的 F1 分数提升了 26.4%。这一结果在原文中明确提到：“SimpleMem establishes a new state-of-the-art with an F1 score, outperforming strong baselines like Mem0 by 26.4%” [1]。",
+      "igpScore": 1,
+      "igpTimeMs": 21286,
+      "igpChunks": 5,
+      "igpFaithfulness": 1,
+      "igpPruningStats": {
+        "originalCount": 15,
+        "prunedCount": 5,
+        "pruningRatio": 0.3333333333333333,
+        "igpDurationMs": 6612
+      },
+      "qualityDelta": 0,
+      "timeDeltaRatio": 1.1886307795398705,
+      "chunkReduction": 0.6666666666666667
+    },
+    {
+      "questionId": "Q02",
+      "category": "single-pdf",
+      "baselineAnswer": "SimpleMem 相比 full-context 模型减少了约 30 倍的 token 消耗。具体而言，full-context 方法（如 LoCoMo 和 MEMGPT）每次查询消耗约 16,900 个 token，而 SimpleMem 平均仅消耗 530-580 个 token，实现了显著的效率提升 [1]。",
+      "baselineScore": 1,
+      "baselineTimeMs": 17000,
+      "baselineChunks": 15,
+      "baselineFaithfulness": 1,
+      "igpAnswer": "SimpleMem 相比 full-context 模型减少了约 30 倍的 token 消耗。根据原文“SimpleMem reduces token usage by roughly $30 \\times$, averaging 530-580 tokens per query”可知，SimpleMem 平均每条查询消耗 530-580 个 token，而 full-context 方法如 LoCoMo 和 MemGPT 每条查询消耗约 16,900 个 token，因此 token 消耗减少了约 30 倍 [8]。",
+      "igpScore": 1,
+      "igpTimeMs": 31005,
+      "igpChunks": 8,
+      "igpFaithfulness": 1,
+      "igpPruningStats": {
+        "originalCount": 16,
+        "prunedCount": 8,
+        "pruningRatio": 0.5,
+        "igpDurationMs": 6354
+      },
+      "qualityDelta": 0,
+      "timeDeltaRatio": 1.8238235294117646,
+      "chunkReduction": 0.4666666666666667
+    },
+    {
+      "questionId": "Q03",
+      "category": "single-pdf",
+      "baselineAnswer": "SimpleMem中Recursive Consolidation的affinity score公式包含两个因素：  \n1. **语义相关性**（semantic relatedness）：通过语义嵌入向量计算两个记忆单元之间的语义相似度  \n2. **时间邻近性**（temporal proximity）：基于事件发生时间的接近程度进行加权  \n\n这两个因素共同构成affinity score ω_ij的计算公式，如文献中所述：\"the first term captures semantic relatedness and the second term biases the model toward grouping events with strong temporal proximity\" [7]。",
+      "baselineScore": 1,
+      "baselineTimeMs": 16098,
+      "baselineChunks": 15,
+      "baselineFaithfulness": 1,
+      "igpAnswer": "根据提供的上下文，没有包含关于 SimpleMem 中 Recursive Consolidation 的 affinity score 公式的信息。因此，无法从这些具体文档中导出问题的答案。需要更多相关的文档或上下文来回答这个问题。",
+      "igpScore": 0,
+      "igpTimeMs": 20548,
+      "igpChunks": 2,
+      "igpFaithfulness": 1,
+      "igpPruningStats": {
+        "originalCount": 15,
+        "prunedCount": 2,
+        "pruningRatio": 0.13333333333333333,
+        "igpDurationMs": 5971
+      },
+      "qualityDelta": -1,
+      "timeDeltaRatio": 1.276431854888806,
+      "chunkReduction": 0.8666666666666667
+    },
+    {
+      "questionId": "Q04",
+      "category": "single-pdf",
+      "baselineAnswer": "SimpleMem的三阶段pipeline包括：\n\n1. **语义结构化压缩（Semantic Structured Compression）**：过滤冗余交互内容，将原始对话流重构为紧凑的内存单元。该阶段通过熵过滤器去除低信息量内容（如问候语），保留高熵内容并原子化为结构化内存条目（如M1: kids, M3: sunset等），实现约97%的token压缩（从~24,000降至~800 tokens）[5][14]。\n\n2. **递归整合（Recursive Consolidation）**：异步地将相关内存单元整合为更高层次的抽象表示，维护紧凑的内存拓扑结构。此过程通过时间锚定模块将相对时间表达式（如\"yesterday\"）转换为绝对时间戳（如\"2023-07-01\"），确保长期时间一致性[4][7]。\n\n3. **自适应查询感知检索（Adaptive Query-Aware Retrieval）**：根据查询复杂度动态调整检索范围，构建精确且节省token的上下文。该阶段结合语义、词汇和符号信号（如实体和时间戳）进行多维度过滤，并通过自适应剪枝将token使用量减少至530-5",
+      "baselineScore": 0.5,
+      "baselineTimeMs": 20903,
+      "baselineChunks": 15,
+      "baselineFaithfulness": 1,
+      "igpAnswer": "SimpleMem 的三阶段 pipeline 包括：\n\n1.  **Adaptive Retrieval Planning (自适应检索规划)**：在检索之前分析用户查询，目的是评估查询的复杂性并生成一个结构化的检索计划，以相应地调整检索范围 [1]。\n2.  **Retrieval (检索)**：执行检索过程。\n3.  **Generation (生成)**：根据检索到的信息生成最终结果。\n\n（注：虽然第二阶段和第三阶段的名称没有在提供的上下文中直接给出，但根据第一阶段“Adaptive Retrieval Planning”的描述，可以推断出后续的两个阶段是“Retrieval”和“Generation”，因为规划之后通常是执行检索，然后基于检索结果进行生成。）",
+      "igpScore": 0.5,
+      "igpTimeMs": 21784,
+      "igpChunks": 1,
+      "igpFaithfulness": 0.9,
+      "igpPruningStats": {
+        "originalCount": 15,
+        "prunedCount": 1,
+        "pruningRatio": 0.06666666666666667,
+        "igpDurationMs": 4877
+      },
+      "qualityDelta": 0,
+      "timeDeltaRatio": 1.042147060230589,
+      "chunkReduction": 0.9333333333333333
+    },
+    {
+      "questionId": "Q04a",
+      "category": "single-pdf",
+      "baselineAnswer": "SimpleMem 在 GPT-4.1-mini 上的 Average F1 分数为 43.24。这一结果来自 LoCoMo 基准测试，显示 SimpleMem 显著优于其他基线模型，例如 Mem0（34.20 F1）和 LoCoMo 全上下文基线（18.70 F1）[1]。此外，该分数也通过消融实验得到验证，完整 SimpleMem 模型的性能明显高于移除关键组件（如原子化或递归整合）后的变体[6]。",
+      "baselineScore": 1,
+      "baselineTimeMs": 12777,
+      "baselineChunks": 15,
+      "baselineFaithfulness": 1,
+      "igpAnswer": "根据 Table 3 [3] 中的数据，SimpleMem 在 GPT-4.1-mini 上的 Average F1 分数是所有比较方法中最高的。虽然具体数值未在提供的上下文中明确给出，但结合 Figure 1 [4] 的描述，SimpleMem 的 F1 分数约为 44。因此，可以推断其 Average F1 分数为 **44**。",
+      "igpScore": 0,
+      "igpTimeMs": 28255,
+      "igpChunks": 5,
+      "igpFaithfulness": 1,
+      "igpPruningStats": {
+        "originalCount": 16,
+        "prunedCount": 5,
+        "pruningRatio": 0.3125,
+        "igpDurationMs": 6328
+      },
+      "qualityDelta": -1,
+      "timeDeltaRatio": 2.21139547624638,
+      "chunkReduction": 0.6666666666666667
+    },
+    {
+      "questionId": "Q04b",
+      "category": "single-pdf",
+      "baselineAnswer": "SimpleMem 的系统架构图（Figure 2）展示了其三个核心组件：\n\n1. **Semantic Structured Compression（语义结构化压缩）**：该组件负责过滤冗余的交互内容，并将原始对话流重构为紧凑的、上下文无关的记忆单元。它通过熵感知过滤机制保留高语义效用信息，同时丢弃低价值内容[2][14]。\n\n2. **Recursive Consolidation（递归整合）**：这是一个异步过程，将相关的记忆单元逐步整合为更高层次的抽象表示。该机制受生物记忆巩固启发，能够减少长期记忆中的语义冗余[2][5]。\n\n3. **Adaptive Query-Aware Retrieval（自适应查询感知检索）**：该组件根据查询复杂度动态调整检索范围，通过轻量级符号和语义约束修剪无关候选，实现精确且节省token的上下文构建[2][15]。\n\n这三个组件共同构成了SimpleMem的三阶段处理流水线，旨在解决长时交互中的上下文膨胀问题，并实现高效的记忆管理和利用。",
+      "baselineScore": 0.5,
+      "baselineTimeMs": 22241,
+      "baselineChunks": 15,
+      "baselineFaithfulness": 1,
+      "igpAnswer": "SimpleMem 系统架构图（Figure 2）包含三个主要组件：\n\n1. **Semantic Structured Compression（语义结构化压缩）**：负责过滤冗余的交互内容，并将原始对话重构为紧凑、上下文无关的记忆单元 [1]。\n\n2. **Recursive Consolidation（递归整合）**：将相关的记忆单元逐步组织成更高层次的抽象表示，以减少长期记忆中的冗余 [1]。\n\n3. **Adaptive Query-Aware Retrieval（自适应查询感知检索）**：根据查询复杂度动态调整检索范围，从而在受限的 token 预算下实现高效的上下文构建 [1]。\n\n这些组件共同缓解了上下文膨胀（context inflation）问题。",
+      "igpScore": 0.5,
+      "igpTimeMs": 28504,
+      "igpChunks": 1,
+      "igpFaithfulness": 1,
+      "igpPruningStats": {
+        "originalCount": 15,
+        "prunedCount": 1,
+        "pruningRatio": 0.06666666666666667,
+        "igpDurationMs": 5743
+      },
+      "qualityDelta": 0,
+      "timeDeltaRatio": 1.281597050492334,
+      "chunkReduction": 0.9333333333333333
+    }
+  ],
+  "summary": {
+    "avgQualityDelta": -0.3333333333333333,
+    "avgTimeDeltaRatio": 1.4706709584682907,
+    "avgChunkReduction": 0.7555555555555556,
+    "avgFaithfulnessDelta": -0.016666666666666663,
+    "qualityImproved": 0,
+    "qualityUnchanged": 4,
+    "qualityDecreased": 2,
+    "recommendation": "discard",
+    "reasons": [
+      "❌ 质量下降 33.3% (阈值 < -10%)",
+      "✅ Chunk 减少 75.6% (目标 > 50%)",
+      "✅ 响应时间增加 1.47x (可接受 < 2x)"
+    ]
+  }
+}
