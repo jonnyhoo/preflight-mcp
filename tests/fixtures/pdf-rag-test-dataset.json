@@ -1,0 +1,248 @@
+{
+  "$schema": "./pdf-rag-test-dataset.schema.json",
+  "version": "1.1",
+  "description": "PDF RAG 测试数据集 - Phase 0.1 (覆盖 pdf_text/pdf_table/pdf_formula/pdf_image)",
+  "created": "2026-01-27",
+  "updated": "2026-01-27",
+  "bundles": [
+    {
+      "bundleId": "f17c5e6b-3ed4-4bfa-8e3e-1d69735b89f9",
+      "paperId": "arxiv:2601.03236",
+      "title": "MAGMA: A Multi-Graph based Agentic Memory Architecture for AI Agents",
+      "topic": "记忆增强生成，时变图结构",
+      "chunks": 29,
+      "contentTypes": ["pdf_text", "pdf_table", "pdf_image", "pdf_formula"]
+    },
+    {
+      "bundleId": "09943fcd-994b-4b7f-98af-33d458297539",
+      "paperId": "arxiv:2601.05890",
+      "title": "STACKPLANNER: A Centralized Hierarchical Multi-Agent System with Task-Experience Memory Management",
+      "topic": "层级多智能体协调，任务内存管理",
+      "chunks": 22,
+      "contentTypes": ["pdf_text", "pdf_table", "pdf_image", "pdf_formula"]
+    },
+    {
+      "bundleId": "460e0e7b-f59a-4325-bd36-2f8c63624d1b",
+      "paperId": "arxiv:2601.02553",
+      "title": "SimpleMem: Efficient Memory Framework based on Semantic Lossless Compression",
+      "topic": "长期记忆系统，语义压缩",
+      "chunks": 31,
+      "contentTypes": ["pdf_text", "pdf_table", "pdf_image", "pdf_formula"]
+    }
+  ],
+  "questions": [
+    {
+      "id": "Q01",
+      "type": "single_pdf_number",
+      "category": "single-pdf",
+      "contentType": "pdf_text",
+      "difficulty": "easy",
+      "description": "精确数字提取",
+      "bundleId": "460e0e7b-f59a-4325-bd36-2f8c63624d1b",
+      "question": "SimpleMem 在 LoCoMo 基准测试中，相比 Mem0 的 F1 分数提升了多少百分比？",
+      "expectedAnswer": "26.4%",
+      "acceptableVariants": ["26.4", "26.4%", "26.4 percentage points"],
+      "source": "Abstract: achieving an average F1 improvement of 26.4%",
+      "evaluationCriteria": {
+        "mustContain": ["26.4"],
+        "scoreType": "exact-match"
+      }
+    },
+    {
+      "id": "Q02",
+      "type": "single_pdf_number",
+      "category": "single-pdf",
+      "contentType": "pdf_text",
+      "difficulty": "easy",
+      "description": "精确数字提取 - Token 消耗",
+      "bundleId": "460e0e7b-f59a-4325-bd36-2f8c63624d1b",
+      "question": "SimpleMem 相比 full-context 模型减少了多少倍的 token 消耗？",
+      "expectedAnswer": "30x",
+      "acceptableVariants": ["30×", "30x", "30 times", "~30x"],
+      "source": "Abstract: reducing inference-time token consumption by up to 30×",
+      "evaluationCriteria": {
+        "mustContain": ["30"],
+        "scoreType": "exact-match"
+      }
+    },
+    {
+      "id": "Q03",
+      "type": "single_pdf_formula",
+      "category": "single-pdf",
+      "contentType": "pdf_formula",
+      "difficulty": "medium",
+      "description": "公式理解",
+      "bundleId": "460e0e7b-f59a-4325-bd36-2f8c63624d1b",
+      "question": "SimpleMem 中 Recursive Consolidation 的 affinity score 公式包含哪两个因素？",
+      "expectedAnswer": "语义相似度 (semantic similarity) 和时间接近度 (temporal proximity)",
+      "acceptableVariants": ["semantic and temporal", "相似度和时间", "similarity and proximity"],
+      "source": "Section 2.2, affinity score calculation",
+      "evaluationCriteria": {
+        "mustContainAll": ["semantic", "temporal"],
+        "scoreType": "all-elements"
+      }
+    },
+    {
+      "id": "Q04",
+      "type": "single_pdf_semantic",
+      "category": "single-pdf",
+      "contentType": "pdf_text",
+      "difficulty": "easy",
+      "description": "语义理解 - 架构组件",
+      "bundleId": "460e0e7b-f59a-4325-bd36-2f8c63624d1b",
+      "question": "SimpleMem 的三阶段 pipeline 分别是什么？",
+      "expectedAnswer": "(1) Semantic Structured Compression, (2) Recursive Consolidation, (3) Adaptive Retrieval (or Adaptive Spatial Pruning)",
+      "acceptableVariants": ["compression, consolidation, retrieval", "Stage 1/2/3"],
+      "source": "Section 2, Architecture overview",
+      "evaluationCriteria": {
+        "mustContainAny": [["Compression", "Consolidation", "Retrieval"], ["Stage 1", "Stage 2", "Stage 3"]],
+        "scoreType": "semantic-coverage"
+      }
+    },
+    {
+      "id": "Q04a",
+      "type": "single_pdf_table",
+      "category": "single-pdf",
+      "contentType": "pdf_table",
+      "difficulty": "easy",
+      "description": "表格数据提取",
+      "bundleId": "460e0e7b-f59a-4325-bd36-2f8c63624d1b",
+      "question": "SimpleMem 在 GPT-4.1-mini 上的 Average F1 分数是多少？",
+      "expectedAnswer": "43.24",
+      "acceptableVariants": ["43.24", "43.24%", "43.24 F1"],
+      "source": "Main results table (Table 1 or similar)",
+      "evaluationCriteria": {
+        "mustContain": ["43.24"],
+        "scoreType": "exact-match"
+      }
+    },
+    {
+      "id": "Q04b",
+      "type": "single_pdf_image",
+      "category": "single-pdf",
+      "contentType": "pdf_image",
+      "difficulty": "medium",
+      "description": "图片理解",
+      "bundleId": "460e0e7b-f59a-4325-bd36-2f8c63624d1b",
+      "question": "SimpleMem 系统架构图中包含哪些主要组件？",
+      "expectedAnswer": "Semantic Compression, Recursive Consolidation, Adaptive Retrieval (可能包含 Memory Pool, Vector Index 等存储层)",
+      "acceptableVariants": ["three-stage pipeline", "compression, consolidation, retrieval"],
+      "source": "Figure 1 or architecture diagram",
+      "evaluationCriteria": {
+        "mustContainAny": [["Compression", "Consolidation", "Retrieval"], ["stage", "pipeline"]],
+        "scoreType": "semantic-coverage"
+      }
+    },
+    {
+      "id": "Q05",
+      "type": "cross_pdf_compare",
+      "category": "cross-pdf",
+      "contentType": "pdf_text",
+      "difficulty": "medium",
+      "description": "跨论文对比 - 记忆架构",
+      "bundleIds": ["460e0e7b-f59a-4325-bd36-2f8c63624d1b", "f17c5e6b-3ed4-4bfa-8e3e-1d69735b89f9"],
+      "question": "SimpleMem 和 MAGMA 在记忆组织方式上有什么本质区别？",
+      "expectedAnswer": "SimpleMem 使用语义压缩和递归合并将记忆单元整合为高层抽象表示; MAGMA 使用多图结构(Multi-Graph)组织记忆",
+      "source": "SimpleMem Section 2.2, MAGMA title/abstract",
+      "evaluationCriteria": {
+        "mustMention": ["SimpleMem", "MAGMA"],
+        "shouldCover": ["compression OR graph", "memory"],
+        "scoreType": "semantic-coverage"
+      }
+    },
+    {
+      "id": "Q06",
+      "type": "cross_pdf_compare",
+      "description": "跨论文对比 - 检索策略",
+      "bundleIds": ["460e0e7b-f59a-4325-bd36-2f8c63624d1b", "09943fcd-994b-4b7f-98af-33d458297539"],
+      "question": "SimpleMem 的自适应检索和 STACKPLANNER 的任务经验管理有什么不同的优化目标？",
+      "expectedAnswer": "SimpleMem 优化 token 效率，根据查询复杂度动态调整检索范围; STACKPLANNER 优化多智能体协作的任务经验复用",
+      "source": "SimpleMem Section 2.3, STACKPLANNER abstract"
+    },
+    {
+      "id": "Q07",
+      "type": "cross_pdf_compare",
+      "description": "跨论文对比 - 性能指标",
+      "bundleIds": ["460e0e7b-f59a-4325-bd36-2f8c63624d1b", "f17c5e6b-3ed4-4bfa-8e3e-1d69735b89f9"],
+      "question": "SimpleMem 和 MAGMA 分别使用什么基准数据集进行评估？",
+      "expectedAnswer": "SimpleMem 使用 LoCoMo benchmark; MAGMA 需要从论文中确认",
+      "source": "SimpleMem Section 3.1"
+    },
+    {
+      "id": "Q08",
+      "type": "cross_pdf_compare",
+      "description": "跨论文对比 - 核心创新",
+      "bundleIds": ["460e0e7b-f59a-4325-bd36-2f8c63624d1b", "09943fcd-994b-4b7f-98af-33d458297539", "f17c5e6b-3ed4-4bfa-8e3e-1d69735b89f9"],
+      "question": "这三篇论文 (SimpleMem, STACKPLANNER, MAGMA) 解决的核心问题分别是什么？",
+      "expectedAnswer": "SimpleMem: 长期交互中的上下文膨胀和token效率; STACKPLANNER: 多智能体系统的层级任务规划; MAGMA: AI Agent的长期记忆组织架构",
+      "source": "All three abstracts"
+    },
+    {
+      "id": "Q09",
+      "type": "multi_hop",
+      "description": "多跳推理 - 技术细节链",
+      "bundleId": "460e0e7b-f59a-4325-bd36-2f8c63624d1b",
+      "question": "SimpleMem 如何判断一个对话窗口是否应该被存储？如果被存储，会经过哪些处理步骤？",
+      "expectedAnswer": "1) 计算 information score H(W_t); 2) 如果 H(W_t) >= τ_redundant 则存储; 3) 存储前经过 segmentation: extract -> coreference resolution -> temporal anchoring",
+      "source": "Section 2.1, Equations 1-3"
+    },
+    {
+      "id": "Q10",
+      "type": "multi_hop",
+      "description": "多跳推理 - 消融实验结论",
+      "bundleId": "460e0e7b-f59a-4325-bd36-2f8c63624d1b",
+      "question": "根据 SimpleMem 的消融实验，移除哪个组件对 Temporal F1 影响最大？影响幅度是多少？",
+      "expectedAnswer": "移除 Semantic Structured Compression 对 Temporal F1 影响最大，下降 56.7% (从 58.62 降到 25.40)",
+      "source": "Section 3.4 Ablation Study"
+    }
+  ],
+  "contentTypeCoverage": {
+    "pdf_text": ["Q01", "Q02", "Q04", "Q05", "Q06", "Q07", "Q08"],
+    "pdf_formula": ["Q03"],
+    "pdf_table": ["Q04a"],
+    "pdf_image": ["Q04b"]
+  },
+  "categoryCoverage": {
+    "single-pdf": ["Q01", "Q02", "Q03", "Q04", "Q04a", "Q04b"],
+    "cross-pdf": ["Q05", "Q06", "Q07", "Q08"],
+    "multi-hop": ["Q09", "Q10"]
+  },
+  "difficultyCoverage": {
+    "easy": ["Q01", "Q02", "Q04", "Q04a"],
+    "medium": ["Q03", "Q04b", "Q05", "Q06", "Q07"],
+    "hard": ["Q08", "Q09", "Q10"]
+  },
+  "evaluation": {
+    "scoring": {
+      "exact_match": "答案完全匹配得 1 分",
+      "partial_match": "核心要点正确得 0.5 分",
+      "wrong": "答案错误或无法回答得 0 分"
+    },
+    "metrics": [
+      "accuracy: 正确回答的问题比例",
+      "response_time: 平均响应时间",
+      "token_cost: 平均 token 消耗"
+    ]
+  },
+  "expectedBaselines": {
+    "phase0_current": {
+      "description": "当前系统（单 Bundle 检索）",
+      "singlePdfAccuracy": ">=70%",
+      "crossPdfAccuracy": "N/A (不支持)",
+      "notes": "跨 PDF 问题无法回答，作为 Phase 1 的对照组"
+    },
+    "phase1_crossBundle": {
+      "description": "跨 Bundle 基础支持 + IGP 剪枝",
+      "singlePdfAccuracy": ">=75%",
+      "crossPdfAccuracy": ">=50%",
+      "notes": "Phase 1 完成后的目标"
+    }
+  },
+  "testProcedure": {
+    "step1": "使用 preflight_rag 工具执行每个问题",
+    "step2": "记录响应时间和答案",
+    "step3": "根据 evaluationCriteria 评分",
+    "step4": "计算分类统计：单PDF/跨PDF/多跳",
+    "step5": "对比 expectedBaselines 判断是否达标"
+  }
+}

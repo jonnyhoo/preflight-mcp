@@ -12,6 +12,14 @@ import type { AstGraphNode } from '../kg/types.js';
 
 export type QueryMode = 'naive' | 'local' | 'hybrid';
 
+/**
+ * Cross-bundle retrieval mode.
+ * - 'single': Query single bundle only (default, backward compatible)
+ * - 'specified': Query specific bundles via bundleIds
+ * - 'all': Query all indexed bundles
+ */
+export type CrossBundleMode = 'single' | 'specified' | 'all';
+
 export interface QueryOptions {
   /** Retrieval mode (default: hybrid) */
   mode?: QueryMode;
@@ -25,10 +33,16 @@ export interface QueryOptions {
   enableVerification?: boolean;
   /** Retry generation if faithfulness is low */
   retryOnLowFaithfulness?: boolean;
-  /** Filter by bundle ID */
+  /** Filter by bundle ID (used when crossBundleMode='single') */
   bundleId?: string;
   /** Filter by repo ID */
   repoId?: string;
+  
+  // Cross-bundle retrieval options (Phase 1)
+  /** Cross-bundle retrieval mode (default: 'single' for backward compatibility) */
+  crossBundleMode?: CrossBundleMode;
+  /** Bundle IDs to query (used when crossBundleMode='specified') */
+  bundleIds?: string[];
   
   // Hierarchical retrieval options
   /** Expand to parent chunks when retrieving children (default: false) */
@@ -37,13 +51,14 @@ export interface QueryOptions {
   expandToSiblings?: boolean;
 }
 
-export const DEFAULT_QUERY_OPTIONS: Required<Omit<QueryOptions, 'bundleId' | 'repoId'>> = {
+export const DEFAULT_QUERY_OPTIONS: Required<Omit<QueryOptions, 'bundleId' | 'repoId' | 'bundleIds'>> = {
   mode: 'hybrid',
   topK: 10,
   enableContextCompletion: true,
   maxHops: 2,
   enableVerification: false,
   retryOnLowFaithfulness: false,
+  crossBundleMode: 'single',
   expandToParent: true,
   expandToSiblings: true,
 };
@@ -70,6 +85,14 @@ export interface SourceEvidence {
   repoId?: string;
   /** Page number (1-indexed) where this content appears in the PDF */
   pageIndex?: number;
+  /** Section heading (e.g., "3.2 Method", "Abstract") from PDF structure */
+  sectionHeading?: string;
+  
+  // Cross-bundle source tracking (Phase 1)
+  /** Bundle ID this evidence came from */
+  bundleId?: string;
+  /** Paper identifier (e.g., arXiv:2601.02553) */
+  paperId?: string;
 }
 
 export interface GenerateResult {

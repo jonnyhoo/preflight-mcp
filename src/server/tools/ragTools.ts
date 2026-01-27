@@ -151,8 +151,15 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
         'Index bundle to ChromaDB for RAG queries, or ask knowledge questions about indexed content.\n\n' +
         '**Usage:**\n' +
         '- Index: `{"bundleId": "<id>", "index": true}`\n' +
-        '- Query: `{"bundleId": "<id>", "question": "这个项目怎么用？"}`\n' +
+        '- Query single bundle: `{"bundleId": "<id>", "question": "这个项目怎么用？"}`\n' +
+        '- Query multiple bundles: `{"crossBundleMode": "specified", "bundleIds": ["id1", "id2"], "question": "比较两篇论文的方法"}`\n' +
+        '- Query all bundles: `{"crossBundleMode": "all", "question": "哪篇论文讨论了transformer？"}`\n' +
         '- Both: `{"bundleId": "<id>", "index": true, "question": "..."}`\n\n' +
+        '**Cross-bundle retrieval:**\n' +
+        '- `crossBundleMode: "single"` (default): Query single bundle (specify `bundleId`)\n' +
+        '- `crossBundleMode: "specified"`: Query specific bundles (specify `bundleIds` array)\n' +
+        '- `crossBundleMode: "all"`: Query all indexed bundles (no bundleId needed)\n' +
+        'Note: AST graph expansion (hybrid mode) only works in single-bundle mode.\n\n' +
         '**Deduplication:** Same PDF won\'t be indexed twice. If skipped, use `force: true` to replace:\n' +
         '- Replace: `{"bundleId": "<id>", "index": true, "force": true}`\n\n' +
         '**Query modes:** `naive` (vector only), `local` (vector + neighbor), `hybrid` (vector + AST graph, default)\n\n' +
@@ -164,9 +171,11 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
         '- Second call: `{"bundleId": "<id>", "question": "...", "useVerifierLlm": true}` (uses verifier LLM)\n\n' +
         '**Config:** Requires `chromaUrl` and `embeddingEnabled` in `~/.preflight/config.json`\n' +
         'Optional: `verifierLlmApiBase`, `verifierLlmApiKey`, `verifierLlmModel` for cross-validation.\n' +
-        'Use when: "RAG问答", "知识检索", "语义搜索", "index bundle", "向量查询", "重新索引", "覆盖旧版本".',
+        'Use when: "RAG问答", "知识检索", "语义搜索", "跨文档检索", "对比论文", "index bundle", "向量查询", "重新索引", "覆盖旧版本".',
       inputSchema: {
-        bundleId: z.string().describe('Bundle ID to index or query'),
+        bundleId: z.string().optional().describe('Bundle ID to index or query (single mode, backward compatible)'),
+        bundleIds: z.array(z.string()).optional().describe('Multiple bundle IDs to query (Phase 1: cross-bundle retrieval)'),
+        crossBundleMode: z.enum(['single', 'specified', 'all']).optional().describe('Cross-bundle mode: single (default), specified (use bundleIds), all (query everything)'),
         index: z.boolean().optional().describe('Index bundle to vector DB (default: false). Skips if content already indexed.'),
         force: z.boolean().optional().describe('Force replace existing content with same hash. Use when: switching parser (MinerU→VLM), updating paper version, or re-indexing after bundle changes. Deletes old chunks before indexing new ones.'),
         question: z.string().optional().describe('Question to ask about the bundle'),
@@ -206,6 +215,9 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
               filePath: z.string().optional(),
               repoId: z.string().optional(),
               pageIndex: z.number().optional().describe('Page number (1-indexed) in PDF'),
+              sectionHeading: z.string().optional().describe('Section heading (e.g., "3.2 Method", "Abstract")'),
+              bundleId: z.string().optional().describe('Bundle ID this evidence came from'),
+              paperId: z.string().optional().describe('Paper identifier (e.g., arXiv:2601.02553)'),
             })
           )
           .optional(),
@@ -222,13 +234,21 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
     },
     async (args) => {
       try {
-        const { bundleId, index, force, question, mode, topK, repoId, expandToParent, expandToSiblings, useVerifierLlm } = args;
+        const { bundleId, bundleIds, crossBundleMode, index, force, question, mode, topK, repoId, expandToParent, expandToSiblings, useVerifierLlm } = args;
 
         // Validate: at least one action
         if (!index && !question) {
           throw new Error(
             'Must specify `index: true` or `question`. ' +
             'Example: {"bundleId": "xxx", "index": true} or {"bundleId": "xxx", "question": "How to use?"}'
+          );
+        }
+
+        // Validate cross-bundle parameters
+        if (crossBundleMode === 'specified' && (!bundleIds || bundleIds.length === 0)) {
+          throw new Error(
+            'crossBundleMode="specified" requires bundleIds array. ' +
+            'Example: {"crossBundleMode": "specified", "bundleIds": ["id1", "id2"], "question": "..."}'
           );
         }
 
@@ -248,16 +268,24 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
           );
         }
 
-        // Find bundle path
-        const storageDir = await findBundleStorageDir(cfg.storageDirs, bundleId);
-        if (!storageDir) {
-          throw new Error(`Bundle not found: ${bundleId}`);
+        // Find bundle path (only needed for indexing)
+        let bundlePath: string | undefined;
+        if (index) {
+          if (!bundleId) {
+            throw new Error('bundleId is required for indexing');
+          }
+          const storageDir = await findBundleStorageDir(cfg.storageDirs, bundleId);
+          if (!storageDir) {
+            throw new Error(`Bundle not found: ${bundleId}`);
+          }
+          const paths = getBundlePaths(storageDir, bundleId);
+          bundlePath = paths.rootDir;
         }
-        const paths = getBundlePaths(storageDir, bundleId);
-        const bundlePath = paths.rootDir;
 
         // Get RAG engine (use verifier LLM if requested for cross-validation)
-        const { engine, embeddingEndpoint, llmEnabled, llmModel } = await getOrCreateEngine(bundleId, cfg, { useVerifierLlm });
+        // For cross-bundle queries, use first bundleId or a placeholder
+        const engineKey = bundleId ?? bundleIds?.[0] ?? 'shared';
+        const { engine, embeddingEndpoint, llmEnabled, llmModel } = await getOrCreateEngine(engineKey, cfg, { useVerifierLlm });
 
         let indexResult: {
           chunksWritten: number;
@@ -282,6 +310,9 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
             filePath?: string;
             repoId?: string;
             pageIndex?: number;
+            sectionHeading?: string;
+            bundleId?: string;
+            paperId?: string;
           }>;
           relatedEntities?: string[];
           stats: {
@@ -293,6 +324,9 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
 
         // Index if requested
         if (index) {
+          if (!bundleId || !bundlePath) {
+            throw new Error('bundleId and bundlePath required for indexing');
+          }
           logger.info(`Indexing bundle: ${bundleId}${force ? ' (force)' : ''}`);
           const result = await engine.indexBundle(bundlePath, bundleId, { force });
           indexResult = {
@@ -322,8 +356,8 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
           const llmType = useVerifierLlm ? 'verifier' : 'main';
           logger.info(`Querying: "${question}" (mode: ${mode ?? 'hybrid'}, llm: ${llmType}/${llmModel})`);
 
-          // Try to load AST graph if not indexing in same call
-          if (!index) {
+          // Try to load AST graph if not indexing in same call (only for single bundle mode)
+          if (!index && bundleId) {
             await engine.loadAstGraph(bundleId);
           }
 
@@ -331,7 +365,10 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
           const result = await engine.query(question, {
             mode: (mode as QueryMode) ?? 'hybrid',
             topK: topK ?? 10,
+            // Phase 1: Cross-bundle parameters
             bundleId,
+            bundleIds,
+            crossBundleMode: crossBundleMode as 'single' | 'specified' | 'all' | undefined,
             repoId,
             // Ultra quality: always enable verification and retry when LLM is available
             enableVerification: llmEnabled,
@@ -403,10 +440,58 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
 
           if (queryResult.sources.length > 0) {
             textResponse += '\n📚 Sources:\n';
-            queryResult.sources.slice(0, 5).forEach((s, i) => {
-              const pageInfo = s.pageIndex ? ` (p.${s.pageIndex})` : '';
-              textResponse += `   ${i + 1}. [${s.sourceType}] ${s.repoId ?? s.filePath ?? s.chunkId}${pageInfo}\n`;
-            });
+            
+            // Phase 1.4: Group sources by paperId for cross-bundle queries
+            const sourcesByPaper = new Map<string, typeof queryResult.sources>();
+            for (const source of queryResult.sources) {
+              const key = source.paperId ?? source.bundleId ?? 'unknown';
+              if (!sourcesByPaper.has(key)) {
+                sourcesByPaper.set(key, []);
+              }
+              sourcesByPaper.get(key)!.push(source);
+            }
+
+            // Display sources grouped by paper
+            let globalIndex = 1;
+            for (const [paperId, sources] of sourcesByPaper) {
+              // Paper header (show only if multiple papers)
+              if (sourcesByPaper.size > 1) {
+                textResponse += `   📄 ${paperId}:\n`;
+              }
+              
+              // Format each source with enhanced metadata
+              for (const s of sources.slice(0, 5)) {
+                // Build source label: [paperId] Section X.Y, page N
+                let sourceLabel = '';
+                
+                // Add paperId prefix if available
+                if (s.paperId) {
+                  sourceLabel += `[${s.paperId}]`;
+                }
+                
+                // Add section/heading info from metadata
+                if (s.sectionHeading) {
+                  sourceLabel += ` ${s.sectionHeading}`;
+                }
+                
+                // Add page number
+                if (s.pageIndex) {
+                  sourceLabel += `, page ${s.pageIndex}`;
+                }
+                
+                // Fallback: use sourceType and repoId if no paperId
+                if (!sourceLabel) {
+                  sourceLabel = `[${s.sourceType}] ${s.repoId ?? s.filePath ?? s.chunkId}`;
+                  if (s.pageIndex) {
+                    sourceLabel += ` (p.${s.pageIndex})`;
+                  }
+                }
+                
+                const indent = sourcesByPaper.size > 1 ? '      ' : '   ';
+                textResponse += `${indent}${globalIndex}. ${sourceLabel}\n`;
+                globalIndex++;
+              }
+            }
           }
 
           if (queryResult.relatedEntities && queryResult.relatedEntities.length > 0) {

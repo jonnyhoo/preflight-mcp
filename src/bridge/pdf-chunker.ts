@@ -254,22 +254,27 @@ function isNoiseHeading(heading: string): boolean {
  * Returns the inferred level or undefined if cannot be determined.
  * Examples:
  *   "1 Introduction" -> 1
+ *   "1. Introduction" -> 1    (with trailing dot)
  *   "2.1 Related Work" -> 2
+ *   "2.1. Related Work" -> 2  (with trailing dot)
  *   "3.2.1 Details" -> 3
+ *   "3.2.1. Details" -> 3     (with trailing dot)
  *   "Abstract" -> 1
  *   "Conclusion" -> 1
  */
 function inferLogicalLevel(headingText: string): number | undefined {
   // Check for numbered sections like "1", "2.1", "3.2.1"
-  const numberMatch = headingText.match(/^(\d+(?:\.\d+)*)\s+/);
+  // Support both formats: "2.1 Title" and "2.1. Title" (trailing dot before space)
+  // Pattern: digits optionally separated by dots, optionally ending with a dot, followed by space
+  const numberMatch = headingText.match(/^(\d+(?:\.\d+)*)\.?\s+/);
   if (numberMatch) {
     const parts = numberMatch[1]!.split('.');
     return parts.length; // "1" -> 1, "2.1" -> 2, "3.2.1" -> 3
   }
   
   // Appendix sections: "A Pseudocode", "B Dataset", "G Case Study", etc.
-  // Also handles "A.1 Details" (Appendix subsection)
-  const appendixMatch = headingText.match(/^([A-Z](?:\.[0-9]+)*)\s+/);
+  // Also handles "A.1 Details" or "A.1. Details" (Appendix subsection with optional trailing dot)
+  const appendixMatch = headingText.match(/^([A-Z](?:\.[0-9]+)*)\.?\s+/);
   if (appendixMatch) {
     const parts = appendixMatch[1]!.split('.');
     // A, B, C = level 1; A.1, B.2 = level 2
@@ -705,6 +710,7 @@ function adaptiveChunk(
  * with parentChunkId linking back to the section chunk.
  * 
  * @param tree - Heading tree from parseHeadingTree
+ * @param markdown - Original markdown source (needed to extract raw content with formatting)
  * @param targetLevel - Target heading level to chunk at (1-4)
  * @param trackHierarchy - Whether to track parent-child relationships
  * @param extractSubChunks - Whether to create independent sub-chunks for special blocks
@@ -713,6 +719,7 @@ function adaptiveChunk(
  */
 function semanticChunkByLevel(
   tree: HeadingNode[],
+  markdown: string,
   targetLevel: number,
   trackHierarchy: boolean,
   extractSubChunks = true,
@@ -721,6 +728,9 @@ function semanticChunkByLevel(
   const result: ExtendedBlock[] = [];
   let chunkIndex = 0;
   let subChunkIndex = 0;
+  
+  // Split markdown into lines for line-based extraction
+  const lines = markdown.split('\n');
   
   // Recursive traversal to collect chunks at target level
   function traverse(
@@ -736,8 +746,13 @@ function semanticChunkByLevel(
       if (logicalLevel === targetLevel) {
         const chunkId = `semantic_${granularity}_${chunkIndex++}`;
         
-        // Detect content blocks within this section
-        const blocks = detectContentBlocks(node.content, currentPath);
+        // Extract raw markdown content for this section by line range
+        // This preserves tables, formulas, code blocks, etc.
+        const sectionLines = lines.slice(node.startLine + 1, node.endLine + 1); // +1 to skip the heading itself
+        const rawSectionMarkdown = sectionLines.join('\n');
+        
+        // Detect content blocks within this section using raw markdown
+        const blocks = detectContentBlocks(rawSectionMarkdown, currentPath);
         
         // Track whether parent chunk was actually created (for child traversal)
         let parentChunkCreated = false;
@@ -886,14 +901,14 @@ function multiScaleChunk(
   
   // Level 1: Top-level sections (chapters, main Appendix like "# A Pseudocode", "# G Case Study")
   // These may not have sub-sections, so we need to capture them directly
-  const level1Chunks = semanticChunkByLevel(tree, 1, trackHierarchy, true, 'section');
+  const level1Chunks = semanticChunkByLevel(tree, markdown, 1, trackHierarchy, true, 'section');
   for (const chunk of level1Chunks) {
     result.push(chunk);
     if (chunk.heading) processedHeadings.add(chunk.heading);
   }
   
   // Level 2: Sections with sub-chunks extracted (2.1, A.1, etc.)
-  const coarseChunks = semanticChunkByLevel(tree, 2, trackHierarchy, true, 'section');
+  const coarseChunks = semanticChunkByLevel(tree, markdown, 2, trackHierarchy, true, 'section');
   for (const chunk of coarseChunks) {
     // Avoid duplicates from level 1
     if (!chunk.heading || !processedHeadings.has(chunk.heading)) {
@@ -902,8 +917,8 @@ function multiScaleChunk(
     }
   }
   
-  // Level 4: Fine-grained paragraphs (3.2.1.1, etc.) without sub-chunks
-  const fineChunks = semanticChunkByLevel(tree, 4, false, false, 'paragraph');
+  // Level 4: Fine-grained paragraphs (*******, etc.) without sub-chunks
+  const fineChunks = semanticChunkByLevel(tree, markdown, 4, false, false, 'paragraph');
   for (const chunk of fineChunks) {
     // Avoid duplicates
     if (!chunk.heading || !processedHeadings.has(chunk.heading)) {

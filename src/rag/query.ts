@@ -331,10 +331,25 @@ export class RAGEngine {
       await this.loadAstGraph(options.bundleId);
     }
 
-    // Build filter
-    const filter = options?.bundleId || options?.repoId
-      ? { bundleId: options.bundleId, repoId: options.repoId }
-      : undefined;
+    // Build filter (Phase 1: Cross-bundle support)
+    let filter: { bundleId?: string; bundleIds?: string[]; repoId?: string } | undefined;
+    
+    const crossMode = options?.crossBundleMode ?? 'single';
+    if (crossMode === 'all') {
+      // Query all bundles: no bundleId filter
+      filter = options?.repoId ? { repoId: options.repoId } : undefined;
+    } else if (crossMode === 'specified' && options?.bundleIds && options.bundleIds.length > 0) {
+      // Query specified bundles
+      filter = {
+        bundleIds: options.bundleIds,
+        repoId: options?.repoId,
+      };
+    } else {
+      // Single bundle mode (default, backward compatible)
+      filter = options?.bundleId || options?.repoId
+        ? { bundleId: options.bundleId, repoId: options.repoId }
+        : undefined;
+    }
 
     // Retrieve
     logger.info(`Retrieving context for: "${question}" (mode: ${opts.mode})`);

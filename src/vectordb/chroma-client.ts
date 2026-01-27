@@ -716,9 +716,16 @@ export class ChromaVectorDB {
 
     const conditions: Record<string, unknown>[] = [];
 
-    if (filter.bundleId) {
+    // Phase 1: Cross-bundle retrieval support
+    // Priority: bundleIds (multi) > bundleId (single) > no filter (all bundles)
+    if (filter.bundleIds && filter.bundleIds.length > 0) {
+      // Multiple bundle IDs: use $in operator
+      conditions.push({ bundleId: { $in: filter.bundleIds } });
+    } else if (filter.bundleId) {
+      // Single bundle ID: backward compatible
       conditions.push({ bundleId: filter.bundleId });
     }
+    // If neither bundleId nor bundleIds provided: query all bundles
 
     if (filter.repoId) {
       conditions.push({ repoId: filter.repoId });

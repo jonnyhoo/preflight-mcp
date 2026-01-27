@@ -52,7 +52,7 @@ export class RAGGenerator {
   ): Promise<GenerateResult> {
     const chunks = context.chunks;
 
-    // Build sources evidence
+    // Build sources evidence (Phase 1: include bundleId/paperId for cross-bundle tracking)
     const sources: SourceEvidence[] = chunks.map(chunk => ({
       chunkId: chunk.id,
       content: chunk.content.slice(0, 500), // Truncate for response
@@ -60,6 +60,9 @@ export class RAGGenerator {
       filePath: chunk.metadata.filePath,
       repoId: chunk.metadata.repoId,
       pageIndex: chunk.metadata.pageIndex, // Page number (1-indexed)
+      sectionHeading: chunk.metadata.sectionHeading, // Section heading for PDF structure navigation
+      bundleId: chunk.metadata.bundleId,   // Cross-bundle source tracking
+      paperId: chunk.metadata.paperId,     // Paper identifier (e.g., arXiv:2601.02553)
     }));
 
     // If no LLM configured, return a simple concatenated answer

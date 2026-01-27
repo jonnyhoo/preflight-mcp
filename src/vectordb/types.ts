@@ -89,7 +89,10 @@ export interface RelationDocument {
 // ============================================================================
 
 export interface QueryFilter {
+  /** Single bundle ID filter (backward compatible) */
   bundleId?: string;
+  /** Multiple bundle IDs filter (Phase 1: cross-bundle retrieval) */
+  bundleIds?: string[];
   repoId?: string;
   sourceType?: SourceType | SourceType[];
   chunkType?: ChunkType | ChunkType[];
