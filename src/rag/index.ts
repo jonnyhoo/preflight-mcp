@@ -22,6 +22,17 @@ export { DEFAULT_QUERY_OPTIONS } from './types.js';
 export { RAGRetriever } from './retriever.js';
 export { RAGGenerator } from './generator.js';
 
+// Hierarchical Retriever (Phase 3)
+export type {
+  HierarchicalRetrieveOptions,
+  HierarchicalRetrieveResult,
+} from './hierarchical-retriever.js';
+
+export {
+  HierarchicalRetriever,
+  createHierarchicalRetriever,
+} from './hierarchical-retriever.js';
+
 // Main API
 export { 
   RAGEngine, 

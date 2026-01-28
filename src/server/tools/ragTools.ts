@@ -552,31 +552,40 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
     {
       title: 'RAG content management',
       description:
-        'Manage and debug indexed content in ChromaDB.\n\n' +
-        '**Actions:**\n' +
-        '- `list` → List all indexed PDFs/documents with contentHash, paperId, chunk count\n' +
-        '- `stats` → View statistics: total chunks, unique documents, breakdown by paperId\n' +
-        '- `inspect` → **Debug tool**: View raw chunk data including content and ALL metadata (pageIndex, sectionHeading, etc.)\n' +
-        '  - Use `bundleId` to filter by bundle, `limit` to control how many chunks (default 5)\n' +
-        '  - Example: `{"action": "inspect", "bundleId": "xxx", "limit": 3}`\n' +
-        '  - **When to use**: 验证索引是否正确、检查 pageIndex 是否存在、调试 chunk 内容\n' +
-        '- `search_raw` → **Debug tool**: Raw vector search without LLM, returns top-k chunks with scores\n' +
-        '  - Requires `query` (search text), optional `bundleId` filter and `limit` (default 5)\n' +
-        '  - Example: `{"action": "search_raw", "query": "abstract", "limit": 3}`\n' +
-        '  - **When to use**: 测试检索质量、验证向量搜索是否工作、调试为什么 RAG 找不到内容\n' +
-        '- `delete` → Delete all chunks for a specific contentHash\n' +
-        '- `delete_all` → **Dangerous**: Remove ALL indexed content\n\n' +
-        '**Tips:**\n' +
-        '- Use `list` first to see what\'s indexed\n' +
-        '- Use `inspect` to verify chunk metadata (especially pageIndex for page localization)\n' +
-        '- Use `search_raw` to debug retrieval issues before blaming the LLM\n' +
-        'Use when: "查看RAG索引", "删除向量", "RAG统计", "调试检索", "检查chunk内容", "验证pageIndex".',
+        'Debug and manage ChromaDB vector database. Use this tool to inspect index structure, debug retrieval issues, and manage content.\n\n' +
+        '## Quick Reference\n' +
+        '| Action | Purpose | Example |\n' +
+        '|--------|---------|---------|\n' +
+        '| `collections` | View all collections (L1/L2/L3 hierarchy) | `{"action": "collections"}` |\n' +
+        '| `stats` | Total chunks, unique docs, by paperId | `{"action": "stats"}` |\n' +
+        '| `list` | List indexed content with contentHash | `{"action": "list"}` |\n' +
+        '| `sample` | Sample chunks from specific collection | `{"action": "sample", "collection": "preflight_rag_l1_pdf", "limit": 3}` |\n' +
+        '| `inspect` | View chunk content and ALL metadata | `{"action": "inspect", "limit": 5}` |\n' +
+        '| `search_raw` | Raw vector search (no LLM) | `{"action": "search_raw", "query": "transformer", "limit": 5}` |\n' +
+        '| `delete` | Delete by contentHash | `{"action": "delete", "contentHash": "abc123..."}` |\n' +
+        '| `delete_all` | ⚠️ Delete everything | `{"action": "delete_all"}` |\n' +
+        '| `drop_collection` | ⚠️ Drop entire collection | `{"action": "drop_collection", "collection": "preflight_chunks"}` |\n\n' +
+        '## When to Use\n' +
+        '- **"检查分层索引"** → `collections` (see L1_pdf/L1_repo/L2_section/L3_chunk counts)\n' +
+        '- **"查看哪些论文已索引"** → `list` (shows paperId and chunk counts)\n' +
+        '- **"为什么搜不到xxx"** → `search_raw` with the query (test retrieval without LLM)\n' +
+        '- **"检查chunk内容/metadata"** → `inspect` (see pageIndex, sectionHeading, etc.)\n' +
+        '- **"查看L1层有什么"** → `sample` with collection="preflight_rag_l1_pdf"\n' +
+        '- **"清空数据库"** → `delete_all`\n' +
+        '- **"删除某个collection"** → `drop_collection` with collection name\n\n' +
+        '## Hierarchical Structure\n' +
+        '```\n' +
+        'L1 (coarse): l1_pdf, l1_repo, l1_doc, l1_memory, l1_web\n' +
+        'L2 (section): l2_section\n' +
+        'L3 (chunk): l3_chunk\n' +
+        '```',
       inputSchema: {
-        action: z.enum(['list', 'stats', 'delete', 'delete_all', 'inspect', 'search_raw']).describe('Action to perform'),
+        action: z.enum(['list', 'stats', 'collections', 'sample', 'delete', 'delete_all', 'drop_collection', 'inspect', 'search_raw']).describe('Action to perform'),
         contentHash: z.string().optional().describe('Content hash to delete (required for delete action)'),
         bundleId: z.string().optional().describe('Filter by bundle ID (for inspect and search_raw)'),
+        collection: z.string().optional().describe('Collection name (for sample or drop_collection, e.g., "preflight_rag_l1_pdf")'),
         query: z.string().optional().describe('Search query text (required for search_raw)'),
-        limit: z.number().optional().describe('Max number of chunks to return (default 5, for inspect and search_raw)'),
+        limit: z.number().optional().describe('Max number of results (default 5)'),
       },
       outputSchema: {
         // List result
@@ -604,7 +613,7 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
     },
     async (args) => {
       try {
-        const { action, contentHash, bundleId, query, limit } = args;
+        const { action, contentHash, bundleId, collection, query, limit } = args;
 
         // Check ChromaDB availability
         const chromaCheck = await checkChromaAvailability(cfg.chromaUrl);
@@ -654,6 +663,132 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
             break;
           }
 
+          case 'collections': {
+            // List all collections with document counts
+            const collections = await chromaDB.listAllCollections();
+            const collectionStats: Array<{ name: string; count: number; metadata?: Record<string, unknown> }> = [];
+            
+            for (const col of collections) {
+              const count = await chromaDB.getCollectionCount(col.name);
+              collectionStats.push({ name: col.name, count, metadata: col.metadata });
+            }
+            
+            // Sort by name for better display
+            collectionStats.sort((a, b) => a.name.localeCompare(b.name));
+            
+            structuredContent.collections = collectionStats;
+
+            textResponse += `📦 ChromaDB Collections (${collections.length} total)\n\n`;
+            
+            // Group by type for display
+            const hierarchical = collectionStats.filter(c => c.name.includes('_rag_l'));
+            const legacy = collectionStats.filter(c => !c.name.includes('_rag_l'));
+            
+            if (hierarchical.length > 0) {
+              textResponse += `**Hierarchical (Phase 3):**\n`;
+              for (const col of hierarchical) {
+                const level = col.name.match(/_rag_(l[0-9]_[a-z]+)/)?.[1] ?? 'unknown';
+                textResponse += `  • ${col.name}: ${col.count} docs (${level})\n`;
+              }
+              textResponse += `\n`;
+            }
+            
+            if (legacy.length > 0) {
+              textResponse += `**Legacy/Other:**\n`;
+              for (const col of legacy) {
+                textResponse += `  • ${col.name}: ${col.count} docs\n`;
+              }
+            }
+            
+            // Summary
+            const totalDocs = collectionStats.reduce((sum, c) => sum + c.count, 0);
+            textResponse += `\n**Total:** ${totalDocs} documents across ${collections.length} collections\n`;
+            break;
+          }
+
+          case 'sample': {
+            // Sample chunks from a specific collection
+            if (!collection) {
+              throw new Error('collection is required for sample action. Example: "preflight_rag_l1_pdf"');
+            }
+
+            const maxSamples = limit ?? 5;
+            
+            // Get collection count first
+            const count = await chromaDB.getCollectionCount(collection);
+            if (count === 0) {
+              textResponse += `⚠️ Collection "${collection}" is empty or does not exist.\n`;
+              break;
+            }
+
+            // For sampling, we need to use a dummy query to get random-ish results
+            // Use a very generic embedding query
+            if (!cfg.semanticSearchEnabled && !cfg.openaiApiKey && cfg.embeddingProvider !== 'ollama') {
+              throw new Error('Embedding not configured. Cannot sample.');
+            }
+
+            const embedding = await getEmbeddingProvider(cfg);
+            // Use a generic query to get diverse samples
+            const sampleEmbedding = await embedding.embed('document content text');
+            
+            // Query the specific collection directly
+            const basePath = `/api/v2/tenants/default_tenant/databases/default_database`;
+            const collectionsResponse = await fetch(
+              `${cfg.chromaUrl}${basePath}/collections`
+            );
+            const collections = await collectionsResponse.json() as Array<{ name: string; id: string }>;
+            const targetCol = collections.find((c: { name: string }) => c.name === collection);
+            
+            if (!targetCol) {
+              textResponse += `⚠️ Collection "${collection}" not found.\n`;
+              break;
+            }
+
+            const queryResponse = await fetch(
+              `${cfg.chromaUrl}${basePath}/collections/${targetCol.id}/query`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  query_embeddings: [sampleEmbedding.vector],
+                  n_results: maxSamples,
+                  include: ['documents', 'metadatas'],
+                }),
+              }
+            );
+            const queryResult = await queryResponse.json() as {
+              ids: string[][];
+              documents?: (string | null)[][];
+              metadatas?: (Record<string, unknown> | null)[][];
+            };
+
+            textResponse += `📋 Sample from "${collection}" (${count} total, showing ${maxSamples})\n\n`;
+            
+            if (queryResult.ids[0]) {
+              for (let i = 0; i < queryResult.ids[0].length; i++) {
+                const id = queryResult.ids[0][i];
+                const doc = queryResult.documents?.[0]?.[i] ?? '';
+                const meta = queryResult.metadatas?.[0]?.[i] ?? {};
+                
+                textResponse += `--- Sample ${i + 1} ---\n`;
+                textResponse += `ID: ${id}\n`;
+                if (meta.paperId) textResponse += `Paper: ${meta.paperId}\n`;
+                if (meta.sourceType) textResponse += `Source: ${meta.sourceType}\n`;
+                if (meta.sectionHeading) textResponse += `Section: ${meta.sectionHeading}\n`;
+                if (meta.pageIndex) textResponse += `Page: ${meta.pageIndex}\n`;
+                if (meta.collectionLevel) textResponse += `Level: ${meta.collectionLevel}\n`;
+                
+                const preview = doc.length > 200 ? doc.slice(0, 200) + '...' : doc;
+                textResponse += `Content: ${preview}\n\n`;
+              }
+            }
+            
+            structuredContent.collection = collection;
+            structuredContent.totalCount = count;
+            structuredContent.sampleCount = queryResult.ids[0]?.length ?? 0;
+            break;
+          }
+
           case 'delete': {
             if (!contentHash) {
               throw new Error('contentHash is required for delete action');
@@ -688,6 +823,45 @@ export function registerRagTools({ server, cfg }: ToolDependencies): void {
               structuredContent.deleted = true;
               structuredContent.deletedChunks = totalDeleted;
               structuredContent.deletedDocuments = items.length;
+            }
+            break;
+          }
+
+          case 'drop_collection': {
+            if (!collection) {
+              throw new Error('collection is required for drop_collection action. Example: "preflight_chunks"');
+            }
+
+            // Check if collection exists
+            const basePath = `/api/v2/tenants/default_tenant/databases/default_database`;
+            const collectionsResponse = await fetch(`${cfg.chromaUrl}${basePath}/collections`);
+            const allCollections = await collectionsResponse.json() as Array<{ name: string; id: string }>;
+            const targetCol = allCollections.find((c: { name: string }) => c.name === collection);
+            
+            if (!targetCol) {
+              textResponse += `⚠️ Collection "${collection}" not found.\n`;
+              structuredContent.dropped = false;
+              break;
+            }
+
+            // Get count before dropping
+            const countBefore = await chromaDB.getCollectionCount(collection);
+
+            // Drop the collection
+            const deleteResponse = await fetch(`${cfg.chromaUrl}${basePath}/collections/${collection}`, {
+              method: 'DELETE',
+            });
+
+            if (deleteResponse.ok) {
+              textResponse += `🗑️ Dropped collection "${collection}" (${countBefore} documents)\n`;
+              structuredContent.dropped = true;
+              structuredContent.collection = collection;
+              structuredContent.documentsDropped = countBefore;
+            } else {
+              const error = await deleteResponse.text();
+              textResponse += `❌ Failed to drop collection "${collection}": ${error}\n`;
+              structuredContent.dropped = false;
+              structuredContent.error = error;
             }
             break;
           }

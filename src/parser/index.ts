@@ -62,7 +62,13 @@ export {
 
 export { PdfParser, createPdfParser } from './pdf-parser.js';
 export { VlmParser, createVlmParser } from './vlm-parser.js';
-export { MineruParser, createMineruParser, isMineruAvailable } from './mineru-parser.js';
+export {
+  MineruParser,
+  createMineruParser,
+  isMineruAvailable,
+  type BatchFileResult,
+  type BatchParseResult,
+} from './mineru-parser.js';
 export { OfficeParser, createOfficeParser } from './office-parser.js';
 export {
   HtmlParser,

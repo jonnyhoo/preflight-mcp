@@ -123,6 +123,15 @@ interface MineruSubmitResponse {
   };
 }
 
+/** MinerU API response for batch URL submission */
+interface MineruBatchUrlSubmitResponse {
+  code: number;
+  msg: string;
+  data?: {
+    batch_id: string;
+  };
+}
+
 /** MinerU API response for batch status */
 interface MineruBatchStatusResponse {
   code: number;
@@ -163,6 +172,32 @@ interface MineruConfig {
   timeoutMs: number;
   pollIntervalMs: number;
   enabled: boolean;
+}
+
+/** Single file result in batch parsing */
+export interface BatchFileResult {
+  /** Original file path or URL */
+  source: string;
+  /** Whether parsing succeeded */
+  success: boolean;
+  /** Parse result if successful */
+  result?: ParseResult;
+  /** Error message if failed */
+  error?: string;
+}
+
+/** Result of batch parsing operation */
+export interface BatchParseResult {
+  /** Batch ID from MinerU */
+  batchId: string;
+  /** Results for each file */
+  results: BatchFileResult[];
+  /** Total parsing time in milliseconds */
+  totalTimeMs: number;
+  /** Number of successful parses */
+  successCount: number;
+  /** Number of failed parses */
+  failureCount: number;
 }
 
 // ============================================================================
@@ -330,6 +365,404 @@ export class MineruParser implements IDocumentParser {
       const errMsg = error instanceof Error ? error.message : String(error);
       logger.error(`MinerU URL parsing failed: ${errMsg}`, error instanceof Error ? error : undefined);
       return this.createErrorResult(url, startTime, 'PARSE_ERROR', errMsg);
+    }
+  }
+
+  // ============================================================================
+  // Batch Parsing Methods
+  // ============================================================================
+
+  /**
+   * Parse multiple local PDF files in a single batch.
+   * More efficient than calling parse() multiple times as it uses a single batch_id.
+   * 
+   * @param filePaths - Array of local file paths (max 200 files)
+   * @param options - Parse options applied to all files
+   * @returns BatchParseResult with results for each file
+   */
+  async parseBatch(filePaths: string[], options?: PdfParseOptions): Promise<BatchParseResult> {
+    const startTime = Date.now();
+    const results: BatchFileResult[] = [];
+
+    // Validate configuration
+    if (!this.config.enabled || !this.config.apiKey) {
+      return {
+        batchId: '',
+        results: filePaths.map(fp => ({
+          source: fp,
+          success: false,
+          error: LLM_ERRORS.NOT_CONFIGURED,
+        })),
+        totalTimeMs: Date.now() - startTime,
+        successCount: 0,
+        failureCount: filePaths.length,
+      };
+    }
+
+    // Validate file count (MinerU limit: 200 files per batch)
+    if (filePaths.length > 200) {
+      return {
+        batchId: '',
+        results: filePaths.map(fp => ({
+          source: fp,
+          success: false,
+          error: 'Batch size exceeds MinerU limit of 200 files',
+        })),
+        totalTimeMs: Date.now() - startTime,
+        successCount: 0,
+        failureCount: filePaths.length,
+      };
+    }
+
+    // Validate all files exist
+    const fileInfos: Array<{ path: string; name: string; dataId: string }> = [];
+    for (const filePath of filePaths) {
+      if (!fs.existsSync(filePath)) {
+        results.push({
+          source: filePath,
+          success: false,
+          error: `File not found: ${filePath}`,
+        });
+        continue;
+      }
+      fileInfos.push({
+        path: filePath,
+        name: path.basename(filePath),
+        dataId: crypto.randomUUID(),
+      });
+    }
+
+    if (fileInfos.length === 0) {
+      return {
+        batchId: '',
+        results,
+        totalTimeMs: Date.now() - startTime,
+        successCount: 0,
+        failureCount: results.length,
+      };
+    }
+
+    try {
+      logger.info(`Batch parsing ${fileInfos.length} PDFs with MinerU`);
+
+      // Step 1: Request upload URLs for all files
+      const urlResponse = await fetch(`${this.config.apiBase}/api/v4/file-urls/batch`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.config.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          files: fileInfos.map(f => ({ name: f.name, data_id: f.dataId })),
+          model_version: 'vlm',
+          enable_formula: options?.extractEquations ?? true,
+          enable_table: options?.extractTables ?? true,
+        }),
+      });
+
+      if (!urlResponse.ok) {
+        const text = await urlResponse.text();
+        throw new Error(`Failed to get upload URLs: ${urlResponse.status} - ${text}`);
+      }
+
+      const urlData = await urlResponse.json() as MineruFileUrlsResponse;
+      if (urlData.code !== 0 || !urlData.data?.batch_id || !urlData.data?.file_urls?.length) {
+        throw new Error(`MinerU API error: ${urlData.msg}`);
+      }
+
+      const batchId = urlData.data.batch_id;
+      const uploadUrls = urlData.data.file_urls;
+
+      logger.info(`Got batch_id: ${batchId}, uploading ${fileInfos.length} files...`);
+
+      // Step 2: Upload all files in parallel
+      const uploadPromises = fileInfos.map(async (fileInfo, index) => {
+        const uploadUrl = uploadUrls[index];
+        if (!uploadUrl) {
+          return { fileInfo, success: false, error: 'No upload URL provided' };
+        }
+
+        try {
+          const fileBuffer = fs.readFileSync(fileInfo.path);
+          const uploadResponse = await fetch(uploadUrl, {
+            method: 'PUT',
+            body: fileBuffer,
+          });
+
+          if (!uploadResponse.ok) {
+            return { fileInfo, success: false, error: `Upload failed: ${uploadResponse.status}` };
+          }
+
+          logger.debug(`Uploaded: ${fileInfo.name}`);
+          return { fileInfo, success: true };
+        } catch (err) {
+          return { fileInfo, success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+      });
+
+      const uploadResults = await Promise.all(uploadPromises);
+
+      // Track which files were uploaded successfully
+      const uploadedFiles = new Map<string, { path: string; name: string }>();
+      for (const ur of uploadResults) {
+        if (ur.success) {
+          uploadedFiles.set(ur.fileInfo.name, { path: ur.fileInfo.path, name: ur.fileInfo.name });
+        } else {
+          results.push({
+            source: ur.fileInfo.path,
+            success: false,
+            error: ur.error ?? 'Upload failed',
+          });
+        }
+      }
+
+      if (uploadedFiles.size === 0) {
+        return {
+          batchId,
+          results,
+          totalTimeMs: Date.now() - startTime,
+          successCount: 0,
+          failureCount: results.length,
+        };
+      }
+
+      logger.info(`${uploadedFiles.size} files uploaded, polling for batch completion...`);
+
+      // Step 3: Poll for all files in batch to complete
+      const batchResults = await this.pollBatchStatusAll(batchId, uploadedFiles);
+
+      // Step 4: Download and parse results for each completed file
+      for (const [fileName, fileResult] of batchResults) {
+        const fileInfo = uploadedFiles.get(fileName);
+        if (!fileInfo) continue;
+
+        if (!fileResult.success) {
+          results.push({
+            source: fileInfo.path,
+            success: false,
+            error: fileResult.error ?? 'Parsing failed',
+          });
+          continue;
+        }
+
+        try {
+          const parseResult = await this.downloadAndParseResult(
+            fileResult.downloadUrl!,
+            fileInfo.path,
+            startTime,
+            options
+          );
+          results.push({
+            source: fileInfo.path,
+            success: parseResult.success,
+            result: parseResult,
+            error: parseResult.errors?.[0]?.message,
+          });
+        } catch (err) {
+          results.push({
+            source: fileInfo.path,
+            success: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      const successCount = results.filter(r => r.success).length;
+      return {
+        batchId,
+        results,
+        totalTimeMs: Date.now() - startTime,
+        successCount,
+        failureCount: results.length - successCount,
+      };
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      logger.error(`Batch parsing failed: ${errMsg}`, error instanceof Error ? error : undefined);
+      
+      // Add error for any files not yet in results
+      const processedPaths = new Set(results.map(r => r.source));
+      for (const fileInfo of fileInfos) {
+        if (!processedPaths.has(fileInfo.path)) {
+          results.push({
+            source: fileInfo.path,
+            success: false,
+            error: errMsg,
+          });
+        }
+      }
+
+      return {
+        batchId: '',
+        results,
+        totalTimeMs: Date.now() - startTime,
+        successCount: 0,
+        failureCount: results.length,
+      };
+    }
+  }
+
+  /**
+   * Parse multiple PDF URLs in a single batch.
+   * Uses /api/v4/extract/task/batch endpoint.
+   * 
+   * @param urls - Array of PDF URLs (max 200)
+   * @param options - Parse options applied to all files
+   * @returns BatchParseResult with results for each URL
+   */
+  async parseUrlBatch(urls: string[], options?: PdfParseOptions): Promise<BatchParseResult> {
+    const startTime = Date.now();
+    const results: BatchFileResult[] = [];
+
+    // Validate configuration
+    if (!this.config.enabled || !this.config.apiKey) {
+      return {
+        batchId: '',
+        results: urls.map(url => ({
+          source: url,
+          success: false,
+          error: LLM_ERRORS.NOT_CONFIGURED,
+        })),
+        totalTimeMs: Date.now() - startTime,
+        successCount: 0,
+        failureCount: urls.length,
+      };
+    }
+
+    // Validate URL count (MinerU limit: 200 files per batch)
+    if (urls.length > 200) {
+      return {
+        batchId: '',
+        results: urls.map(url => ({
+          source: url,
+          success: false,
+          error: 'Batch size exceeds MinerU limit of 200 files',
+        })),
+        totalTimeMs: Date.now() - startTime,
+        successCount: 0,
+        failureCount: urls.length,
+      };
+    }
+
+    try {
+      logger.info(`Batch parsing ${urls.length} PDF URLs with MinerU`);
+
+      // Prepare files array with data_id for tracking
+      const filesWithIds = urls.map((url, index) => ({
+        url,
+        data_id: `url_${index}_${crypto.randomUUID().slice(0, 8)}`,
+      }));
+
+      // Submit batch URL task
+      const response = await fetch(`${this.config.apiBase}/api/v4/extract/task/batch`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.config.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          files: filesWithIds,
+          model_version: 'vlm',
+          enable_formula: options?.extractEquations ?? true,
+          enable_table: options?.extractTables ?? true,
+          language: options?.language ?? 'ch',
+        }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`Failed to submit batch: ${response.status} - ${text}`);
+      }
+
+      const data = await response.json() as MineruBatchUrlSubmitResponse;
+      if (data.code !== 0 || !data.data?.batch_id) {
+        throw new Error(`MinerU API error: ${data.msg}`);
+      }
+
+      const batchId = data.data.batch_id;
+      logger.info(`Batch submitted: ${batchId}, polling for completion...`);
+
+      // Create URL to filename mapping (use URL's last path segment or index)
+      const urlToName = new Map<string, string>();
+      for (let i = 0; i < urls.length; i++) {
+        const url = urls[i]!;
+        // Extract filename from URL or use index
+        const urlPath = new URL(url).pathname;
+        const fileName = path.basename(urlPath) || `file_${i}.pdf`;
+        urlToName.set(fileName, url);
+      }
+
+      // Poll for all URLs to complete
+      const uploadedFiles = new Map<string, { path: string; name: string }>();
+      for (const [fileName, url] of urlToName) {
+        uploadedFiles.set(fileName, { path: url, name: fileName });
+      }
+
+      const batchResults = await this.pollBatchStatusAll(batchId, uploadedFiles);
+
+      // Download and parse results
+      for (const [fileName, fileResult] of batchResults) {
+        const url = urlToName.get(fileName);
+        if (!url) {
+          // Try to find by iterating urlToName values
+          const entry = Array.from(urlToName.entries()).find(([name]) => name === fileName);
+          if (!entry) continue;
+        }
+        const sourceUrl = url ?? uploadedFiles.get(fileName)?.path ?? fileName;
+
+        if (!fileResult.success) {
+          results.push({
+            source: sourceUrl,
+            success: false,
+            error: fileResult.error ?? 'Parsing failed',
+          });
+          continue;
+        }
+
+        try {
+          const parseResult = await this.downloadAndParseResult(
+            fileResult.downloadUrl!,
+            sourceUrl,
+            startTime,
+            options
+          );
+          results.push({
+            source: sourceUrl,
+            success: parseResult.success,
+            result: parseResult,
+            error: parseResult.errors?.[0]?.message,
+          });
+        } catch (err) {
+          results.push({
+            source: sourceUrl,
+            success: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      const successCount = results.filter(r => r.success).length;
+      return {
+        batchId,
+        results,
+        totalTimeMs: Date.now() - startTime,
+        successCount,
+        failureCount: results.length - successCount,
+      };
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      logger.error(`Batch URL parsing failed: ${errMsg}`, error instanceof Error ? error : undefined);
+
+      return {
+        batchId: '',
+        results: urls.map(url => ({
+          source: url,
+          success: false,
+          error: errMsg,
+        })),
+        totalTimeMs: Date.now() - startTime,
+        successCount: 0,
+        failureCount: urls.length,
+      };
     }
   }
 
@@ -603,6 +1036,94 @@ export class MineruParser implements IDocumentParser {
     }
 
     return { success: false, error: `Batch timed out after ${timeout}ms` };
+  }
+
+  /**
+   * Poll batch status until ALL files complete or timeout.
+   * Returns a Map of fileName -> result for each file.
+   */
+  private async pollBatchStatusAll(
+    batchId: string,
+    files: Map<string, { path: string; name: string }>
+  ): Promise<Map<string, { success: boolean; downloadUrl?: string; error?: string }>> {
+    const startTime = Date.now();
+    const timeout = this.config.timeoutMs;
+    const pollInterval = this.config.pollIntervalMs;
+    const results = new Map<string, { success: boolean; downloadUrl?: string; error?: string }>();
+    const pendingFiles = new Set(files.keys());
+
+    while (Date.now() - startTime < timeout && pendingFiles.size > 0) {
+      try {
+        const response = await fetch(
+          `${this.config.apiBase}/api/v4/extract-results/batch/${batchId}`,
+          {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${this.config.apiKey}`,
+            },
+          }
+        );
+
+        if (!response.ok) {
+          const text = await response.text();
+          logger.warn(`MinerU batch status check failed: ${response.status} - ${text}`);
+          await this.sleep(pollInterval);
+          continue;
+        }
+
+        const data = await response.json() as MineruBatchStatusResponse;
+
+        if (data.code !== 0) {
+          logger.warn(`MinerU batch status error: ${data.msg}`);
+          await this.sleep(pollInterval);
+          continue;
+        }
+
+        // Check status of each file
+        for (const fileResult of data.data?.extract_result ?? []) {
+          const fileName = fileResult.file_name;
+          if (!pendingFiles.has(fileName)) continue;
+
+          const state = fileResult.state;
+          const progress = fileResult.extract_progress;
+
+          if (progress) {
+            logger.debug(`MinerU batch ${batchId} [${fileName}]: ${state} (${progress.extracted_pages}/${progress.total_pages} pages)`);
+          } else {
+            logger.debug(`MinerU batch ${batchId} [${fileName}]: ${state}`);
+          }
+
+          if (state === 'done') {
+            const downloadUrl = fileResult.full_zip_url;
+            if (downloadUrl) {
+              results.set(fileName, { success: true, downloadUrl });
+            } else {
+              results.set(fileName, { success: false, error: 'No download URL in completed batch' });
+            }
+            pendingFiles.delete(fileName);
+          } else if (state === 'failed') {
+            results.set(fileName, { success: false, error: fileResult.err_msg ?? 'Batch task failed' });
+            pendingFiles.delete(fileName);
+          }
+          // pending/running states continue polling
+        }
+
+        if (pendingFiles.size > 0) {
+          logger.debug(`Waiting for ${pendingFiles.size} files to complete...`);
+          await this.sleep(pollInterval);
+        }
+      } catch (error) {
+        logger.warn('MinerU batch status check error:', error instanceof Error ? error : undefined);
+        await this.sleep(pollInterval);
+      }
+    }
+
+    // Mark remaining files as timed out
+    for (const fileName of pendingFiles) {
+      results.set(fileName, { success: false, error: `Timed out after ${timeout}ms` });
+    }
+
+    return results;
   }
 
   /**

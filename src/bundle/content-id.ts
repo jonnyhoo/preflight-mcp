@@ -155,3 +155,93 @@ export function extractVersion(input: string): string | undefined {
   const versionMatch = input.match(/v(\d+)/i);
   return versionMatch ? `v${versionMatch[1]}` : undefined;
 }
+
+// ============================================================================
+// arXiv Category Extraction
+// ============================================================================
+
+/**
+ * arXiv category patterns found in PDF first page:
+ * - "[cs.AI] 9 Jan 2026"
+ * - "arXiv:2601.14287v1 [cs.AI]"
+ * - "cs.AI, cs.CL, stat.ML"
+ * 
+ * Common arXiv categories:
+ * - cs.* (Computer Science): AI, CL, CV, LG, NE, etc.
+ * - stat.* (Statistics): ML, TH, etc.
+ * - math.* (Mathematics): OC, ST, etc.
+ * - physics.* (Physics): various subcategories
+ * - q-bio.* (Quantitative Biology)
+ * - econ.* (Economics)
+ */
+const ARXIV_CATEGORY_PATTERN = /\[([a-z]+-?[a-zA-Z]{1,4}(?:\.[A-Z]{2,4})?)\]/g;
+const ARXIV_CATEGORY_INLINE = /\b(cs|stat|math|physics|q-bio|econ|cond-mat|astro-ph|hep|gr-qc|nucl|quant-ph)\.([A-Z]{2,4})\b/g;
+
+/**
+ * Extract arXiv categories from PDF markdown content.
+ * 
+ * Searches the first ~2000 characters (first page) for category patterns.
+ * Returns the primary category (first found) and all categories.
+ * 
+ * @param markdown - PDF markdown content
+ * @returns Primary category and all categories found
+ * 
+ * @example
+ * ```typescript
+ * extractArxivCategory('arXiv:2601.14287v1 [cs.AI] 9 Jan 2026\n...')
+ * // => { primary: 'cs.AI', all: ['cs.AI'] }
+ * 
+ * extractArxivCategory('Categories: cs.CL, cs.AI, stat.ML\n...')
+ * // => { primary: 'cs.CL', all: ['cs.CL', 'cs.AI', 'stat.ML'] }
+ * ```
+ */
+export function extractArxivCategory(markdown: string): {
+  primary?: string;
+  all: string[];
+} {
+  if (!markdown) return { all: [] };
+  
+  // Only search first ~2000 chars (first page)
+  const firstPage = markdown.slice(0, 2000);
+  const categories = new Set<string>();
+  
+  // Pattern 1: Bracketed format [cs.AI]
+  const bracketMatches = firstPage.matchAll(ARXIV_CATEGORY_PATTERN);
+  for (const match of bracketMatches) {
+    const cat = match[1];
+    if (cat && isValidArxivCategory(cat)) {
+      categories.add(cat);
+    }
+  }
+  
+  // Pattern 2: Inline format cs.AI, stat.ML
+  const inlineMatches = firstPage.matchAll(ARXIV_CATEGORY_INLINE);
+  for (const match of inlineMatches) {
+    const cat = `${match[1]}.${match[2]}`;
+    if (isValidArxivCategory(cat)) {
+      categories.add(cat);
+    }
+  }
+  
+  const all = [...categories];
+  return {
+    primary: all[0],
+    all,
+  };
+}
+
+/**
+ * Validate if a string is a valid arXiv category.
+ * 
+ * Valid formats:
+ * - cs.AI, cs.CL, cs.CV, cs.LG, cs.NE, etc.
+ * - stat.ML, stat.TH
+ * - math.OC, math.ST
+ * - physics.comp-ph
+ * - q-bio.BM
+ */
+function isValidArxivCategory(cat: string): boolean {
+  // Must have format: prefix.suffix or prefix-prefix.suffix
+  const pattern = /^[a-z]+(-[a-z]+)?\.[A-Z]{2,4}$/;
+  return pattern.test(cat);
+}

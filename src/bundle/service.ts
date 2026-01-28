@@ -12,6 +12,7 @@ import {
 } from './github.js';
 import { type IngestedFile } from './ingest.js';
 import { ingestDocument, isParseableDocument } from './document-ingest.js';
+import { MineruParser, isMineruAvailable, type BatchParseResult } from '../parser/mineru-parser.js';
 import { type RepoInput, type BundleManifestV1, type SkippedFileEntry, writeManifest, readManifest, invalidateManifestCache } from './manifest.js';
 import { getBundlePaths } from './paths.js';
 import { writeAgentsMd, writeStartHereMd } from './guides.js';
@@ -169,6 +170,137 @@ export async function createBundle(
   });
 }
 
+/** Result of batch PDF bundle creation */
+export type BatchPdfBundleResult = {
+  /** All created bundles */
+  bundles: BundleSummary[];
+  /** Failed PDFs */
+  failed: Array<{ source: string; error: string }>;
+  /** Total time in milliseconds */
+  totalTimeMs: number;
+};
+
+/**
+ * Create multiple independent bundles from multiple PDFs.
+ * Uses MinerU batch API for efficient parallel parsing, then creates separate bundles.
+ * 
+ * @param cfg - Preflight config
+ * @param pdfInputs - Array of PDF inputs (each with url or path)
+ * @param options - Creation options
+ * @returns Results with all created bundles
+ */
+export async function createPdfBundlesBatch(
+  cfg: PreflightConfig,
+  pdfInputs: Array<{ url?: string; path?: string; name?: string; vlmParser?: boolean }>,
+  options?: CreateBundleOptions
+): Promise<BatchPdfBundleResult> {
+  const startTime = Date.now();
+  const bundles: BundleSummary[] = [];
+  const failed: Array<{ source: string; error: string }> = [];
+  
+  // Separate by parser type and source type
+  const mineruLocalPdfs: Array<{ index: number; path: string; name?: string }> = [];
+  const mineruUrlPdfs: Array<{ index: number; url: string; name?: string }> = [];
+  const vlmPdfs: Array<{ index: number; input: typeof pdfInputs[0] }> = [];
+  
+  for (let i = 0; i < pdfInputs.length; i++) {
+    const input = pdfInputs[i]!;
+    if (input.vlmParser) {
+      vlmPdfs.push({ index: i, input });
+    } else if (input.path) {
+      mineruLocalPdfs.push({ index: i, path: input.path, name: input.name });
+    } else if (input.url) {
+      mineruUrlPdfs.push({ index: i, url: input.url, name: input.name });
+    }
+  }
+  
+  // Batch parse with MinerU if available
+  const parsedResults = new Map<number, { success: boolean; fullText?: string; pageCount?: number; error?: string }>();
+  
+  if (isMineruAvailable() && (mineruLocalPdfs.length > 0 || mineruUrlPdfs.length > 0)) {
+    const parser = new MineruParser();
+    
+    // Batch parse local PDFs
+    if (mineruLocalPdfs.length > 0) {
+      logger.info(`Batch parsing ${mineruLocalPdfs.length} local PDFs with MinerU...`);
+      const localPaths = mineruLocalPdfs.map(p => path.resolve(p.path));
+      const batchResult = await parser.parseBatch(localPaths, {
+        extractImages: true,
+        extractTables: true,
+        extractEquations: true,
+      });
+      
+      for (let i = 0; i < batchResult.results.length; i++) {
+        const result = batchResult.results[i]!;
+        const pdfInfo = mineruLocalPdfs[i]!;
+        parsedResults.set(pdfInfo.index, {
+          success: result.success,
+          fullText: result.result?.fullText,
+          pageCount: result.result?.metadata.pageCount,
+          error: result.error,
+        });
+      }
+    }
+    
+    // Batch parse URL PDFs
+    if (mineruUrlPdfs.length > 0) {
+      logger.info(`Batch parsing ${mineruUrlPdfs.length} PDF URLs with MinerU...`);
+      const urls = mineruUrlPdfs.map(p => p.url);
+      const batchResult = await parser.parseUrlBatch(urls, {
+        extractImages: true,
+        extractTables: true,
+        extractEquations: true,
+      });
+      
+      for (let i = 0; i < batchResult.results.length; i++) {
+        const result = batchResult.results[i]!;
+        const pdfInfo = mineruUrlPdfs[i]!;
+        parsedResults.set(pdfInfo.index, {
+          success: result.success,
+          fullText: result.result?.fullText,
+          pageCount: result.result?.metadata.pageCount,
+          error: result.error,
+        });
+      }
+    }
+  }
+  
+  // Now create individual bundles for each PDF
+  for (let i = 0; i < pdfInputs.length; i++) {
+    const input = pdfInputs[i]!;
+    const source = input.url ?? input.path ?? 'unknown';
+    
+    try {
+      // Check if we have pre-parsed result
+      const preParseResult = parsedResults.get(i);
+      
+      if (preParseResult && !preParseResult.success) {
+        // Parsing failed
+        failed.push({ source, error: preParseResult.error ?? 'Parsing failed' });
+        continue;
+      }
+      
+      // Create individual bundle for this PDF
+      const summary = await createBundle(
+        cfg,
+        { repos: [{ kind: 'pdf', ...input }] },
+        { ifExists: options?.ifExists ?? 'createNew' }
+      );
+      
+      bundles.push(summary);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      failed.push({ source, error: errMsg });
+    }
+  }
+  
+  return {
+    bundles,
+    failed,
+    totalTimeMs: Date.now() - startTime,
+  };
+}
+
 async function createBundleInternal(
   cfg: PreflightConfig,
   input: CreateBundleInput,
@@ -272,9 +404,233 @@ async function createBundleInternal(
     const totalRepos = input.repos.length;
     let repoIndex = 0;
 
-    for (const repoInput of input.repos) {
+    // =========================================================================
+    // Batch PDF Processing (MinerU only)
+    // When multiple PDFs use MinerU (default), process them in a single batch
+    // for efficiency. VLM Parser PDFs are processed individually due to rate limits.
+    // =========================================================================
+    const processedPdfIndices = new Set<number>();
+    
+    // Identify PDFs that can be batch processed with MinerU
+    const mineruPdfIndices: number[] = [];
+    const mineruLocalPdfs: Array<{ index: number; path: string; name?: string }> = [];
+    const mineruUrlPdfs: Array<{ index: number; url: string; name?: string }> = [];
+    
+    if (isMineruAvailable()) {
+      input.repos.forEach((r, idx) => {
+        if (r.kind === 'pdf' && !('vlmParser' in r && r.vlmParser === true)) {
+          mineruPdfIndices.push(idx);
+          if ('path' in r && r.path) {
+            mineruLocalPdfs.push({ index: idx, path: r.path, name: r.name });
+          } else if ('url' in r && r.url) {
+            mineruUrlPdfs.push({ index: idx, url: r.url, name: r.name });
+          }
+        }
+      });
+    }
+    
+    // Batch process local PDFs if there are multiple
+    if (mineruLocalPdfs.length > 1) {
+      reportProgress('ingesting', 5, `Batch parsing ${mineruLocalPdfs.length} local PDFs with MinerU...`);
+      tracker.updateProgress(taskId, 'ingesting', 5, `Batch parsing ${mineruLocalPdfs.length} local PDFs...`);
+      
+      const parser = new MineruParser();
+      const localPaths = mineruLocalPdfs.map(p => path.resolve(p.path));
+      const batchResult = await parser.parseBatch(localPaths, {
+        extractImages: true,
+        extractTables: true,
+        extractEquations: true,
+      });
+      
+      logger.info(`MinerU batch processed ${batchResult.successCount}/${mineruLocalPdfs.length} local PDFs`);
+      
+      // Process results
+      for (let i = 0; i < batchResult.results.length; i++) {
+        const fileResult = batchResult.results[i]!;
+        const pdfInfo = mineruLocalPdfs[i]!;
+        const repoInput = input.repos[pdfInfo.index] as Extract<typeof input.repos[0], { kind: 'pdf' }>;
+        
+        processedPdfIndices.add(pdfInfo.index);
+        
+        const localPdfPath = path.resolve(pdfInfo.path);
+        const pathHash = crypto.createHash('sha256').update(localPdfPath).digest('hex').slice(0, 12);
+        const nameSlug = (pdfInfo.name ?? '').trim().replace(/[^a-zA-Z0-9._-]/g, '_');
+        const pdfSlug = nameSlug ? `${nameSlug}_${pathHash}` : pathHash;
+        const pdfRepoId = `pdf/${pdfSlug}`;
+        const pdfDocsDir = isPdfOnly ? tmpPaths.rootDir : path.join(docsDir!, 'pdf', pdfSlug);
+        await ensureDir(pdfDocsDir);
+        
+        const notes: string[] = ['Parser: mineru (batch)'];
+        
+        if (fileResult.success && fileResult.result) {
+          const parseResult = fileResult.result;
+          
+          // Get file stats
+          let fileSize: number | undefined;
+          let contentHash: string | undefined;
+          try {
+            const stat = await fs.stat(localPdfPath);
+            fileSize = stat.size;
+            const fileBuffer = await fs.readFile(localPdfPath);
+            contentHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+          } catch { /* ignore */ }
+          
+          notes.push('Local file', `File size: ${fileSize ?? 0} bytes`);
+          if (parseResult.metadata.pageCount) notes.push(`Pages: ${parseResult.metadata.pageCount}`);
+          
+          // Write markdown file
+          if (parseResult.fullText) {
+            const mdBaseName = nameSlug || 'document';
+            const mdFilename = isPdfOnly ? `pdf_${pdfSlug}.md` : `${mdBaseName}.md`;
+            const mdPath = path.join(pdfDocsDir, mdFilename);
+            const mdContent = [
+              `# ${pdfInfo.name ?? 'PDF Document'}`,
+              '',
+              `> Source: ${localPdfPath}`,
+              parseResult.metadata.pageCount ? `> Pages: ${parseResult.metadata.pageCount}` : '',
+              '',
+              '---',
+              '',
+              parseResult.fullText,
+            ].filter(Boolean).join('\n');
+            await fs.writeFile(mdPath, mdContent, 'utf8');
+            
+            const bundleRelPath = isPdfOnly ? mdFilename : `docs/pdf/${pdfSlug}/${mdFilename}`;
+            const mdContentHash = sha256Text(mdContent);
+            allIngestedFiles.push({
+              repoId: pdfRepoId,
+              kind: 'doc',
+              repoRelativePath: mdFilename,
+              bundleNormRelativePath: bundleRelPath,
+              bundleNormAbsPath: mdPath,
+              sha256: mdContentHash,
+              bytes: Buffer.byteLength(mdContent, 'utf8'),
+            });
+          }
+          
+          reposSummary.push({
+            kind: 'pdf',
+            id: pdfRepoId,
+            source: 'local',
+            headSha: contentHash,
+            notes: notes.slice(0, 50),
+            localPath: localPdfPath,
+            fileSize,
+          });
+        } else {
+          notes.push(`Parse failed: ${fileResult.error ?? 'Unknown error'}`);
+          allWarnings.push(`PDF batch parse failed for ${localPdfPath}: ${fileResult.error}`);
+          
+          reposSummary.push({
+            kind: 'pdf',
+            id: pdfRepoId,
+            source: 'local',
+            notes: notes.slice(0, 50),
+            localPath: localPdfPath,
+          });
+        }
+      }
+    }
+    
+    // Batch process URL PDFs if there are multiple
+    if (mineruUrlPdfs.length > 1) {
+      reportProgress('downloading', 10, `Batch parsing ${mineruUrlPdfs.length} PDF URLs with MinerU...`);
+      tracker.updateProgress(taskId, 'downloading', 10, `Batch parsing ${mineruUrlPdfs.length} PDF URLs...`);
+      
+      const parser = new MineruParser();
+      const urls = mineruUrlPdfs.map(p => p.url);
+      const batchResult = await parser.parseUrlBatch(urls, {
+        extractImages: true,
+        extractTables: true,
+        extractEquations: true,
+      });
+      
+      logger.info(`MinerU batch processed ${batchResult.successCount}/${mineruUrlPdfs.length} PDF URLs`);
+      
+      // Process results
+      for (let i = 0; i < batchResult.results.length; i++) {
+        const fileResult = batchResult.results[i]!;
+        const pdfInfo = mineruUrlPdfs[i]!;
+        const repoInput = input.repos[pdfInfo.index] as Extract<typeof input.repos[0], { kind: 'pdf' }>;
+        
+        processedPdfIndices.add(pdfInfo.index);
+        
+        const urlHash = crypto.createHash('sha256').update(pdfInfo.url).digest('hex').slice(0, 12);
+        const nameSlug = (pdfInfo.name ?? '').trim().replace(/[^a-zA-Z0-9._-]/g, '_');
+        const pdfSlug = nameSlug ? `${nameSlug}_${urlHash}` : urlHash;
+        const pdfRepoId = `pdf/${pdfSlug}`;
+        const pdfDocsDir = isPdfOnly ? tmpPaths.rootDir : path.join(docsDir!, 'pdf', pdfSlug);
+        await ensureDir(pdfDocsDir);
+        
+        const notes: string[] = ['Parser: mineru (batch)'];
+        
+        if (fileResult.success && fileResult.result) {
+          const parseResult = fileResult.result;
+          
+          notes.push(`URL: ${pdfInfo.url}`);
+          if (parseResult.metadata.pageCount) notes.push(`Pages: ${parseResult.metadata.pageCount}`);
+          
+          // Write markdown file
+          if (parseResult.fullText) {
+            const mdBaseName = nameSlug || 'document';
+            const mdFilename = isPdfOnly ? `pdf_${pdfSlug}.md` : `${mdBaseName}.md`;
+            const mdPath = path.join(pdfDocsDir, mdFilename);
+            const mdContent = [
+              `# ${pdfInfo.name ?? 'PDF Document'}`,
+              '',
+              `> Source: ${pdfInfo.url}`,
+              parseResult.metadata.pageCount ? `> Pages: ${parseResult.metadata.pageCount}` : '',
+              '',
+              '---',
+              '',
+              parseResult.fullText,
+            ].filter(Boolean).join('\n');
+            await fs.writeFile(mdPath, mdContent, 'utf8');
+            
+            const bundleRelPath = isPdfOnly ? mdFilename : `docs/pdf/${pdfSlug}/${mdFilename}`;
+            const mdContentHash = sha256Text(mdContent);
+            allIngestedFiles.push({
+              repoId: pdfRepoId,
+              kind: 'doc',
+              repoRelativePath: mdFilename,
+              bundleNormRelativePath: bundleRelPath,
+              bundleNormAbsPath: mdPath,
+              sha256: mdContentHash,
+              bytes: Buffer.byteLength(mdContent, 'utf8'),
+            });
+          }
+          
+          reposSummary.push({
+            kind: 'pdf',
+            id: pdfRepoId,
+            source: 'download',
+            notes: notes.slice(0, 50),
+            pdfUrl: pdfInfo.url,
+          });
+        } else {
+          notes.push(`Parse failed: ${fileResult.error ?? 'Unknown error'}`);
+          allWarnings.push(`PDF batch parse failed for ${pdfInfo.url}: ${fileResult.error}`);
+          
+          reposSummary.push({
+            kind: 'pdf',
+            id: pdfRepoId,
+            source: 'download',
+            notes: notes.slice(0, 50),
+            pdfUrl: pdfInfo.url,
+          });
+        }
+      }
+    }
+
+    for (let idx = 0; idx < input.repos.length; idx++) {
+      const repoInput = input.repos[idx]!;
       repoIndex++;
       const repoProgress = Math.round((repoIndex - 1) / totalRepos * 40); // 0-40% for repo fetching
+      
+      // Skip PDFs that were already batch processed
+      if (repoInput.kind === 'pdf' && processedPdfIndices.has(idx)) {
+        continue;
+      }
       
       if (repoInput.kind === 'github') {
         const { owner, repo } = parseOwnerRepo(repoInput.repo);

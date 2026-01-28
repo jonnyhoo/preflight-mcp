@@ -11,9 +11,11 @@ import type {
   EntityDocument,
   RelationDocument,
   QueryFilter,
+  HierarchicalQueryFilter,
   QueryResult,
   EntityQueryResult,
   ChromaConfig,
+  CollectionLevel,
 } from './types.js';
 import { DEFAULT_CHROMA_CONFIG } from './types.js';
 import { createModuleLogger } from '../logging/logger.js';
@@ -100,6 +102,14 @@ export class ChromaVectorDB {
   }
 
   /**
+   * Get hierarchical collection name for a level.
+   * Phase 3: Supports l1_overview, l2_section, l3_chunk.
+   */
+  private getHierarchicalCollectionName(level: CollectionLevel): string {
+    return `${this.config.collectionPrefix}_rag_${level}`;
+  }
+
+  /**
    * Ensure collection exists, create if not.
    */
   async ensureCollection(
@@ -156,6 +166,234 @@ export class ChromaVectorDB {
     } catch (err) {
       logger.warn(`Failed to delete collection ${name}: ${err}`);
     }
+  }
+
+  /**
+   * List all collections in the database.
+   * Returns collection name, ID, and metadata.
+   */
+  async listAllCollections(): Promise<Array<{
+    name: string;
+    id: string;
+    metadata?: Record<string, unknown>;
+  }>> {
+    const basePath = this.getBasePath();
+    const collections = await this.request<ChromaCollection[]>(
+      'GET',
+      `${basePath}/collections`
+    );
+    return collections;
+  }
+
+  /**
+   * Get document count for a specific collection.
+   */
+  async getCollectionCount(collectionName: string): Promise<number> {
+    const basePath = this.getBasePath();
+    
+    // Find collection by name
+    const collections = await this.request<ChromaCollection[]>(
+      'GET',
+      `${basePath}/collections`
+    );
+    const collection = collections.find(c => c.name === collectionName);
+    if (!collection) {
+      return 0;
+    }
+
+    // Get count - ChromaDB v2 returns number directly
+    const response = await this.request<number | { count: number }>(
+      'GET',
+      `${basePath}/collections/${collection.id}/count`
+    );
+    return typeof response === 'number' ? response : (response.count ?? 0);
+  }
+
+  // --------------------------------------------------------------------------
+  // Hierarchical Collection Management (Phase 3)
+  // --------------------------------------------------------------------------
+
+  /**
+   * Ensure hierarchical collection exists for a level.
+   * Creates preflight_rag_l1_overview, preflight_rag_l2_section, or preflight_rag_l3_chunk.
+   */
+  async ensureHierarchicalCollection(level: CollectionLevel): Promise<ChromaCollection> {
+    const name = this.getHierarchicalCollectionName(level);
+    
+    // Check cache
+    const cached = this.collections.get(name);
+    if (cached) return cached;
+
+    const basePath = this.getBasePath();
+
+    try {
+      const collections = await this.request<ChromaCollection[]>(
+        'GET',
+        `${basePath}/collections`
+      );
+      const existing = collections.find(c => c.name === name);
+      if (existing) {
+        this.collections.set(name, existing);
+        return existing;
+      }
+    } catch {
+      // Ignore - will create
+    }
+
+    // Create new hierarchical collection
+    logger.info(`Creating hierarchical collection: ${name}`);
+    const collection = await this.request<ChromaCollection>(
+      'POST',
+      `${basePath}/collections`,
+      {
+        name,
+        metadata: { level, type: 'hierarchical' },
+      }
+    );
+    this.collections.set(name, collection);
+    return collection;
+  }
+
+  /**
+   * Upsert chunks to a hierarchical collection.
+   * Phase 3: Supports l1_overview, l2_section, l3_chunk.
+   */
+  async upsertHierarchicalChunks(
+    level: CollectionLevel,
+    chunks: ChunkDocument[]
+  ): Promise<void> {
+    if (chunks.length === 0) return;
+
+    const validChunks = chunks.filter((c) => c.embedding && c.embedding.length > 0);
+    if (validChunks.length === 0) {
+      logger.warn(`No chunks with embeddings to upsert to ${level}`);
+      return;
+    }
+
+    const collection = await this.ensureHierarchicalCollection(level);
+    const BATCH_SIZE = 5;
+
+    for (let i = 0; i < validChunks.length; i += BATCH_SIZE) {
+      const batch = validChunks.slice(i, i + BATCH_SIZE);
+      
+      const ids = batch.map((c) => c.id);
+      const embeddings = batch.map((c) => c.embedding!);
+      const documents = batch.map((c) => c.content);
+      const metadatas = batch.map((c) => ({
+        sourceType: c.metadata.sourceType,
+        bundleId: c.metadata.bundleId,
+        repoId: c.metadata.repoId ?? '',
+        filePath: c.metadata.filePath ?? '',
+        chunkIndex: c.metadata.chunkIndex,
+        chunkType: c.metadata.chunkType,
+        contentHash: c.metadata.contentHash ?? '',
+        paperId: c.metadata.paperId ?? '',
+        paperVersion: c.metadata.paperVersion ?? '',
+        arxivCategory: c.metadata.arxivCategory ?? '',
+        collectionLevel: level,
+        sectionHeading: c.metadata.sectionHeading ?? '',
+        headingLevel: c.metadata.headingLevel ?? 0,
+        headingPath: c.metadata.headingPath?.join(' > ') ?? '',
+        parentChunkId: c.metadata.parentChunkId ?? '',
+        granularity: c.metadata.granularity ?? '',
+        pageIndex: c.metadata.pageIndex ?? 0,
+      }));
+
+      await this.request('POST', `${this.getBasePath()}/collections/${collection.id}/upsert`, {
+        ids,
+        embeddings,
+        documents,
+        metadatas,
+      });
+    }
+
+    logger.debug(`Upserted ${validChunks.length} chunks to ${level}`);
+  }
+
+  /**
+   * Query hierarchical collection by embedding similarity.
+   * Phase 3: Supports filtering by paperIds and arxivCategory.
+   */
+  async queryHierarchical(
+    level: CollectionLevel,
+    embedding: number[],
+    topK: number = 10,
+    filter?: HierarchicalQueryFilter
+  ): Promise<QueryResult> {
+    const collection = await this.ensureHierarchicalCollection(level);
+    const whereClause = this.buildHierarchicalWhereClause(filter);
+
+    const response = await this.request<ChromaQueryResponse>(
+      'POST',
+      `${this.getBasePath()}/collections/${collection.id}/query`,
+      {
+        query_embeddings: [embedding],
+        n_results: topK,
+        include: ['documents', 'metadatas', 'distances'],
+        where: whereClause,
+      }
+    );
+
+    const chunks: Array<ChunkDocument & { score: number }> = [];
+    
+    if (response.ids[0]) {
+      for (let i = 0; i < response.ids[0].length; i++) {
+        const id = response.ids[0][i]!;
+        const document = response.documents?.[0]?.[i] ?? '';
+        const metadata = response.metadatas?.[0]?.[i] as ChunkMetadata | null;
+        const distance = response.distances?.[0]?.[i] ?? 0;
+
+        chunks.push({
+          id,
+          content: document,
+          metadata: metadata ?? {
+            sourceType: 'overview',
+            bundleId: '',
+            chunkIndex: 0,
+            chunkType: 'text',
+          },
+          score: 1 - distance,
+        });
+      }
+    }
+
+    return { chunks };
+  }
+
+  /**
+   * Build where clause for hierarchical queries.
+   * Extends base where clause with paperIds and arxivCategory support.
+   */
+  private buildHierarchicalWhereClause(
+    filter?: HierarchicalQueryFilter
+  ): Record<string, unknown> | undefined {
+    if (!filter) return undefined;
+
+    const conditions: Record<string, unknown>[] = [];
+
+    // Base filters from QueryFilter
+    if (filter.bundleIds && filter.bundleIds.length > 0) {
+      conditions.push({ bundleId: { $in: filter.bundleIds } });
+    } else if (filter.bundleId) {
+      conditions.push({ bundleId: filter.bundleId });
+    }
+
+    if (filter.repoId) {
+      conditions.push({ repoId: filter.repoId });
+    }
+
+    // Hierarchical-specific filters
+    if (filter.paperIds && filter.paperIds.length > 0) {
+      conditions.push({ paperId: { $in: filter.paperIds } });
+    }
+
+    if (filter.arxivCategory) {
+      conditions.push({ arxivCategory: filter.arxivCategory });
+    }
+
+    if (conditions.length === 0) return undefined;
+    if (conditions.length === 1) return conditions[0];
+    return { $and: conditions };
   }
 
   // --------------------------------------------------------------------------

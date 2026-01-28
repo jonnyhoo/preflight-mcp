@@ -5,7 +5,7 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import type { ChunkDocument } from '../vectordb/types.js';
+import type { ChunkDocument, CollectionLevel, SourceType } from '../vectordb/types.js';
 import { ChromaVectorDB } from '../vectordb/chroma-client.js';
 import type { BridgeSource, BridgeOptions, BridgeResult, PdfIndexArtifact } from './types.js';
 import { 
@@ -16,6 +16,7 @@ import {
 } from './repocard-bridge.js';
 import { bridgePdfMarkdown } from './markdown-bridge.js';
 import { preprocessPdfMarkdown } from '../rag/pdf-preprocessor.js';
+import { extractArxivCategory } from '../bundle/content-id.js';
 import { createModuleLogger } from '../logging/logger.js';
 
 const logger = createModuleLogger('bridge');
@@ -171,6 +172,12 @@ export async function indexBundle(
           );
         }
         
+        // Extract arXiv category from PDF first page (Phase 3)
+        const categoryInfo = extractArxivCategory(pdfMarkdown);
+        if (categoryInfo.primary) {
+          logger.info(`Extracted arXiv category: ${categoryInfo.primary} (all: ${categoryInfo.all.join(', ')})`);
+        }
+
         const pdfResult = await bridgePdfMarkdown(
           {
             bundleId,
@@ -180,6 +187,14 @@ export async function indexBundle(
           },
           options
         );
+
+        // Add arXiv category to all PDF chunks
+        if (categoryInfo.primary) {
+          for (const chunk of pdfResult.chunks) {
+            chunk.metadata.arxivCategory = categoryInfo.primary;
+          }
+        }
+
         allChunks.push(...pdfResult.chunks);
         mergeResults(totalResult, pdfResult);
 
@@ -216,12 +231,12 @@ export async function indexBundle(
     }
   }
 
-  // Batch upsert to ChromaDB
+  // Upsert to hierarchical collections (Phase 3: L1/L2/L3)
   if (allChunks.length > 0) {
     try {
-      await chromaDB.upsertChunks(allChunks);
+      await upsertToHierarchicalCollections(chromaDB, allChunks);
       totalResult.chunksWritten = allChunks.length;
-      logger.info(`Upserted ${allChunks.length} chunks to ChromaDB`);
+      logger.info(`Upserted ${allChunks.length} chunks to hierarchical collections`);
     } catch (err) {
       const msg = `Failed to upsert chunks: ${err}`;
       logger.error(msg);
@@ -242,4 +257,127 @@ function mergeResults(target: BridgeResult, source: BridgeResult): void {
     target.chunksByType[key] = (target.chunksByType[key] ?? 0) + count;
   }
   target.errors.push(...source.errors);
+}
+
+// ============================================================================
+// Hierarchical Collection Distribution (Phase 3)
+// ============================================================================
+
+/**
+ * Determine which L1 content type a chunk belongs to.
+ * Used for routing to the correct L1 collection.
+ */
+function getL1ContentType(chunk: ChunkDocument): 'pdf' | 'repo' | 'doc' | 'memory' | 'web' | null {
+  const { sourceType } = chunk.metadata;
+  
+  // PDF papers
+  if (['pdf_text', 'pdf_table', 'pdf_formula', 'pdf_image'].includes(sourceType)) {
+    return 'pdf';
+  }
+  
+  // Code repositories
+  if (sourceType === 'repocard' || sourceType === 'readme') {
+    return 'repo';
+  }
+  
+  // Overview (generic docs)
+  if (sourceType === 'overview') {
+    return 'doc';
+  }
+  
+  // Default: treat as doc
+  return 'doc';
+}
+
+/**
+ * Determine which collection level a chunk should be assigned to.
+ * 
+ * L1 Rules (coarse-grained overviews):
+ * - overview sourceType → L1_doc
+ * - repocard sourceType → L1_repo
+ * - pdf_text with granularity='section' and headingLevel=1 (Abstract, Introduction) → L1_pdf
+ * 
+ * L2 Rules (section-level):
+ * - pdf_text with section granularity or headingLevel ≤ 2 → L2_section
+ * 
+ * L3 Rules (fragment-level):
+ * - All others (paragraphs, tables, formulas, images) → L3_chunk
+ */
+function getCollectionLevel(chunk: ChunkDocument): CollectionLevel {
+  const { sourceType, granularity, headingLevel, sectionHeading } = chunk.metadata;
+  const l1Type = getL1ContentType(chunk);
+  
+  // L1: Overview-level content
+  // - Bundle overview
+  if (sourceType === 'overview') {
+    return 'l1_doc';
+  }
+  
+  // - RepoCard (repository summary)
+  if (sourceType === 'repocard') {
+    return 'l1_repo';
+  }
+  
+  // - PDF Abstract (headingLevel=1 with specific section names)
+  if (
+    sourceType === 'pdf_text' &&
+    granularity === 'section' &&
+    headingLevel === 1 &&
+    sectionHeading &&
+    /^(abstract|introduction|summary|overview)$/i.test(sectionHeading)
+  ) {
+    return 'l1_pdf';
+  }
+  
+  // L2: Section-level content
+  // - Explicit section granularity
+  // - Top-level headings (h1, h2) in PDF
+  if (
+    granularity === 'section' ||
+    (sourceType === 'pdf_text' && headingLevel && headingLevel <= 2)
+  ) {
+    return 'l2_section';
+  }
+  
+  // L3: Fragment-level (default)
+  // - Paragraphs, tables, formulas, figures
+  // - Lower-level headings (h3+)
+  return 'l3_chunk';
+}
+
+/**
+ * Upsert chunks to hierarchical collections based on their level.
+ * Phase 3: Distributes chunks to l1_{type}, l2_section, l3_chunk.
+ */
+async function upsertToHierarchicalCollections(
+  chromaDB: ChromaVectorDB,
+  chunks: ChunkDocument[]
+): Promise<void> {
+  // Group chunks by collection level
+  const levelGroups = new Map<CollectionLevel, ChunkDocument[]>();
+
+  for (const chunk of chunks) {
+    const level = getCollectionLevel(chunk);
+    chunk.metadata.collectionLevel = level;
+    
+    if (!levelGroups.has(level)) {
+      levelGroups.set(level, []);
+    }
+    levelGroups.get(level)!.push(chunk);
+  }
+
+  // Upsert to each level in parallel
+  const promises: Promise<void>[] = [];
+  const stats: string[] = [];
+  
+  for (const [level, levelChunks] of levelGroups) {
+    if (levelChunks.length > 0) {
+      promises.push(chromaDB.upsertHierarchicalChunks(level, levelChunks));
+      stats.push(`${level}=${levelChunks.length}`);
+    }
+  }
+
+  await Promise.all(promises);
+  
+  logger.info(`Hierarchical distribution: ${stats.join(', ')}`);
 }

@@ -11,6 +11,7 @@ import { KGStorage } from '../kg/storage.js';
 import { RAGRetriever } from './retriever.js';
 import { RAGGenerator } from './generator.js';
 import { ContextCompleter } from './context-completer.js';
+import { HierarchicalRetriever } from './hierarchical-retriever.js';
 import type { SemanticChunk } from '../bridge/types.js';
 import path from 'node:path';
 import { readManifest, type BundleManifestV1 } from '../bundle/manifest.js';
@@ -57,6 +58,7 @@ export class RAGEngine {
   private llm: RAGConfig['llm'];
   private kgStorage: KGStorage;
   private retriever: RAGRetriever;
+  private hierarchicalRetriever: HierarchicalRetriever;
   private generator: RAGGenerator;
   private contextCompleter: ContextCompleter;
 
@@ -66,6 +68,7 @@ export class RAGEngine {
     this.llm = config.llm;
     this.kgStorage = new KGStorage();
     this.retriever = new RAGRetriever(this.chromaDB, this.embedding, this.kgStorage);
+    this.hierarchicalRetriever = new HierarchicalRetriever(this.chromaDB, this.embedding);
     this.generator = new RAGGenerator(this.llm);
     this.contextCompleter = new ContextCompleter({
       chromaDB: this.chromaDB,
@@ -352,20 +355,48 @@ export class RAGEngine {
         : undefined;
     }
 
-    // Retrieve
-    logger.info(`Retrieving context for: "${question}" (mode: ${opts.mode})`);
-    const retrieved = await this.retriever.retrieve(
-      question,
-      opts.mode,
-      opts.topK,
-      filter,
-      {
-        expandToParent: opts.expandToParent,
-        expandToSiblings: opts.expandToSiblings,
-      }
-    );
+    // Phase 3: Determine if hierarchical retrieval should be used
+    // Auto-enable for crossBundleMode='all', or when explicitly enabled
+    const useHierarchical = options?.enableHierarchicalRetrieval ?? (crossMode === 'all');
 
-    logger.info(`Retrieved ${retrieved.chunks.length} chunks`);
+    // Retrieve (use hierarchical retriever for large-scale queries)
+    let retrieved: { chunks: Array<any & { score: number }>; expandedTypes?: string[] };
+    let hierarchicalStats: { l1ByType: Record<string, number>; l1TotalFound: number; l2l3ChunksFound: number; durationMs: number } | undefined;
+
+    if (useHierarchical) {
+      // Phase 3: Hierarchical retrieval (L1 → L2/L3)
+      logger.info(`[Hierarchical] Retrieving context for: "${question}"`);
+      const hierarchicalResult = await this.hierarchicalRetriever.retrieve(question, {
+        l1TopK: options?.hierarchicalL1TopK ?? 10,
+        l2l3TopK: options?.hierarchicalL2L3TopK ?? 15,
+        arxivCategory: options?.arxivCategory,
+      });
+      
+      retrieved = {
+        chunks: hierarchicalResult.chunks,
+        expandedTypes: [],
+      };
+      hierarchicalStats = hierarchicalResult.stats;
+      
+      logger.info(
+        `[Hierarchical] Retrieved ${retrieved.chunks.length} chunks ` +
+        `(L1: ${JSON.stringify(hierarchicalStats.l1ByType)}, L2/L3: ${hierarchicalStats.l2l3ChunksFound} chunks)`
+      );
+    } else {
+      // Standard retrieval (backward compatible)
+      logger.info(`Retrieving context for: "${question}" (mode: ${opts.mode})`);
+      retrieved = await this.retriever.retrieve(
+        question,
+        opts.mode,
+        opts.topK,
+        filter,
+        {
+          expandToParent: opts.expandToParent,
+          expandToSiblings: opts.expandToSiblings,
+        }
+      );
+      logger.info(`Retrieved ${retrieved.chunks.length} chunks`);
+    }
 
     // Multi-hop context completion (if enabled)
     let finalChunks = retrieved.chunks;
@@ -485,6 +516,7 @@ export class RAGEngine {
         graphExpansion: retrieved.expandedTypes?.length ?? 0,
         contextCompletionHops: contextCompletionStats?.hopCount,
         igpStats,
+        hierarchicalStats,
         durationMs: Date.now() - startTime,
       },
     };

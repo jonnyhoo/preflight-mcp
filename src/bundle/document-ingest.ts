@@ -13,7 +13,7 @@ import crypto from 'node:crypto';
 
 import { PdfParser } from '../parser/pdf-parser.js';
 import { VlmParser } from '../parser/vlm-parser.js';
-import { MineruParser, isMineruAvailable } from '../parser/mineru-parser.js';
+import { MineruParser, isMineruAvailable, type BatchParseResult } from '../parser/mineru-parser.js';
 import { OfficeParser } from '../parser/office-parser.js';
 import { HtmlParser, MarkdownParser } from '../parser/text-parser.js';
 import type { ParsedContent, IDocumentParser } from '../parser/types.js';
@@ -394,6 +394,7 @@ export async function ingestDocument(
 
 /**
  * Batch ingest multiple documents.
+ * For PDF files, uses MinerU batch API for efficient parallel processing.
  */
 export async function ingestDocuments(
   filePaths: string[],
@@ -404,7 +405,40 @@ export async function ingestDocuments(
   let totalModalItems = 0;
   let totalParseTimeMs = 0;
   
+  // Separate PDF files from other documents for batch processing
+  const pdfFiles: string[] = [];
+  const otherFiles: string[] = [];
+  
   for (const filePath of filePaths) {
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext === '.pdf' && !options?.vlmParser && isMineruAvailable()) {
+      pdfFiles.push(filePath);
+    } else {
+      otherFiles.push(filePath);
+    }
+  }
+  
+  // Process PDFs in batch if there are multiple
+  if (pdfFiles.length > 1) {
+    logger.info(`Batch processing ${pdfFiles.length} PDF files with MinerU`);
+    const batchResult = await ingestPdfBatch(pdfFiles, options);
+    
+    for (const result of batchResult.results) {
+      if (result.success) {
+        processed.push(result);
+        totalModalItems += result.modalContents.length;
+      } else {
+        failed.push({ path: result.sourcePath, error: result.error ?? 'Unknown error' });
+      }
+      totalParseTimeMs += result.parseTimeMs;
+    }
+  } else if (pdfFiles.length === 1) {
+    // Single PDF, use regular ingestion
+    otherFiles.push(pdfFiles[0]!);
+  }
+  
+  // Process other files sequentially
+  for (const filePath of otherFiles) {
     const result = await ingestDocument(filePath, options);
     
     if (result.success) {
@@ -428,6 +462,103 @@ export async function ingestDocuments(
       totalParseTimeMs,
     },
   };
+}
+
+/**
+ * Batch ingest multiple PDF files using MinerU batch API.
+ * Internal function used by ingestDocuments.
+ */
+async function ingestPdfBatch(
+  filePaths: string[],
+  options?: DocumentIngestOptions
+): Promise<{ results: DocumentIngestResult[] }> {
+  const startTime = Date.now();
+  const results: DocumentIngestResult[] = [];
+  
+  const parser = new MineruParser();
+  const batchResult: BatchParseResult = await parser.parseBatch(filePaths, {
+    extractImages: options?.extractImages ?? true,
+    extractTables: options?.extractTables ?? true,
+    extractEquations: options?.extractEquations ?? true,
+    maxPages: options?.maxPagesPerDocument,
+    timeoutMs: options?.timeoutPerDocumentMs,
+  });
+  
+  for (const fileResult of batchResult.results) {
+    if (fileResult.success && fileResult.result) {
+      const parseResult = fileResult.result;
+      const modalContents = convertToModalContents(parseResult.contents, fileResult.source);
+      
+      results.push({
+        sourcePath: fileResult.source,
+        success: true,
+        fullText: parseResult.fullText,
+        modalContents,
+        rawContents: parseResult.contents,
+        pageCount: parseResult.metadata.pageCount,
+        parseTimeMs: parseResult.stats.parseTimeMs,
+        parserUsed: parseResult.metadata.parser,
+        assets: parseResult.assets,
+      });
+    } else {
+      // Try fallback to PdfParser for failed files
+      const fallbackResult = await tryPdfParserFallback(fileResult.source, options);
+      if (fallbackResult) {
+        results.push(fallbackResult);
+      } else {
+        results.push({
+          sourcePath: fileResult.source,
+          success: false,
+          modalContents: [],
+          parseTimeMs: Date.now() - startTime,
+          error: fileResult.error ?? 'Batch parsing failed',
+        });
+      }
+    }
+  }
+  
+  return { results };
+}
+
+/**
+ * Try to parse a PDF with the fallback PdfParser.
+ */
+async function tryPdfParserFallback(
+  filePath: string,
+  options?: DocumentIngestOptions
+): Promise<DocumentIngestResult | null> {
+  const startTime = Date.now();
+  
+  try {
+    const fallbackParser = new PdfParser();
+    const fallbackResult = await fallbackParser.parse(filePath, {
+      extractImages: options?.extractImages ?? true,
+      extractTables: options?.extractTables ?? true,
+      maxPages: options?.maxPagesPerDocument,
+    });
+    
+    if (fallbackResult.success) {
+      const modalContents = convertToModalContents(fallbackResult.contents, filePath);
+      return {
+        sourcePath: filePath,
+        success: true,
+        fullText: fallbackResult.fullText,
+        modalContents,
+        rawContents: fallbackResult.contents,
+        pageCount: fallbackResult.metadata.pageCount,
+        parseTimeMs: Date.now() - startTime,
+        warnings: [
+          LLM_MESSAGES.FALLBACK_TO_PDFPARSER('mineru-batch', 'Batch parsing failed'),
+          ...(fallbackResult.warnings || []),
+        ],
+        parserUsed: `${fallbackResult.metadata.parser} (fallback from mineru-batch)`,
+      };
+    }
+  } catch (err) {
+    logger.error('Fallback parser also failed:', err instanceof Error ? err : undefined);
+  }
+  
+  return null;
 }
 
 /**

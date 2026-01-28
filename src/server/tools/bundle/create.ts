@@ -7,7 +7,7 @@ import * as z from 'zod';
 
 import type { ToolDependencies } from '../types.js';
 import { CreateBundleInputSchema, shouldRegisterTool } from './types.js';
-import { createBundle, createDocumentBundle } from '../../../bundle/service.js';
+import { createBundle, createDocumentBundle, createPdfBundlesBatch } from '../../../bundle/service.js';
 import { isParseableDocument } from '../../../bundle/document-ingest.js';
 import { getProgressTracker } from '../../../jobs/progressTracker.js';
 import { toBundleFileUri } from '../../../mcp/uris.js';
@@ -36,6 +36,18 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
         '- Web docs (filtered): `{"repos": [{"kind": "web", "url": "https://docs.example.com", "config": {"includePatterns": ["/api/"], "maxPages": 100}}]}`\n' +
         '- Online PDF: `{"repos": [{"kind": "pdf", "url": "https://arxiv.org/pdf/2512.14982"}]}`\n' +
         '- Local PDF: `{"repos": [{"kind": "pdf", "path": "C:\\\\docs\\\\paper.pdf"}]}`\n\n' +
+        '**⚡ Batch PDF Support (MinerU only):**\n' +
+        'When passing MULTIPLE PDFs, each PDF creates its OWN INDEPENDENT BUNDLE (for RAG compatibility).\n' +
+        'MinerU batch API is used for efficient parallel parsing, then separate bundles are created:\n' +
+        '```json\n' +
+        '{"repos": [\n' +
+        '  {"kind": "pdf", "url": "https://arxiv.org/pdf/paper1.pdf"},\n' +
+        '  {"kind": "pdf", "url": "https://arxiv.org/pdf/paper2.pdf"},\n' +
+        '  {"kind": "pdf", "path": "C:\\\\docs\\\\paper3.pdf"}\n' +
+        ']}\n' +
+        '```\n' +
+        '→ Creates 3 separate bundles (one per PDF), parsed in parallel via MinerU batch API.\n' +
+        'Note: VLM Parser (vlmParser=true) does NOT support batch - processes one PDF at a time.\n\n' +
         '**Web crawl modes:**\n' +
         '- Default (no useSpa): For static sites, SSR sites, GitHub Pages, Hugo, Jekyll. Fast and lightweight.\n' +
         '- `useSpa: true`: ONLY for sites that require JavaScript to render content (React/Vue/Angular CSR). Slow, uses headless browser. Also add `skipLlmsTxt: true` for SPA sites.\n' +
@@ -89,6 +101,77 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
       try {
         // Check for config warnings that LLM should know about
         const configWarnings = getConfigWarnings();
+        
+        // Check if this is a multi-PDF request that should create separate bundles
+        const isPdfOnlyRequest = args.repos.length > 0 && args.repos.every((r: any) => r.kind === 'pdf');
+        const hasMultiplePdfs = isPdfOnlyRequest && args.repos.length > 1;
+        
+        // Multi-PDF: Create separate bundles for each PDF (batch parse, individual bundles)
+        if (hasMultiplePdfs) {
+          const pdfInputs = args.repos.map((r: any) => ({
+            url: r.url,
+            path: r.path,
+            name: r.name,
+            vlmParser: r.vlmParser,
+          }));
+          
+          const batchResult = await createPdfBundlesBatch(cfg, pdfInputs, {
+            ifExists: args.ifExists as any,
+          });
+          
+          server.sendResourceListChanged();
+          
+          let textResponse = '';
+          
+          // Show config warnings first
+          if (configWarnings.length > 0) {
+            textResponse += '⚠️ **Configuration Issues:**\n';
+            for (const warn of configWarnings) {
+              textResponse += `- ${warn}\n`;
+            }
+            textResponse += '\n';
+          }
+          
+          textResponse += `✅ **Batch PDF Bundle Creation Complete**\n`;
+          textResponse += `Created: ${batchResult.bundles.length} bundles | Failed: ${batchResult.failed.length} | Time: ${Math.round(batchResult.totalTimeMs / 1000)}s\n\n`;
+          
+          // List created bundles
+          if (batchResult.bundles.length > 0) {
+            textResponse += '**Created Bundles:**\n';
+            for (const bundle of batchResult.bundles) {
+              const pdfInfo = bundle.repos[0];
+              const source = pdfInfo?.pdfUrl ?? pdfInfo?.localPath ?? pdfInfo?.id ?? 'unknown';
+              textResponse += `- \`${bundle.bundleId}\` ← ${source}\n`;
+            }
+            textResponse += '\n';
+          }
+          
+          // List failures
+          if (batchResult.failed.length > 0) {
+            textResponse += '**Failed:**\n';
+            for (const fail of batchResult.failed) {
+              textResponse += `- ${fail.source}: ${fail.error}\n`;
+            }
+            textResponse += '\n';
+          }
+          
+          textResponse += '💡 Use `preflight_search_and_read` with a specific bundle ID to query each document.\n';
+          
+          return {
+            content: [{ type: 'text', text: textResponse }],
+            structuredContent: {
+              batchResult: true,
+              bundleCount: batchResult.bundles.length,
+              failedCount: batchResult.failed.length,
+              bundles: batchResult.bundles.map(b => ({
+                bundleId: b.bundleId,
+                source: b.repos[0]?.pdfUrl ?? b.repos[0]?.localPath ?? b.repos[0]?.id,
+              })),
+              failed: batchResult.failed,
+              totalTimeMs: batchResult.totalTimeMs,
+            },
+          };
+        }
         
         // Check if all inputs are document files (PDF, Office, etc.)
         const localPaths = args.repos

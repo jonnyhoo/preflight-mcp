@@ -50,6 +50,16 @@ export interface QueryOptions {
   /** Expand to sibling chunks at the same level (default: false) */
   expandToSiblings?: boolean;
   
+  // Phase 3: Hierarchical retrieval for large-scale paper search
+  /** Enable hierarchical retrieval (L1→L2/L3) for 100k+ paper scale (default: auto based on crossBundleMode) */
+  enableHierarchicalRetrieval?: boolean;
+  /** Number of papers to retrieve in L1 coarse filtering (default: 10) */
+  hierarchicalL1TopK?: number;
+  /** Number of chunks to retrieve in L2/L3 fine filtering (default: 15) */
+  hierarchicalL2L3TopK?: number;
+  /** Filter by arXiv category (e.g., 'cs.AI') */
+  arxivCategory?: string;
+  
   // IGP (Iterative Graph Pruning) options (Phase 2)
   /** IGP pruning options for cross-bundle queries */
   igpOptions?: IGPQueryOptions;
@@ -87,7 +97,7 @@ export interface IGPQueryOptions {
   maxIterations?: number;
 }
 
-export const DEFAULT_QUERY_OPTIONS: Required<Omit<QueryOptions, 'bundleId' | 'repoId' | 'bundleIds' | 'igpOptions'>> & { igpOptions: IGPQueryOptions } = {
+export const DEFAULT_QUERY_OPTIONS: Required<Omit<QueryOptions, 'bundleId' | 'repoId' | 'bundleIds' | 'igpOptions' | 'arxivCategory'>> & { igpOptions: IGPQueryOptions } = {
   mode: 'hybrid',
   topK: 10,
   enableContextCompletion: true,
@@ -97,6 +107,10 @@ export const DEFAULT_QUERY_OPTIONS: Required<Omit<QueryOptions, 'bundleId' | 're
   crossBundleMode: 'single',
   expandToParent: true,
   expandToSiblings: true,
+  // Phase 3: Hierarchical retrieval defaults
+  enableHierarchicalRetrieval: false, // Auto-enabled when crossBundleMode='all'
+  hierarchicalL1TopK: 10,
+  hierarchicalL2L3TopK: 15,
   igpOptions: { enabled: false }, // IGP disabled by default
 };
 
@@ -173,6 +187,17 @@ export interface QueryResult {
       /** Number of IGP iterations */
       iterations: number;
       /** IGP processing time in ms */
+      durationMs: number;
+    };
+    /** Hierarchical retrieval statistics (Phase 3) */
+    hierarchicalStats?: {
+      /** Number of items found per L1 content type */
+      l1ByType: Record<string, number>;
+      /** Total L1 items found */
+      l1TotalFound: number;
+      /** Number of chunks found in L2/L3 fine filtering */
+      l2l3ChunksFound: number;
+      /** Hierarchical retrieval time in ms */
       durationMs: number;
     };
     durationMs: number;
