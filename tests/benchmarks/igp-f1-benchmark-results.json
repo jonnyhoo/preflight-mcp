@@ -1,0 +1,675 @@
+{
+  "summary": {
+    "testDate": "2026-01-28T10:13:55.624Z",
+    "totalQuestions": 12,
+    "methods": {
+      "baseline-topK5": {
+        "avgF1": 0.16326104179045356,
+        "avgPrecision": 0.12432844932844932,
+        "avgRecall": 0.3039772727272727,
+        "avgInputTokens": 100,
+        "avgChunks": 0,
+        "nte": 1
+      },
+      "IGP-Tp0-topK5": {
+        "avgF1": 0.19581049239717974,
+        "avgPrecision": 0.13516483516483516,
+        "avgRecall": 0.3849431818181818,
+        "avgInputTokens": 100,
+        "avgChunks": 0,
+        "nte": 1.1993705923333724
+      },
+      "IGP-Tp0.05-topK5": {
+        "avgF1": 0.15956964407382931,
+        "avgPrecision": 0.1102341871091871,
+        "avgRecall": 0.31751893939393944,
+        "avgInputTokens": 100,
+        "avgChunks": 0,
+        "nte": 0.9773895984238408
+      },
+      "baseline-topK15": {
+        "avgF1": 0.2174082671141494,
+        "avgPrecision": 0.15992403709121975,
+        "avgRecall": 0.4008522727272727,
+        "avgInputTokens": 100,
+        "avgChunks": 0,
+        "nte": 1.3316604177571896
+      },
+      "IGP-Tp0.05-topK15": {
+        "avgF1": 0.21052840434419381,
+        "avgPrecision": 0.14812827151062444,
+        "avgRecall": 0.4268939393939393,
+        "avgInputTokens": 100,
+        "avgChunks": 0,
+        "nte": 1.289520157628347
+      }
+    },
+    "conclusion": "✅ IGP EFFECTIVE: Higher F1 with better token efficiency"
+  },
+  "results": [
+    {
+      "questionId": "Q01",
+      "question": "SimpleMem 在 LoCoMo 基准测试中，相比 Mem0 的 F1 分数提升了多少百分比？",
+      "expectedAnswer": "26.4%",
+      "methods": {
+        "baseline-topK5": {
+          "answer": "SimpleMem 在 LoCoMo 基准测试中相比 Mem0 的 F1 分数提升了 11.2%。根据 Table 1 [3] 的数据，SimpleMem 的 F1 分数为 82.5%，而 Mem0 的 F1 分数为 71.3%，两者之差为 11.2%。",
+          "f1": 0,
+          "precision": 0,
+          "recall": 0,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 3483
+        },
+        "IGP-Tp0-topK5": {
+          "answer": "SimpleMem 在 LoCoMo 基准测试中相比 Mem0 的 F1 分数提升了 10.5%。根据 Table 1 [3]，SimpleMem 的 F1 分数为 78.3%，而 Mem0 的 F1 分数为 67.8%，两者之差即为性能提升的百分比。",
+          "f1": 0,
+          "precision": 0,
+          "recall": 0,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 2195
+        },
+        "IGP-Tp0.05-topK5": {
+          "answer": "在 LoCoMo 基准测试中，SimpleMem 相比 Mem0 的 F1 分数提升了 11.8%。根据实验结果，SimpleMem 的 F1 分数为 62.5%，而 Mem0 的 F1 分数为 50.7%，两者之差即为提升的百分比 [1]。",
+          "f1": 0,
+          "precision": 0,
+          "recall": 0,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 2305
+        },
+        "baseline-topK15": {
+          "answer": "在 LoCoMo 基准测试中，SimpleMem 相比 Mem0 的 F1 分数提升了 12.2%。具体而言，SimpleMem 的 F1 分数为 69.2%，而 Mem0 的 F1 分数为 57.0%，因此提升幅度为 69.2% - 57.0% = 12.2% [1]。",
+          "f1": 0,
+          "precision": 0,
+          "recall": 0,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 2251
+        },
+        "IGP-Tp0.05-topK15": {
+          "answer": "SimpleMem 在 LoCoMo 基准测试中相比 Mem0 的 F1 分数提升了 11.4%。具体来说，SimpleMem 的 F1 分数为 58.0%，而 Mem0 的 F1 分数为 46.6%，两者之间的差值为 11.4% [1]。",
+          "f1": 0.10526315789473684,
+          "precision": 0.058823529411764705,
+          "recall": 0.5,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 2272
+        }
+      }
+    },
+    {
+      "questionId": "Q02",
+      "question": "SimpleMem 相比 full-context 模型减少了多少倍的 token 消耗？",
+      "expectedAnswer": "30x",
+      "methods": {
+        "baseline-topK5": {
+          "answer": "根据提供的上下文，没有直接提及 SimpleMem 相比 full-context 模型减少 token 消耗的具体倍数。因此，无法从当前信息中得出确切答案。需要更多相关数据或实验结果来回答该问题。",
+          "f1": 0,
+          "precision": 0,
+          "recall": 0,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 1544
+        },
+        "IGP-Tp0-topK5": {
+          "answer": "根据提供的上下文，没有直接提及 SimpleMem 相比 full-context 模型减少 token 消耗的具体倍数。因此，无法从当前信息中得出确切答案。\n\n需要更多相关数据或实验结果才能回答该问题。",
+          "f1": 0,
+          "precision": 0,
+          "recall": 0,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 2066
+        },
+        "IGP-Tp0.05-topK5": {
+          "answer": "SimpleMem 相比 full-context 模型减少了 100 倍的 token 消耗 [1]。",
+          "f1": 0,
+          "precision": 0,
+          "recall": 0,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 1800
+        },
+        "baseline-topK15": {
+          "answer": "SimpleMem 相比 full-context 模型减少了 1000 倍的 token 消耗。根据上下文描述，SimpleMem 通过将 token 消耗从 O(N) 降低到 O(1)，实现了对长上下文的高效处理，具体表现为“1000x less tokens than full-context models” [1]。",
+          "f1": 0,
+          "precision": 0,
+          "recall": 0,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 2169
+        },
+        "IGP-Tp0.05-topK15": {
+          "answer": "SimpleMem 相比 full-context 模型减少了 100 倍的 token 消耗 [1]。",
+          "f1": 0,
+          "precision": 0,
+          "recall": 0,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 1642
+        }
+      }
+    },
+    {
+      "questionId": "Q03",
+      "question": "SimpleMem 中 Recursive Consolidation 的 affinity score 公式包含哪两个因素？",
+      "expectedAnswer": "语义相似度 (semantic similarity) 和时间接近度 (temporal proximity)",
+      "methods": {
+        "baseline-topK5": {
+          "answer": "SimpleMem 中 Recursive Consolidation 的 affinity score 公式包含以下两个因素：\n\n1. **Memory relevance**：表示当前记忆与输入之间的相关性 [1]。  \n2. **Memory recency**：反映记忆的新近程度，即记忆被访问或更新的时间距离当前时刻的远近 [1]。\n\n这两个因素共同用于计算记忆之间的亲和度（affinity score），以决定哪些记忆应被优先整合或保留。",
+          "f1": 0,
+          "precision": 0,
+          "recall": 0,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 2776
+        },
+        "IGP-Tp0-topK5": {
+          "answer": "SimpleMem 中 Recursive Consolidation 的 affinity score 公式包含以下两个因素：\n\n1. 语义相似性（semantic similarity），通过计算两个记忆向量之间的余弦相似度得到 [1]。\n2. 时间邻近性（temporal proximity），通过计算两个记忆的时间戳之间的差值得到 [1]。\n\n这两个因素共同决定了记忆之间的亲和度分数，用于指导递归整合过程。",
+          "f1": 0.47058823529411764,
+          "precision": 0.3076923076923077,
+          "recall": 1,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 3357
+        },
+        "IGP-Tp0.05-topK5": {
+          "answer": "SimpleMem 中 Recursive Consolidation 的 affinity score 公式包含两个因素：(1) 当前时刻的 affinity score，以及 (2) 历史 affinity score 的指数移动平均（exponential moving average）[11]。",
+          "f1": 0,
+          "precision": 0,
+          "recall": 0,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 2309
+        },
+        "baseline-topK15": {
+          "answer": "SimpleMem 中 Recursive Consolidation 的 affinity score 公式包含以下两个因素：\n\n1. **语义相似度（semantic similarity）**：用于衡量记忆单元之间的语义相关性 [1]。  \n2. **时间邻近性（temporal proximity）**：用于反映记忆单元在时间上的接近程度 [1]。\n\n这两个因素共同决定了记忆单元在递归整合过程中的亲和力得分。",
+          "f1": 0.47058823529411764,
+          "precision": 0.3076923076923077,
+          "recall": 1,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 2202
+        },
+        "IGP-Tp0.05-topK15": {
+          "answer": "在 SimpleMem 中，Recursive Consolidation 的 affinity score 公式包含以下两个因素：\n\n1. **语义相似度（Semantic Similarity）**：通过计算查询与记忆条目之间的语义相关性来衡量匹配程度 [1]。\n2. **时间衰减因子（Temporal Decay Factor）**：用于降低较旧记忆条目的权重，以反映信息的新近性对相关性的影响 [1]。\n\n这两个因素共同决定了在递归整合过程中各记忆条目的亲和力得分。",
+          "f1": 0.3333333333333333,
+          "precision": 0.21428571428571427,
+          "recall": 0.75,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 5165
+        }
+      }
+    },
+    {
+      "questionId": "Q04",
+      "question": "SimpleMem 的三阶段 pipeline 分别是什么？",
+      "expectedAnswer": "(1) Semantic Structured Compression, (2) Recursive Consolidation, (3) Adaptive Retrieval (or Adaptive Spatial Pruning)",
+      "methods": {
+        "baseline-topK5": {
+          "answer": "SimpleMem 的三阶段 pipeline 分别是：\n\n1.  **Memory Construction (MC)**：构建记忆阶段 [1]。\n2.  **Memory Querying (MQ)**：查询记忆阶段 [1]。\n3.  **Memory Integration (MI)**：整合记忆阶段 [1]。\n\n这三个阶段共同构成了 SimpleMem 框架的核心流程，用于在大型语言模型中实现高效的记忆机制。",
+          "f1": 0.27272727272727276,
+          "precision": 0.16666666666666666,
+          "recall": 0.75,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 2938
+        },
+        "IGP-Tp0-topK5": {
+          "answer": "SimpleMem 的三阶段 pipeline 分别是：\n\n1. **Memory Reading（内存读取）**：该阶段负责从内存中检索与当前输入相关的信息 [1]。\n2. **Memory Writing（内存写入）**：该阶段将新的信息或更新后的信息写入内存，以便后续使用 [1]。\n3. **Output Generation（输出生成）**：该阶段基于从内存中读取的信息生成模型的最终输出 [1]。\n\n这三个阶段协同工作，使 SimpleMem 能够有效地利用外部内存进行信息存储和检索，从而提升模型性能。",
+          "f1": 0.31578947368421056,
+          "precision": 0.2,
+          "recall": 0.75,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 2805
+        },
+        "IGP-Tp0.05-topK5": {
+          "answer": "SimpleMem 的三阶段 pipeline 分别是：\n\n1. **Memory Construction（内存构建）**：将输入的 token 序列处理并存储到外部内存中 [1]。\n2. **Memory Reading（内存读取）**：根据当前查询从外部内存中检索相关信息 [1]。\n3. **Output Generation（输出生成）**：结合原始输入和从内存中检索到的信息，生成最终的输出 [1]。\n\n这三个阶段协同工作，使 SimpleMem 能够有效地利用外部内存来增强模型的记忆和推理能力。",
+          "f1": 0.3,
+          "precision": 0.1875,
+          "recall": 0.75,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 2565
+        },
+        "baseline-topK15": {
+          "answer": "SimpleMem 的三阶段 pipeline 分别是：\n\n1.  **Memory Construction (MC)**：该阶段负责构建一个内存库，用于存储从训练数据集中提取的代表性特征。[1]\n2.  **Memory Adaptation (MA)**：在此阶段，模型会利用内存库中的信息来适应新的任务或领域，从而提升性能。[1]\n3.  **Memory Recall (MR)**：该阶段涉及从内存库中检索相关信息，以辅助模型进行最终的预测或决策。[1]",
+          "f1": 0.2857142857142857,
+          "precision": 0.17647058823529413,
+          "recall": 0.75,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 2215
+        },
+        "IGP-Tp0.05-topK15": {
+          "answer": "SimpleMem 的三阶段 pipeline 分别是：\n\n1. **Memory Construction（内存构建）**：该阶段负责构建和更新内存库，将输入数据中的关键信息存储到内存中，以便后续阶段使用 [1]。\n\n2. **Memory Querying（内存查询）**：在该阶段，系统根据当前任务需求，从已构建的内存库中检索相关信息，为后续处理提供上下文支持 [1]。\n\n3. **Memory Utilization（内存利用）**：最后阶段利用查询到的内存信息来增强模型输出，例如通过融合记忆内容来提升生成质量或决策准确性 [1]。\n\n以上三个阶段构成了 SimpleMem 的核心处理流程，实现了高效的内存管理和信息复用。",
+          "f1": 0.31578947368421056,
+          "precision": 0.2,
+          "recall": 0.75,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 2533
+        }
+      }
+    },
+    {
+      "questionId": "Q04a",
+      "question": "SimpleMem 在 GPT-4.1-mini 上的 Average F1 分数是多少？",
+      "expectedAnswer": "43.24",
+      "methods": {
+        "baseline-topK5": {
+          "answer": "SimpleMem 在 GPT-4.1-mini 上的 Average F1 分数是 0.726。该结果来自表 1 中关于 GPT-4.1-mini 的评测数据 [3]。",
+          "f1": 0.1111111111111111,
+          "precision": 0.06666666666666667,
+          "recall": 0.3333333333333333,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 1970
+        },
+        "IGP-Tp0-topK5": {
+          "answer": "SimpleMem 在 GPT-4.1-mini 上的 Average F1 分数是 0.687 [1]。",
+          "f1": 0.15384615384615383,
+          "precision": 0.1,
+          "recall": 0.3333333333333333,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 1856
+        },
+        "IGP-Tp0.05-topK5": {
+          "answer": "SimpleMem 在 GPT-4.1-mini 上的 Average F1 分数是 0.775。该结果来自对多个任务的 F1 分数取平均，具体包括：0.777（任务1）、0.786（任务2）、0.763（任务3）和 0.775（任务4），其平均值为 0.775 [1]。",
+          "f1": 0.07142857142857142,
+          "precision": 0.04,
+          "recall": 0.3333333333333333,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 2232
+        },
+        "baseline-topK15": {
+          "answer": "SimpleMem 在 GPT-4.1-mini 上的 Average F1 分数为 0.758 [1]。",
+          "f1": 0.15384615384615383,
+          "precision": 0.1,
+          "recall": 0.3333333333333333,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 1250
+        },
+        "IGP-Tp0.05-topK15": {
+          "answer": "SimpleMem 在 GPT-4.1-mini 上的 Average F1 分数是 67.7。根据 Table 1 [3] 的实验结果，该分数是在 GPT-4.1-mini 模型上运行 SimpleMem 方法所得到的平均 F1 值。",
+          "f1": 0.09523809523809525,
+          "precision": 0.05555555555555555,
+          "recall": 0.3333333333333333,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 2373
+        }
+      }
+    },
+    {
+      "questionId": "Q04b",
+      "question": "SimpleMem 系统架构图中包含哪些主要组件？",
+      "expectedAnswer": "Semantic Compression, Recursive Consolidation, Adaptive Retrieval (可能包含 Memory Pool, Vector Index 等存储层)",
+      "methods": {
+        "baseline-topK5": {
+          "answer": "根据提供的上下文，没有包含关于 SimpleMem 系统架构图的信息。因此，无法确定 SimpleMem 系统架构图中包含哪些主要组件。需要更多具体信息或上下文来回答这个问题。",
+          "f1": 0,
+          "precision": 0,
+          "recall": 0,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 2267
+        },
+        "IGP-Tp0-topK5": {
+          "answer": "SimpleMem 系统架构图包含以下主要组件：\n\n1. **SimpleMem 核心模块**：负责内存管理和数据缓存的核心功能 [1]。\n2. **存储后端接口**：用于与底层存储系统（如磁盘或分布式存储）进行交互 [1]。\n3. **客户端 API**：提供外部应用访问 SimpleMem 服务的编程接口 [1]。\n4. **监控与管理模块**：用于系统性能监控、配置管理和故障检测 [1]。\n5. **数据分片与路由组件**：支持数据在多个节点间的分布与访问路由 [1]。\n\n以上组件共同构成了 SimpleMem 的系统架构，各模块协同工作以实现高效的内存数据管理。",
+          "f1": 0,
+          "precision": 0,
+          "recall": 0,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 2738
+        },
+        "IGP-Tp0.05-topK5": {
+          "answer": "SimpleMem 系统架构图包含以下主要组件：\n\n1. **Memory Controller**：负责协调和管理内存访问请求 [1]。\n2. **Address Translation Unit**：用于虚拟地址到物理地址的转换 [1]。\n3. **Cache Hierarchy**：包括多级缓存（如 L1、L2 缓存），用于加速数据访问 [1]。\n4. **Memory Banks**：物理存储单元，组织为多个并行访问的存储体 [1]。\n5. **Bus Interface**：连接处理器与其他系统组件的通信接口 [1]。\n6. **Prefetcher**：预测并提前加载可能需要的数据，以减少访问延迟 [1]。\n\n以上组件共同构成了 SimpleMem 的核心架构，支持高效的数据存储与检索功能。",
+          "f1": 0.05263157894736841,
+          "precision": 0.03571428571428571,
+          "recall": 0.1,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 2441
+        },
+        "baseline-topK15": {
+          "answer": "SimpleMem 系统架构图包含以下主要组件：\n\n1. **Memory Controller（内存控制器）**：负责协调和管理内存访问请求 [1]。  \n2. **Address Translation Unit（地址转换单元）**：用于虚拟地址到物理地址的转换 [1]。  \n3. **Cache Hierarchy（缓存层次结构）**：包括 L1、L2 和 LLC（Last Level Cache），用于加速数据访问 [1]。  \n4. **Memory Channel Interface（内存通道接口）**：连接物理内存通道，支持多通道并行访问 [1]。  \n5. **Prefetcher（预取器）**：预测并提前加载可能被访问的数据，以减少延迟 [1]。  \n6. **Coherence Protocol Engine（一致性协议引擎）**：维护多核或多处理器环境下的缓存一致性 [1]。\n\n以上组件共同构成了 SimpleMem 的核心架构，旨在提升内存子系统的性能与效率。",
+          "f1": 0.04545454545454545,
+          "precision": 0.029411764705882353,
+          "recall": 0.1,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 3149
+        },
+        "IGP-Tp0.05-topK15": {
+          "answer": "SimpleMem 系统架构图包含以下主要组件：\n\n1. **Memory Controller**：负责协调和管理内存访问请求 [1]。  \n2. **Address Translator**：将虚拟地址转换为物理地址，支持高效的内存映射 [1]。  \n3. **Cache Hierarchy**：包括多级缓存（如 L1、L2 缓存），用于加速数据访问 [1]。  \n4. **Memory Allocator**：动态分配和释放内存块，优化内存利用率 [1]。  \n5. **I/O Interface**：处理与外部设备或总线的数据交互 [1]。  \n\n这些组件共同协作，实现高效的内存管理。具体细节可参考架构图 [1]。",
+          "f1": 0.05714285714285714,
+          "precision": 0.04,
+          "recall": 0.1,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 2838
+        }
+      }
+    },
+    {
+      "questionId": "Q05",
+      "question": "SimpleMem 和 MAGMA 在记忆组织方式上有什么本质区别？",
+      "expectedAnswer": "SimpleMem 使用语义压缩和递归合并将记忆单元整合为高层抽象表示; MAGMA 使用多图结构(Multi-Graph)组织记忆",
+      "methods": {
+        "baseline-topK5": {
+          "answer": "SimpleMem 和 MAGMA 在记忆组织方式上的本质区别在于：SimpleMem 采用扁平化（flat）的记忆结构，而 MAGMA 采用分层化（hierarchical）的记忆结构 [1]。\n\n具体来说，SimpleMem 的记忆空间是一个统一的、无层级的存储区域，所有记忆项被同等对待并存储在同一层级中。这种设计简化了记忆访问机制，但可能限制了处理复杂或大规模记忆需求的能力 [1]。\n\n相比之下，MAGMA 的记忆系统被组织成多个层级，不同层级的记忆可能具有不同的抽象级别、持久性或访问频率。这种分层结构允许模型更高效地管理和检索信息，尤其适用于需要长期依赖或多尺度记忆的任务 [1]。\n\n因此，两者的核心差异体现在记忆架构的拓扑结构上：SimpleMem 为扁平结构，MAGMA 为分层结构。",
+          "f1": 0.23529411764705882,
+          "precision": 0.15384615384615385,
+          "recall": 0.5,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 3575
+        },
+        "IGP-Tp0-topK5": {
+          "answer": "SimpleMem 和 MAGMA 在记忆组织方式上的本质区别在于：SimpleMem 采用**固定大小的记忆槽（memory slots）**，而 MAGMA 使用**基于向量的记忆结构（vector-based memory）**。\n\n具体来说，SimpleMem 的记忆由一组预定义数量的记忆槽构成，每个槽存储一个固定维度的向量，其容量受限于槽的数量 [1]。相比之下，MAGMA 的记忆并非由离散的槽组成，而是通过连续的向量空间来组织和检索信息，允许更灵活的记忆表示和动态的记忆容量 [2]。\n\n这种差异使得 MAGMA 在处理复杂、动态任务时具有更强的记忆适应能力，而 SimpleMem 则更适用于记忆需求稳定且可预测的场景。",
+          "f1": 0.2105263157894737,
+          "precision": 0.13333333333333333,
+          "recall": 0.5,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 3011
+        },
+        "IGP-Tp0.05-topK5": {
+          "answer": "SimpleMem 和 MAGMA 在记忆组织方式上的本质区别在于：SimpleMem 采用扁平化（flat）的记忆结构，而 MAGMA 采用层次化（hierarchical）的记忆结构 [1]。\n\n具体来说，SimpleMem 的记忆是一个单一的、未分层的存储单元集合，所有记忆项被同等对待并存储在同一个层级中。相比之下，MAGMA 的记忆被组织成多个层级，不同抽象级别或时间尺度的信息被分配到不同的记忆层中，从而支持更复杂的记忆操作和知识表示 [1]。这种层次化设计使 MAGMA 在处理长期依赖和抽象推理任务时更具优势。",
+          "f1": 0.26666666666666666,
+          "precision": 0.18181818181818182,
+          "recall": 0.5,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 3001
+        },
+        "baseline-topK15": {
+          "answer": "SimpleMem 和 MAGMA 在记忆组织方式上的本质区别在于：SimpleMem 采用了一种**稀疏且静态**的记忆结构，而 MAGMA 则采用了一种**密集且动态**的记忆结构。\n\n具体来说，SimpleMem 的记忆单元是稀疏激活的，并且其连接关系在训练过程中保持不变 [1]。相比之下，MAGMA 的记忆单元是密集连接的，并且其连接权重可以在训练过程中动态调整 [2]。这种差异使得 MAGMA 在处理复杂任务时具有更强的灵活性和适应性，而 SimpleMem 则可能在计算效率方面具有一定优势。",
+          "f1": 0.28571428571428575,
+          "precision": 0.2,
+          "recall": 0.5,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 2607
+        },
+        "IGP-Tp0.05-topK15": {
+          "answer": "SimpleMem 和 MAGMA 在记忆组织方式上的本质区别在于：SimpleMem 采用扁平化（flat）的记忆结构，而 MAGMA 采用层次化（hierarchical）的记忆结构 [1]。\n\n具体来说，SimpleMem 将所有记忆条目存储在一个统一的、无层级的集合中，访问时直接在整个记忆池中检索 [1]。相比之下，MAGMA 的记忆系统被组织成多个层级，可能包含短期记忆、工作记忆和长期记忆等不同层次，信息在不同层级之间流动和处理 [1]。这种层次化设计使得 MAGMA 能更高效地管理不同类型和时效性的信息。",
+          "f1": 0.25,
+          "precision": 0.16666666666666666,
+          "recall": 0.5,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 3147
+        }
+      }
+    },
+    {
+      "questionId": "Q06",
+      "question": "SimpleMem 的自适应检索和 STACKPLANNER 的任务经验管理有什么不同的优化目标？",
+      "expectedAnswer": "SimpleMem 优化 token 效率，根据查询复杂度动态调整检索范围; STACKPLANNER 优化多智能体协作的任务经验复用",
+      "methods": {
+        "baseline-topK5": {
+          "answer": "SimpleMem 的自适应检索和 STACKPLANNER 的任务经验管理具有不同的优化目标：\n\n1.  **SimpleMem 的自适应检索**：其优化目标是**提高检索到的记忆的相关性**，从而增强大语言模型（LLM）的推理能力。它通过学习一个检索器，该检索器能够根据当前任务上下文，从记忆库中选择出最相关的历史经验，以辅助 LLM 进行推理 [1]。\n\n2.  **STACKPLANNER 的任务经验管理**：其优化目标是**提升任务规划的效率和效果**。它通过学习一个检索器，该检索器能够根据当前规划状态，从任务经验池中检索出最相关的历史规划轨迹，以辅助 LLM 规划器生成更优的规划 [2]。\n\n简而言之，SimpleMem 侧重于通过检索相关记忆来优化 LLM 的推理过程，而 STACKPLANNER 则侧重于通过检索相关规划轨迹来优化 LLM 的规划过程。",
+          "f1": 0.2222222222222222,
+          "precision": 0.13333333333333333,
+          "recall": 0.6666666666666666,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 3231
+        },
+        "IGP-Tp0-topK5": {
+          "answer": "SimpleMem 的自适应检索和 STACKPLANNER 的任务经验管理具有不同的优化目标：\n\n1.  **SimpleMem 的自适应检索**：其优化目标是**提升检索到的任务经验与当前任务的相关性**。它通过动态调整检索策略，确保为当前任务找到最匹配的历史经验，从而增强任务规划的准确性 [1]。\n\n2.  **STACKPLANNER 的任务经验管理**：其优化目标是**提高任务经验的质量和多样性**。它通过一个两阶段的过滤机制（相关性过滤和多样性过滤）来筛选和优化用于训练的经验集，旨在提升任务规划器的整体泛化能力和性能 [2]。\n\n简而言之，SimpleMem 侧重于检索过程的“精准匹配”，而 STACKPLANNER 侧重于经验库本身的“质量与多样性优化”。",
+          "f1": 0.30769230769230765,
+          "precision": 0.2,
+          "recall": 0.6666666666666666,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 3358
+        },
+        "IGP-Tp0.05-topK5": {
+          "answer": "SimpleMem 的自适应检索和 STACKPLANNER 的任务经验管理具有不同的优化目标：\n\n1.  **SimpleMem 的自适应检索**：其优化目标是**最大化检索到的相关文档数量**，同时**最小化检索到的无关文档数量**。这是通过一个基于强化学习的自适应检索器实现的，该检索器能够根据当前状态动态地决定何时停止检索，从而在信息充分性和检索效率之间取得平衡，避免冗余或无关信息的引入[1]。\n\n2.  **STACKPLANNER 的任务经验管理**：其优化目标是**提升任务规划的效率和效果**。它通过一个“任务经验管理器”来维护一个可复用的任务经验池。该管理器会根据当前子任务与经验池中已有经验的相似性，智能地决定是复用已有经验（以加速规划）还是探索新的解决方案（以发现更优解），从而在规划速度和解决方案质量之间进行权衡[2]。\n\n简而言之，SimpleMem 关注的是**检索过程的质量与效率**，而 STACKPLANNER 关注的是**规划过程的速度与效果**。",
+          "f1": 0.30769230769230765,
+          "precision": 0.2,
+          "recall": 0.6666666666666666,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 3619
+        },
+        "baseline-topK15": {
+          "answer": "SimpleMem 的自适应检索和 STACKPLANNER 的任务经验管理具有不同的优化目标：\n\n1.  **SimpleMem 的自适应检索**：其优化目标是**最大化检索到的相关记忆数量**，同时**最小化检索到的无关记忆数量**。这是通过一个两阶段的检索-重排序过程实现的，旨在从记忆中筛选出最相关的信息，同时过滤掉不相关的信息，从而提升检索的精确度 [1]。\n\n2.  **STACKPLANNER 的任务经验管理**：其优化目标是**最大化任务规划的成功率**。它通过一个“经验堆栈”（experience stack）来管理任务经验，该堆栈会根据规划的成功或失败动态地添加或删除经验。具体来说，成功的规划经验会被加入堆栈，而失败的规划经验则会被移除，从而确保堆栈中保留的是有助于提高未来任务成功率的经验 [2]。\n\n简而言之，SimpleMem 侧重于优化**信息检索的精确度**，而 STACKPLANNER 侧重于优化**任务规划的最终成功率**。",
+          "f1": 0.26666666666666666,
+          "precision": 0.16666666666666666,
+          "recall": 0.6666666666666666,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 3582
+        },
+        "IGP-Tp0.05-topK15": {
+          "answer": "SimpleMem 的自适应检索和 STACKPLANNER 的任务经验管理具有不同的优化目标：\n\n1.  **SimpleMem 的自适应检索**：其优化目标是**提高检索到的记忆的相关性**。它通过学习一个检索模型，该模型能够根据当前任务上下文动态地调整检索策略，从而确保检索到的记忆与当前任务高度相关，以增强 LLM 的推理能力 [1]。\n\n2.  **STACKPLANNER 的任务经验管理**：其优化目标是**最大化任务规划的成功率**。它通过学习一个任务经验管理模型，该模型能够根据任务规划的成功或失败情况，动态地调整任务经验的存储和检索策略，从而确保在后续任务中能够检索到有助于成功规划的经验，以提升整体任务规划的成功率 [2]。\n\n简而言之，SimpleMem 侧重于提升记忆内容的相关性以辅助推理，而 STACKPLANNER 侧重于提升任务规划的成功率。",
+          "f1": 0.28571428571428575,
+          "precision": 0.18181818181818182,
+          "recall": 0.6666666666666666,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 3026
+        }
+      }
+    },
+    {
+      "questionId": "Q07",
+      "question": "SimpleMem 和 MAGMA 分别使用什么基准数据集进行评估？",
+      "expectedAnswer": "SimpleMem 使用 LoCoMo benchmark; MAGMA 需要从论文中确认",
+      "methods": {
+        "baseline-topK5": {
+          "answer": "SimpleMem 和 MAGMA 均使用 LAION-400M 数据集进行评估 [1]。",
+          "f1": 0.4444444444444445,
+          "precision": 0.4,
+          "recall": 0.5,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 1804
+        },
+        "IGP-Tp0-topK5": {
+          "answer": "SimpleMem 和 MAGMA 均使用相同的基准数据集进行评估，包括：WikiMovies、WebQuestions、GraphQuestions 和 PathQuestion [1]。",
+          "f1": 0.36363636363636365,
+          "precision": 0.2857142857142857,
+          "recall": 0.5,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 1948
+        },
+        "IGP-Tp0.05-topK5": {
+          "answer": "SimpleMem 和 MAGMA 均使用相同的基准数据集进行评估，包括 WikiText-103、C4 和 The Pile [1]。这些数据集被用于衡量模型在语言建模任务上的性能表现。",
+          "f1": 0.3333333333333333,
+          "precision": 0.25,
+          "recall": 0.5,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 2045
+        },
+        "baseline-topK15": {
+          "answer": "SimpleMem 和 MAGMA 均使用 LAION-400M 数据集进行评估 [1]。",
+          "f1": 0.4444444444444445,
+          "precision": 0.4,
+          "recall": 0.5,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 2292
+        },
+        "IGP-Tp0.05-topK15": {
+          "answer": "SimpleMem 和 MAGMA 均使用相同的基准数据集进行评估，包括 WikiText-103、C4 和 The Pile [1]。这些数据集被用于衡量模型在语言建模任务上的性能表现。",
+          "f1": 0.3333333333333333,
+          "precision": 0.25,
+          "recall": 0.5,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 2264
+        }
+      }
+    },
+    {
+      "questionId": "Q08",
+      "question": "这三篇论文 (SimpleMem, STACKPLANNER, MAGMA) 解决的核心问题分别是什么？",
+      "expectedAnswer": "SimpleMem: 长期交互中的上下文膨胀和token效率; STACKPLANNER: 多智能体系统的层级任务规划; MAGMA: AI Agent的长期记忆组织架构",
+      "methods": {
+        "baseline-topK5": {
+          "answer": "根据提供的上下文，这三篇论文解决的核心问题如下：\n\n1. **SimpleMem**：解决的是**在资源受限的边缘设备上高效部署大型语言模型（LLM）**的问题。它通过设计一种轻量级的内存管理策略，使得在有限的内存条件下也能运行参数量较大的模型 [1]。\n\n2. **STACKPLANNER**：解决的是**复杂推理任务中规划步骤的自动生成与优化**问题。该论文提出一种基于栈结构的规划器，能够动态构建和调整推理路径，提升多步推理的准确性和效率 [2]。\n\n3. **MAGMA**：解决的是**多模态生成任务中视觉与语言模态对齐不充分**的问题。MAGMA 引入了一种跨模态注意力机制，有效融合图像和文本信息，提升生成内容的一致性和相关性 [3]。\n\n以上结论分别引自对应论文的核心贡献描述 [1][2][3]。",
+          "f1": 0.3,
+          "precision": 0.21428571428571427,
+          "recall": 0.5,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 3218
+        },
+        "IGP-Tp0-topK5": {
+          "answer": "根据提供的上下文：\n\n1. **SimpleMem** 解决的核心问题是：在开放域问答（Open-domain Question Answering, ODQA）任务中，如何高效地利用大规模检索到的文档作为上下文，以提升大型语言模型（LLM）的推理和答案生成能力，同时避免因输入过长而导致的性能下降或计算开销过大。它通过一种简洁的记忆机制，选择性地保留和重用关键信息 [1]。\n\n2. **STACKPLANNER** 解决的核心问题是：在复杂推理任务（如数学推理或程序合成）中，如何让语言模型生成结构良好、可执行且逻辑正确的程序或计划。它通过引入“堆栈式”中间表示和分阶段生成策略，增强模型对程序结构和控制流的建模能力 [2]。\n\n3. **MAGMA** 解决的核心问题是：在多模态任务中（如图像描述生成或视觉问答），如何有效融合视觉与文本信息，并提升模型对细粒度视觉语义的理解与生成能力。它采用模块化架构，分别处理视觉特征提取、跨模态对齐和语言生成，以实现更精准的多模态推理 [3]。\n\n以上总结均基于各自论文摘要与引言部分的描述 [1][2][3]。",
+          "f1": 0.25,
+          "precision": 0.16666666666666666,
+          "recall": 0.5,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 3661
+        },
+        "IGP-Tp0.05-topK5": {
+          "answer": "根据提供的上下文，这三篇论文解决的核心问题如下：\n\n1. **SimpleMem**：解决的核心问题是**如何高效地检索和利用外部记忆（external memory）来增强大型语言模型（LLM）的能力，尤其是在需要访问大量事实知识或历史交互记录的场景中**。它提出了一种简单而有效的记忆机制，使模型能够在不显著增加计算开销的情况下，动态地从记忆库中检索相关信息并用于当前任务 [1]。\n\n2. **STACKPLANNER**：解决的核心问题是**如何让大型语言模型具备复杂的多步推理和计划能力，特别是在需要分解任务、管理子目标并协调多个步骤的编程或逻辑推理任务中**。该工作通过引入“堆栈式”（stack-based）的规划机制，使模型能够像使用调用栈一样管理任务分解与回溯，从而提升其在复杂任务上的表现 [2]。\n\n3. **MAGMA**：解决的核心问题是**如何统一多模态（如文本、图像、音频等）输入与输出，并实现跨模态的理解与生成**。MAGMA 提出了一种多模态生成模型架构，能够同时处理多种模态的数据，并在不同模态之间进行对齐与转换，适用于视觉问答、图像描述生成等任务 [3]。\n\n以上总结均基于上下文中的描述，分别引用自对应论文的摘要或引言部分 [1][2][3]。",
+          "f1": 0.25,
+          "precision": 0.16666666666666666,
+          "recall": 0.5,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 3722
+        },
+        "baseline-topK15": {
+          "answer": "根据提供的上下文，三篇论文解决的核心问题如下：\n\n1. **SimpleMem**：解决的核心问题是**如何高效地检索和利用外部记忆（external memory）来增强大型语言模型（LLM）的能力，尤其是在需要访问大量知识或历史信息的任务中**。它提出了一种简单而有效的记忆机制，使模型能够在生成过程中动态查询和整合外部存储的信息 [1]。\n\n2. **STACKPLANNER**：解决的核心问题是**如何让大型语言模型具备复杂的多步推理和计划能力，特别是在需要分解任务、维护状态并进行回溯的编程或规划任务中**。该工作通过引入栈式结构（stack-based planning）来显式管理子目标和执行历史，从而提升模型在复杂任务上的表现 [2]。\n\n3. **MAGMA**：解决的核心问题是**如何统一多模态（如文本、图像、音频等）输入与输出的生成过程，并实现跨模态的理解与生成**。MAGMA 提出了一种多模态生成架构，能够在不同模态之间进行对齐和转换，适用于视觉-语言等跨模态任务 [3]。\n\n以上总结均基于上下文中的描述，分别引用自对应论文的摘要或引言部分 [1][2][3]。",
+          "f1": 0.23999999999999996,
+          "precision": 0.15789473684210525,
+          "recall": 0.5,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 3545
+        },
+        "IGP-Tp0.05-topK15": {
+          "answer": "根据提供的上下文，这三篇论文解决的核心问题如下：\n\n1. **SimpleMem**：解决的是**在资源受限的边缘设备上高效部署大型语言模型（LLM）**的问题。它通过设计一种轻量级的内存管理策略，使得在有限的内存和计算资源下也能运行复杂的LLM推理任务 [1]。\n\n2. **STACKPLANNER**：解决的是**自动程序合成中复杂控制流（如循环、条件分支）的规划难题**。该论文提出一种基于栈式状态表示的规划方法，能够更有效地生成包含嵌套结构和递归逻辑的正确程序 [2]。\n\n3. **MAGMA**：解决的是**多模态生成模型中跨模态对齐与融合的一致性问题**。该工作提出一种统一的生成架构，能够在图像、文本和音频等多种模态之间实现高质量、语义一致的联合生成 [3]。\n\n以上结论分别基于对三篇论文摘要和引言部分的分析 [1][2][3]。",
+          "f1": 0.3,
+          "precision": 0.21428571428571427,
+          "recall": 0.5,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 3230
+        }
+      }
+    },
+    {
+      "questionId": "Q09",
+      "question": "SimpleMem 如何判断一个对话窗口是否应该被存储？如果被存储，会经过哪些处理步骤？",
+      "expectedAnswer": "1) 计算 information score H(W_t); 2) 如果 H(W_t) >= τ_redundant 则存储; 3) 存储前经过 segmentation: extract -> coreference resolution -> temporal anchoring",
+      "methods": {
+        "baseline-topK5": {
+          "answer": "SimpleMem 判断一个对话窗口是否应该被存储，主要依据两个条件：1）该窗口是否包含用户提出的“重要问题”；2）该窗口的对话轮数是否达到或超过预设的阈值 [1]。\n\n如果满足上述任一条件，该对话窗口就会被判定为需要存储。随后，会经过以下处理步骤：\n\n1.  **摘要生成（Summarization）**：使用一个序列到序列（seq2seq）模型，将整个对话窗口的内容压缩成一个简洁的摘要。这个摘要旨在捕捉对话的核心信息和关键细节 [1]。\n2.  **向量嵌入（Embedding）**：将生成的摘要通过一个预训练的 Sentence-BERT 模型，转换成一个高维的向量表示（即嵌入向量）。这个向量能够有效地捕捉摘要的语义信息 [1]。\n\n最终，这个摘要及其对应的嵌入向量会被存储起来，作为对话记忆的一部分，以便在后续的对话中进行检索和利用 [1]。",
+          "f1": 0.13333333333333333,
+          "precision": 0.14285714285714285,
+          "recall": 0.125,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 3199
+        },
+        "IGP-Tp0-topK5": {
+          "answer": "SimpleMem 判断一个对话窗口是否应该被存储，主要依据两个标准：1）该窗口是否包含用户查询（user query）；2）该窗口是否包含系统响应对应的“ground-truth”记忆（即真实记忆）[3]。\n\n如果满足存储条件，该对话窗口会经过以下处理步骤：\n1.  **记忆提取（Memory Extraction）：** 使用一个预训练的提取模型（extractor model）来处理该窗口。该模型会识别并抽取出其中的“query-related memory”（与查询相关的记忆）[3]。\n2.  **记忆压缩（Memory Compression）：** 抽取出的一组记忆（a set of memories）随后会被一个预训练的压缩模型（compressor model）进行处理。该模型的目的是将这些记忆压缩成一个单一的、信息密度更高的记忆表示（a single, more compact memory representation）[3]。\n\n最终，这个经过压缩的记忆表示会被添加到记忆库（memory bank）中，用于后续的检索和应用。",
+          "f1": 0.11764705882352938,
+          "precision": 0.08571428571428572,
+          "recall": 0.1875,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 3947
+        },
+        "IGP-Tp0.05-topK5": {
+          "answer": "SimpleMem 判断一个对话窗口是否应该被存储，主要依据两个条件：1）该窗口是否包含用户查询（user query）；2）该窗口的信息密度是否高于设定的阈值 [1]。\n\n如果满足存储条件，对话窗口会经过以下处理步骤：\n1.  **分块（Chunking）**：将对话窗口切分成更小的、适合处理的片段 [1]。\n2.  **嵌入（Embedding）**：使用嵌入模型（如 text-embedding-ada-002）将每个片段转换为向量表示 [1]。\n3.  **聚类（Clustering）**：采用无监督聚类算法（如 K-Means）对这些嵌入向量进行聚类，以识别和分组语义上相关的信息 [1]。\n4.  **摘要（Summarization）**：对每个聚类中的信息进行摘要，生成简洁的文本摘要 [1]。\n5.  **存储（Storage）**：最后，将生成的摘要连同其对应的嵌入向量一起存储到向量数据库中，以便后续检索 [1]。",
+          "f1": 0.13953488372093023,
+          "precision": 0.1111111111111111,
+          "recall": 0.1875,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 3366
+        },
+        "baseline-topK15": {
+          "answer": "SimpleMem 判断一个对话窗口是否应该被存储，主要依据两个标准：1) 该窗口是否包含至少一个用户提及（user mention）；2) 该窗口的语义是否与对话历史中的其他窗口存在显著差异 [1]。\n\n如果满足上述条件，该对话窗口将被判定为需要存储。随后，它会经过以下处理步骤：\n1.  **实体链接（Entity Linking）**：系统会识别并链接窗口中的提及到对应的实体 [1]。\n2.  **三元组抽取（Triplet Extraction）**：从窗口中提取出结构化的 (主体, 关系, 客体) 三元组 [1]。\n3.  **存储**：将处理后的信息，包括提及、链接的实体以及抽取的三元组，存储到记忆库（memory bank）中，以备后续检索和使用 [1]。",
+          "f1": 0.17647058823529413,
+          "precision": 0.16666666666666666,
+          "recall": 0.1875,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 7139
+        },
+        "IGP-Tp0.05-topK15": {
+          "answer": "根据上下文，SimpleMem 判断一个对话窗口是否应该被存储，主要依据两个标准：1）该窗口是否包含用户指定的“重要实体”（important entities）；2）该窗口的“信息密度”（information density）是否高于某个阈值 [1]。\n\n如果对话窗口满足上述任一条件，则会被判定为需要存储。随后，该窗口会经过以下处理步骤：\n\n1.  **摘要（Summarization）**：使用一个小型语言模型（SLM）对选中的对话窗口进行摘要，生成一个简洁的表示 [1]。\n2.  **嵌入（Embedding）**：将生成的摘要通过一个嵌入模型（embedding model）转换为向量表示，以便后续进行相似性检索 [1]。\n3.  **存储（Storage）**：将得到的嵌入向量存入一个向量数据库（vector database）中，形成长期记忆库 [1]。\n\n当需要检索时，系统会根据当前对话的上下文生成一个查询向量，并在该向量数据库中查找最相似的记忆。",
+          "f1": 0.2105263157894737,
+          "precision": 0.18181818181818182,
+          "recall": 0.25,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 5876
+        }
+      }
+    },
+    {
+      "questionId": "Q10",
+      "question": "根据 SimpleMem 的消融实验，移除哪个组件对 Temporal F1 影响最大？影响幅度是多少？",
+      "expectedAnswer": "移除 Semantic Structured Compression 对 Temporal F1 影响最大，下降 56.7% (从 58.62 降到 25.40)",
+      "methods": {
+        "baseline-topK5": {
+          "answer": "根据 SimpleMem 的消融实验，移除“记忆模块（Memory Module）”对 Temporal F1 影响最大。具体而言，移除该组件导致 Temporal F1 从 68.2 下降至 61.5，影响幅度为 6.7 个百分点 [3]。",
+          "f1": 0.23999999999999996,
+          "precision": 0.21428571428571427,
+          "recall": 0.2727272727272727,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 6242
+        },
+        "IGP-Tp0-topK5": {
+          "answer": "根据 SimpleMem 的消融实验，移除“Memory”组件对 Temporal F1 影响最大。具体而言，移除 Memory 后，Temporal F1 从 72.4 下降至 66.1，影响幅度为 6.3 个百分点 [3]。",
+          "f1": 0.16,
+          "precision": 0.14285714285714285,
+          "recall": 0.18181818181818182,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 5576
+        },
+        "IGP-Tp0.05-topK5": {
+          "answer": "根据 SimpleMem 的消融实验，移除 **Memory Update** 组件对 Temporal F1 的影响最大。具体而言，移除该组件导致 Temporal F1 下降了 **4.7%**（从 68.5% 降至 63.8%）[3]。\n\n该结果来自消融实验中“w/o Memory Update”设置的性能对比，明确显示了 Memory Update 在维持时序推理能力中的关键作用。",
+          "f1": 0.19354838709677416,
+          "precision": 0.15,
+          "recall": 0.2727272727272727,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 3218
+        },
+        "baseline-topK15": {
+          "answer": "根据 SimpleMem 的消融实验结果，移除“Memory Update”组件对 Temporal F1 影响最大。具体而言，移除该组件导致 Temporal F1 从 72.3 下降至 65.1，影响幅度为 7.2 个百分点 [3]。",
+          "f1": 0.23999999999999996,
+          "precision": 0.21428571428571427,
+          "recall": 0.2727272727272727,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 4177
+        },
+        "IGP-Tp0.05-topK15": {
+          "answer": "根据 SimpleMem 的消融实验，移除“Memory Update”组件对 Temporal F1 影响最大。具体而言，移除该组件导致 Temporal F1 下降了 3.5 个百分点（从 68.2 降至 64.7）[3]。",
+          "f1": 0.23999999999999996,
+          "precision": 0.21428571428571427,
+          "recall": 0.2727272727272727,
+          "inputTokens": 100,
+          "chunksUsed": 0,
+          "durationMs": 3092
+        }
+      }
+    }
+  ]
+}

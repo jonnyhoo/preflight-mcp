@@ -155,7 +155,10 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
             textResponse += '\n';
           }
           
-          textResponse += '💡 Use `preflight_search_and_read` with a specific bundle ID to query each document.\n';
+        textResponse += '💡 **Next steps:**\n';
+        textResponse += '- Use `preflight_get_overview` with a bundle ID to see title, abstract, and structure\n';
+        textResponse += '- Use `preflight_search_and_read` to search specific content\n';
+        textResponse += '- Use `preflight_rag` with `index: true` to enable RAG queries\n';
           
           return {
             content: [{ type: 'text', text: textResponse }],
@@ -310,21 +313,19 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
         textResponse += `✅ Bundle created: ${summary.bundleId}\n`;
         textResponse += `Repos: ${summary.repos.map(r => `${r.id} (${r.source})`).join(', ')}\n`;
 
-        // For PDF bundles, read and include the md content directly
-        if (isPdfOnly && pdfMdFiles.length > 0) {
+        // For PDF bundles, read and include OVERVIEW.md (progressive disclosure)
+        if (isPdfOnly) {
           const { findBundleStorageDir, getBundlePathsForId } = await import('../../../bundle/service.js');
           const storageDir = await findBundleStorageDir(cfg.storageDirs, summary.bundleId);
           if (storageDir) {
             const paths = getBundlePathsForId(storageDir, summary.bundleId);
-            textResponse += '\n---\n';
-            for (const mdFile of pdfMdFiles) {
-              try {
-                const mdPath = `${paths.rootDir}/${mdFile}`;
-                const mdContent = await fs.readFile(mdPath, 'utf8');
-                textResponse += `\n${mdContent}\n`;
-              } catch {
-                // md file not found, skip
-              }
+            try {
+              const overviewPath = `${paths.rootDir}/OVERVIEW.md`;
+              const overviewContent = await fs.readFile(overviewPath, 'utf8');
+              textResponse += '\n---\n';
+              textResponse += `\n${overviewContent}\n`;
+            } catch {
+              // OVERVIEW.md not found, skip
             }
           }
         }
@@ -337,9 +338,8 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
         const isWebOnly = args.repos.length > 0 && args.repos.every((r: any) => r.kind === 'web');
         
         if (isPdfOnly) {
-          textResponse += '- Use `preflight_get_overview` to see document structure (title, abstract, table of contents)\n';
           textResponse += '- Use `preflight_search_and_read` to search specific content\n';
-          textResponse += '- Use `preflight_read_file` to read the full document\n';
+          textResponse += '- Use `preflight_read_file` with the `.md` file to read full document\n';
         } else if (isWebOnly) {
           textResponse += '- Use `preflight_get_overview` to see documentation overview\n';
           textResponse += '- Use `preflight_repo_tree` to see page structure\n';

@@ -11,7 +11,6 @@ import { findBundleStorageDir, getBundlePathsForId } from '../../../bundle/servi
 import { safeJoin } from '../../../mcp/uris.js';
 import { wrapPreflightError } from '../../../mcp/errorKinds.js';
 import { BundleNotFoundError } from '../../../errors.js';
-import type { BundleFacts } from '../../../bundle/facts.js';
 import { readManifest } from '../../../bundle/manifest.js';
 
 // ==========================================================================
@@ -41,10 +40,6 @@ export function registerGetOverviewTool({ server, cfg }: ToolDependencies, coreO
         '3. `preflight_read_file` - Read specific file/page',
       inputSchema: {
         bundleId: z.string().describe('Bundle ID to get overview for.'),
-        brief: z.boolean().optional().default(false).describe(
-          'If true, return concise structured summary (~500 tokens) instead of full markdown. ' +
-          'Recommended for initial exploration to save tokens.'
-        ),
       },
       outputSchema: {
         bundleId: z.string(),
@@ -72,51 +67,7 @@ export function registerGetOverviewTool({ server, cfg }: ToolDependencies, coreO
           }
         };
 
-        // Brief mode: return concise structured summary
-        if (args.brief) {
-          let facts: BundleFacts | null = null;
-          try {
-            const factsContent = await readFile('analysis/FACTS.json');
-            if (factsContent) {
-              facts = JSON.parse(factsContent) as BundleFacts;
-            }
-          } catch {
-            // FACTS.json may not exist or be invalid
-          }
-
-          const primaryLanguage = facts?.languages?.[0]?.language ?? 'Unknown';
-          const languages = facts?.languages?.slice(0, 3).map(l => `${l.language} (${l.fileCount} files)`) ?? [];
-          const totalCode = facts?.fileStructure?.totalCode ?? 0;
-          const totalDocs = facts?.fileStructure?.totalDocs ?? 0;
-          const frameworks = facts?.frameworks ?? [];
-          const entryPoints = facts?.entryPoints?.slice(0, 3).map(e => e.file) ?? [];
-          const topDirs = facts?.fileStructure?.topLevelDirs?.slice(0, 5) ?? [];
-
-          const textLines = [
-            `📦 Bundle: ${args.bundleId}`,
-            `📝 Language: ${primaryLanguage}`,
-            `📁 Files: ${totalCode} code, ${totalDocs} docs`,
-            frameworks.length > 0 ? `🔧 Frameworks: ${frameworks.join(', ')}` : null,
-            entryPoints.length > 0 ? `🚀 Entry points: ${entryPoints.join(', ')}` : null,
-            topDirs.length > 0 ? `📂 Top dirs: ${topDirs.join(', ')}` : null,
-            '',
-            '💡 Next: Use preflight_search_and_read to find specific code, or preflight_repo_tree for full structure.',
-          ].filter(Boolean);
-
-          // Return schema-compatible structure with brief data in overview field
-          return {
-            content: [{ type: 'text', text: textLines.join('\n') }],
-            structuredContent: {
-              bundleId: args.bundleId,
-              overview: textLines.join('\n'),
-              startHere: null,
-              agents: null,
-              sections: ['brief'],
-            },
-          };
-        }
-
-        // Full mode: return complete markdown files
+        // Return OVERVIEW.md and other overview files
         const overview = await readFile('OVERVIEW.md');
         const startHere = await readFile('START_HERE.md');
         const agents = await readFile('AGENTS.md');
@@ -167,11 +118,10 @@ export function registerGetOverviewTool({ server, cfg }: ToolDependencies, coreO
         if (bundleType === 'document') {
           textParts.push('- Use `preflight_search_and_read` to search document content');
           textParts.push('- Use `preflight_read_file` to read the full document');
-          textParts.push('- Use `preflight_repo_tree` to see bundle structure');
         } else {
-          textParts.push('- Use `preflight_repo_tree` - See file structure');
-          textParts.push('- Use `preflight_search` - Find specific code');
-          textParts.push('- Use `preflight_read_file` - Read specific files');
+          textParts.push('- Use `preflight_repo_tree` to see file structure');
+          textParts.push('- Use `preflight_search_and_read` to find specific code');
+          textParts.push('- Use `preflight_read_file` to read specific files');
         }
 
         const out = { bundleId: args.bundleId, overview, startHere, agents, sections };

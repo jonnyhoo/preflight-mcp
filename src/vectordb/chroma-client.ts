@@ -361,6 +361,189 @@ export class ChromaVectorDB {
   }
 
   /**
+   * Get statistics from hierarchical collections.
+   * Phase 3: Returns stats aggregated from L1/L2/L3 collections.
+   */
+  async getHierarchicalStats(): Promise<{
+    totalChunks: number;
+    byLevel: Record<string, number>;
+    byPaperId: Array<{ paperId: string; chunkCount: number }>;
+  }> {
+    const levels: CollectionLevel[] = ['l1_pdf', 'l1_doc', 'l2_section', 'l3_chunk'];
+    const byLevel: Record<string, number> = {};
+    const paperCounts = new Map<string, number>();
+    let totalChunks = 0;
+
+    for (const level of levels) {
+      try {
+        const collection = await this.ensureHierarchicalCollection(level);
+        
+        // Get count
+        const countResponse = await this.request<number | { count: number }>(
+          'GET',
+          `${this.getBasePath()}/collections/${collection.id}/count`
+        );
+        const count = typeof countResponse === 'number' ? countResponse : (countResponse.count ?? 0);
+        byLevel[level] = count;
+        totalChunks += count;
+
+        // Get paper IDs from L1 collections only (to avoid double counting)
+        if (level.startsWith('l1_') && count > 0) {
+          const response = await this.request<ChromaGetResponse>(
+            'POST',
+            `${this.getBasePath()}/collections/${collection.id}/get`,
+            { include: ['metadatas'], limit: 1000 }
+          );
+          
+          for (const meta of response.metadatas ?? []) {
+            const paperId = (meta as Record<string, unknown>)?.paperId as string;
+            if (paperId) {
+              paperCounts.set(paperId, (paperCounts.get(paperId) ?? 0) + 1);
+            }
+          }
+        }
+      } catch {
+        byLevel[level] = 0;
+      }
+    }
+
+    return {
+      totalChunks,
+      byLevel,
+      byPaperId: Array.from(paperCounts.entries()).map(([paperId, chunkCount]) => ({
+        paperId,
+        chunkCount,
+      })),
+    };
+  }
+
+  /**
+   * List indexed content from hierarchical collections.
+   * Returns unique papers with their L1/L2/L3 chunk counts.
+   */
+  async listHierarchicalContent(): Promise<Array<{
+    paperId: string;
+    paperVersion?: string;
+    contentHash?: string;
+    bundleId?: string;
+    l1Count: number;
+    l2Count: number;
+    l3Count: number;
+    totalChunks: number;
+  }>> {
+    const paperMap = new Map<string, {
+      paperId: string;
+      paperVersion?: string;
+      contentHash?: string;
+      bundleId?: string;
+      l1Count: number;
+      l2Count: number;
+      l3Count: number;
+    }>();
+
+    // Query L1 collections for paper list
+    for (const level of ['l1_pdf', 'l1_doc'] as CollectionLevel[]) {
+      try {
+        const collection = await this.ensureHierarchicalCollection(level);
+        const response = await this.request<ChromaGetResponse>(
+          'POST',
+          `${this.getBasePath()}/collections/${collection.id}/get`,
+          { include: ['metadatas'], limit: 1000 }
+        );
+
+        for (const meta of response.metadatas ?? []) {
+          const m = meta as Record<string, unknown>;
+          const paperId = m?.paperId as string;
+          if (!paperId) continue;
+
+          const existing = paperMap.get(paperId);
+          if (existing) {
+            existing.l1Count++;
+          } else {
+            paperMap.set(paperId, {
+              paperId,
+              paperVersion: m?.paperVersion as string | undefined,
+              contentHash: m?.contentHash as string | undefined,
+              bundleId: m?.bundleId as string | undefined,
+              l1Count: 1,
+              l2Count: 0,
+              l3Count: 0,
+            });
+          }
+        }
+      } catch {
+        // Collection doesn't exist
+      }
+    }
+
+    // Count L2/L3 chunks per paper
+    for (const [level, countKey] of [['l2_section', 'l2Count'], ['l3_chunk', 'l3Count']] as const) {
+      try {
+        const collection = await this.ensureHierarchicalCollection(level as CollectionLevel);
+        const response = await this.request<ChromaGetResponse>(
+          'POST',
+          `${this.getBasePath()}/collections/${collection.id}/get`,
+          { include: ['metadatas'], limit: 10000 }
+        );
+
+        for (const meta of response.metadatas ?? []) {
+          const paperId = (meta as Record<string, unknown>)?.paperId as string;
+          if (!paperId) continue;
+
+          const existing = paperMap.get(paperId);
+          if (existing) {
+            (existing as any)[countKey]++;
+          }
+        }
+      } catch {
+        // Collection doesn't exist
+      }
+    }
+
+    return Array.from(paperMap.values()).map(p => ({
+      ...p,
+      totalChunks: p.l1Count + p.l2Count + p.l3Count,
+    }));
+  }
+
+  /**
+   * Query hierarchical collections for raw search (L1_pdf + L2 + L3).
+   * Includes L1_pdf to retrieve Abstract/Introduction content.
+   * Used by rag_manage search_raw action and standard retrieval.
+   */
+  async queryHierarchicalRaw(
+    embedding: number[],
+    topK: number = 10,
+    filter?: HierarchicalQueryFilter
+  ): Promise<QueryResult> {
+    // Query L1_pdf (Abstract/Introduction), L2, and L3, merge results
+    // L1_pdf is important for high-quality overview content
+    const l1TopK = Math.ceil(topK * 0.2);  // 20% for L1 (Abstract/Intro)
+    const l3TopK = Math.ceil(topK * 0.5);  // 50% for L3 (detailed chunks)
+    const l2TopK = topK - l1TopK - l3TopK; // 30% for L2 (sections)
+
+    const [l1Result, l3Result, l2Result] = await Promise.all([
+      this.queryHierarchical('l1_pdf', embedding, l1TopK, filter).catch(() => ({ chunks: [] })),
+      this.queryHierarchical('l3_chunk', embedding, l3TopK, filter).catch(() => ({ chunks: [] })),
+      this.queryHierarchical('l2_section', embedding, l2TopK, filter).catch(() => ({ chunks: [] })),
+    ]);
+
+    // Merge and deduplicate (L1 first for priority)
+    const seen = new Set<string>();
+    const merged: Array<ChunkDocument & { score: number }> = [];
+
+    for (const chunk of [...l1Result.chunks, ...l3Result.chunks, ...l2Result.chunks]) {
+      if (!seen.has(chunk.id)) {
+        seen.add(chunk.id);
+        merged.push(chunk);
+      }
+    }
+
+    merged.sort((a, b) => b.score - a.score);
+    return { chunks: merged.slice(0, topK) };
+  }
+
+  /**
    * Build where clause for hierarchical queries.
    * Extends base where clause with paperIds and arxivCategory support.
    */
@@ -756,6 +939,198 @@ export class ChromaVectorDB {
         chunkCount,
       })),
     };
+  }
+
+  // --------------------------------------------------------------------------
+  // Hierarchical CRUD Operations (Phase 3 - replaces legacy chunks)
+  // --------------------------------------------------------------------------
+
+  /**
+   * Get chunks by IDs from hierarchical collections.
+   * Searches L1, L2, and L3 collections in parallel.
+   */
+  async getHierarchicalChunks(ids: string[]): Promise<ChunkDocument[]> {
+    if (ids.length === 0) return [];
+
+    const levels: CollectionLevel[] = ['l1_pdf', 'l1_doc', 'l2_section', 'l3_chunk'];
+    const allChunks: ChunkDocument[] = [];
+    const foundIds = new Set<string>();
+
+    await Promise.all(
+      levels.map(async (level) => {
+        try {
+          const collection = await this.ensureHierarchicalCollection(level);
+          const response = await this.request<ChromaGetResponse>(
+            'POST',
+            `${this.getBasePath()}/collections/${collection.id}/get`,
+            { ids, include: ['documents', 'metadatas'] }
+          );
+
+          for (let i = 0; i < response.ids.length; i++) {
+            const id = response.ids[i]!;
+            if (foundIds.has(id)) continue;
+            foundIds.add(id);
+            
+            allChunks.push({
+              id,
+              content: response.documents?.[i] ?? '',
+              metadata: (response.metadatas?.[i] as unknown as ChunkMetadata) ?? {
+                sourceType: 'overview',
+                bundleId: '',
+                chunkIndex: 0,
+                chunkType: 'text',
+              },
+            });
+          }
+        } catch {
+          // Collection may not exist
+        }
+      })
+    );
+
+    return allChunks;
+  }
+
+  /**
+   * Get chunks by parent chunk ID from hierarchical collections.
+   * Used for sibling retrieval.
+   */
+  async getHierarchicalChunksByParentId(parentChunkId: string): Promise<ChunkDocument[]> {
+    if (!parentChunkId) return [];
+
+    const levels: CollectionLevel[] = ['l2_section', 'l3_chunk'];
+    const allChunks: ChunkDocument[] = [];
+    const foundIds = new Set<string>();
+
+    await Promise.all(
+      levels.map(async (level) => {
+        try {
+          const collection = await this.ensureHierarchicalCollection(level);
+          const response = await this.request<ChromaGetResponse>(
+            'POST',
+            `${this.getBasePath()}/collections/${collection.id}/get`,
+            { where: { parentChunkId }, include: ['documents', 'metadatas'] }
+          );
+
+          for (let i = 0; i < response.ids.length; i++) {
+            const id = response.ids[i]!;
+            if (foundIds.has(id)) continue;
+            foundIds.add(id);
+            
+            allChunks.push({
+              id,
+              content: response.documents?.[i] ?? '',
+              metadata: (response.metadatas?.[i] as unknown as ChunkMetadata) ?? {
+                sourceType: 'overview',
+                bundleId: '',
+                chunkIndex: 0,
+                chunkType: 'text',
+              },
+            });
+          }
+        } catch {
+          // Collection may not exist
+        }
+      })
+    );
+
+    return allChunks;
+  }
+
+  /**
+   * Get chunks by contentHash from hierarchical collections.
+   * Used for deduplication check.
+   */
+  async getChunksByContentHashHierarchical(contentHash: string): Promise<ChunkDocument[]> {
+    const levels: CollectionLevel[] = ['l1_pdf', 'l1_doc', 'l2_section', 'l3_chunk'];
+    const allChunks: ChunkDocument[] = [];
+    const foundIds = new Set<string>();
+
+    await Promise.all(
+      levels.map(async (level) => {
+        try {
+          const collection = await this.ensureHierarchicalCollection(level);
+          const response = await this.request<ChromaGetResponse>(
+            'POST',
+            `${this.getBasePath()}/collections/${collection.id}/get`,
+            { where: { contentHash }, include: ['documents', 'metadatas'] }
+          );
+
+          for (let i = 0; i < response.ids.length; i++) {
+            const id = response.ids[i]!;
+            if (foundIds.has(id)) continue;
+            foundIds.add(id);
+            
+            allChunks.push({
+              id,
+              content: response.documents?.[i] ?? '',
+              metadata: (response.metadatas?.[i] as unknown as ChunkMetadata) ?? {
+                sourceType: 'overview',
+                bundleId: '',
+                chunkIndex: 0,
+                chunkType: 'text',
+              },
+            });
+          }
+        } catch {
+          // Collection may not exist
+        }
+      })
+    );
+
+    return allChunks;
+  }
+
+  /**
+   * Delete chunks by contentHash from all hierarchical collections.
+   * Used for force replace.
+   */
+  async deleteByContentHashHierarchical(contentHash: string): Promise<number> {
+    const levels: CollectionLevel[] = ['l1_pdf', 'l1_doc', 'l2_section', 'l3_chunk'];
+    let totalDeleted = 0;
+
+    // First count existing chunks
+    const existing = await this.getChunksByContentHashHierarchical(contentHash);
+    if (existing.length === 0) return 0;
+
+    await Promise.all(
+      levels.map(async (level) => {
+        try {
+          const collection = await this.ensureHierarchicalCollection(level);
+          await this.request('POST', `${this.getBasePath()}/collections/${collection.id}/delete`, {
+            where: { contentHash },
+          });
+        } catch {
+          // Collection may not exist
+        }
+      })
+    );
+
+    totalDeleted = existing.length;
+    logger.info(`Deleted ${totalDeleted} chunks with contentHash: ${contentHash.slice(0, 12)}... from hierarchical collections`);
+    return totalDeleted;
+  }
+
+  /**
+   * Delete all chunks for a bundle from hierarchical collections.
+   */
+  async deleteByBundleHierarchical(bundleId: string): Promise<void> {
+    const levels: CollectionLevel[] = ['l1_pdf', 'l1_doc', 'l2_section', 'l3_chunk'];
+
+    await Promise.all(
+      levels.map(async (level) => {
+        try {
+          const collection = await this.ensureHierarchicalCollection(level);
+          await this.request('POST', `${this.getBasePath()}/collections/${collection.id}/delete`, {
+            where: { bundleId },
+          });
+        } catch {
+          // Collection may not exist
+        }
+      })
+    );
+
+    logger.info(`Deleted chunks for bundle: ${bundleId} from hierarchical collections`);
   }
 
   // --------------------------------------------------------------------------

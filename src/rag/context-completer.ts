@@ -151,7 +151,7 @@ export class ContextCompleter {
       for (const query of searchQueries) {
         try {
           const { vector } = await this.embedding.embed(query);
-          const result = await this.chromaDB.queryChunks(vector, 3, this.filter);
+          const result = await this.chromaDB.queryHierarchicalRaw(vector, 3, this.filter);
 
           // 4. Verify each candidate's relevance
           for (const candidate of result.chunks) {

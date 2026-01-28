@@ -411,6 +411,7 @@ export async function persistQAReport(
     embedding: embeddingResult.vector,
   };
 
-  await chromaDB.upsertChunks([qaChunk]);
+  // Store QA report in L1_pdf collection (Phase 3 hierarchical)
+  await chromaDB.upsertHierarchicalChunks('l1_pdf', [qaChunk]);
   logger.info(`Persisted QA report: ${report.reportId} (${report.passed ? 'PASSED' : 'FAILED'})`);
 }

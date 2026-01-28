@@ -318,15 +318,19 @@ function getCollectionLevel(chunk: ChunkDocument): CollectionLevel {
     return 'l1_repo';
   }
   
-  // - PDF Abstract (headingLevel=1 with specific section names)
+  // - PDF Abstract/Introduction (headingLevel=1 with specific section names)
+  // Handles both "Abstract" and "1. Introduction" formats
   if (
     sourceType === 'pdf_text' &&
     granularity === 'section' &&
     headingLevel === 1 &&
-    sectionHeading &&
-    /^(abstract|introduction|summary|overview)$/i.test(sectionHeading)
+    sectionHeading
   ) {
-    return 'l1_pdf';
+    // Extract section name without number prefix (e.g., "1. Introduction" -> "Introduction")
+    const sectionName = sectionHeading.replace(/^\d+\.?\s*/, '').trim();
+    if (/^(abstract|introduction|summary|overview)$/i.test(sectionName)) {
+      return 'l1_pdf';
+    }
   }
   
   // L2: Section-level content

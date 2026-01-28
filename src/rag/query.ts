@@ -168,9 +168,9 @@ export class RAGEngine {
       // User can explicitly set force=false to skip if already indexed
       const shouldForce = options?.force ?? isPdfContent;
       
-      // Deduplication check (only if not forcing)
+      // Deduplication check (only if not forcing) - use hierarchical collections
       if (contentHash && !shouldForce) {
-        const existing = await this.chromaDB.getChunksByContentHash(contentHash);
+        const existing = await this.chromaDB.getChunksByContentHashHierarchical(contentHash);
         if (existing.length > 0) {
           logger.info(`Content already indexed: ${contentHash.slice(0, 12)}... (${existing.length} chunks)`);
           return {
@@ -188,9 +188,9 @@ export class RAGEngine {
         }
       }
 
-      // Force replace: delete existing chunks first
+      // Force replace: delete existing chunks first (use hierarchical collections)
       if (contentHash && shouldForce) {
-        deletedChunks = await this.chromaDB.deleteByContentHash(contentHash);
+        deletedChunks = await this.chromaDB.deleteByContentHashHierarchical(contentHash);
         if (deletedChunks > 0) {
           logger.info(`Deleted ${deletedChunks} existing chunks for replacement (PDF auto-force: ${isPdfContent && options?.force === undefined})`);
         }
@@ -523,10 +523,10 @@ export class RAGEngine {
   }
 
   /**
-   * Delete all data for a bundle.
+   * Delete all data for a bundle (from hierarchical collections).
    */
   async deleteBundle(bundleId: string): Promise<void> {
-    await this.chromaDB.deleteByBundle(bundleId);
+    await this.chromaDB.deleteByBundleHierarchical(bundleId);
     logger.info(`Deleted data for bundle: ${bundleId}`);
   }
 }

@@ -143,6 +143,7 @@ export function extractDocumentContext(markdown: string): DocumentContext {
 
 /**
  * Parse markdown into heading tree.
+ * Uses logical level (from section numbering) to build proper hierarchy.
  */
 function parseHeadingTree(markdown: string): HeadingNode[] {
   const lines = markdown.split('\n');
@@ -181,20 +182,26 @@ function parseHeadingTree(markdown: string): HeadingNode[] {
     if (headingMatch) {
       flushContent(i - 1);
       
-      const level = headingMatch[1]!.length;
+      const markdownLevel = headingMatch[1]!.length;
       const text = headingMatch[2]!.trim();
+      
+      // Use logical level based on section numbering for tree structure
+      // This handles PDFs where all headings are # but have logical hierarchy like 1., 2.1, 2.2, etc.
+      const logicalLevel = inferLogicalLevel(text) ?? markdownLevel;
+      
       const node: HeadingNode = {
-        level,
+        level: markdownLevel, // Keep original markdown level for reference
         text,
         startLine: i,
         endLine: i,
         content: '',
         children: [],
-        pageNumber: lineToPage.get(i) ?? 1, // Assign page number from line map
+        pageNumber: lineToPage.get(i) ?? 1,
       };
 
-      // Pop stack until we find a parent with lower level
-      while (stack.length > 0 && stack[stack.length - 1]!.level >= level) {
+      // Pop stack until we find a parent with LOWER logical level
+      // Use logical level for tree structure, not markdown level
+      while (stack.length > 0 && stack[stack.length - 1]!.level >= logicalLevel) {
         const popped = stack.pop()!;
         popped.node.endLine = i - 1;
       }
@@ -206,7 +213,8 @@ function parseHeadingTree(markdown: string): HeadingNode[] {
         stack[stack.length - 1]!.node.children.push(node);
       }
 
-      stack.push({ node, level });
+      // Store logical level for stack comparison (not the node's level property)
+      stack.push({ node, level: logicalLevel });
       contentStartLine = i + 1;
     } else {
       currentContent.push(line);
@@ -1051,7 +1059,9 @@ export function academicChunk(
         filePath: chunkOptions.filePath,
         chunkIndex: index,
         sectionHeading: block.heading,
-        headingLevel: block.headingPath ? block.headingPath.length : undefined,
+        // Use logical level from section heading text (handles "2.1 Title" -> level 2)
+        // Fallback to headingPath length if inference fails
+        headingLevel: inferLogicalLevel(block.heading ?? '') ?? block.headingPath?.length,
         headingPath: block.headingPath,
         parentChunkId: resolvedParentChunkId,
         // NEW: Additional metadata for quality and traceability

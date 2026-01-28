@@ -34,6 +34,7 @@ export class RAGRetriever {
 
   /**
    * Naive retrieval: Pure vector similarity search.
+   * Queries hierarchical collections (L2_section + L3_chunk) for Phase 3 compatibility.
    */
   async naiveRetrieve(
     query: string,
@@ -41,7 +42,16 @@ export class RAGRetriever {
     filter?: QueryFilter
   ): Promise<RetrieveResult> {
     const { vector } = await this.embedding.embed(query);
-    const result = await this.chromaDB.queryChunks(vector, topK, filter);
+    
+    // Phase 3: Query hierarchical collections (L2 + L3) instead of legacy chunks collection
+    // This is compatible with new indexing that writes to l1_pdf, l2_section, l3_chunk
+    const hierarchicalFilter = filter ? {
+      bundleId: filter.bundleId,
+      bundleIds: filter.bundleIds,
+      repoId: filter.repoId,
+    } : undefined;
+    
+    const result = await this.chromaDB.queryHierarchicalRaw(vector, topK, hierarchicalFilter);
 
     return {
       chunks: result.chunks,
@@ -217,9 +227,9 @@ export class RAGRetriever {
     const expandedChunks: Array<ChunkDocument & { score: number }> = [...result.chunks];
     const seenIds = new Set(result.chunks.map(c => c.id));
     
-    // Fetch parent chunks
+    // Fetch parent chunks (use hierarchical collections)
     if (options.expandToParent && parentIds.size > 0) {
-      const parents = await this.chromaDB.getChunks([...parentIds]);
+      const parents = await this.chromaDB.getHierarchicalChunks([...parentIds]);
       for (const parent of parents) {
         if (!seenIds.has(parent.id)) {
           expandedChunks.push({
@@ -232,10 +242,10 @@ export class RAGRetriever {
       }
     }
     
-    // Fetch sibling chunks (chunks sharing the same parent)
+    // Fetch sibling chunks (chunks sharing the same parent, use hierarchical collections)
     if (options.expandToSiblings && siblingParentIds.size > 0) {
       for (const parentId of siblingParentIds) {
-        const siblings = await this.chromaDB.getChunksByParentId(parentId);
+        const siblings = await this.chromaDB.getHierarchicalChunksByParentId(parentId);
         for (const sibling of siblings) {
           if (!seenIds.has(sibling.id)) {
             expandedChunks.push({
@@ -323,7 +333,8 @@ export class RAGRetriever {
     const query = typeNames.slice(0, 5).join(' '); // Limit to avoid too long query
     const { vector } = await this.embedding.embed(query);
     
-    const result = await this.chromaDB.queryChunks(vector, 5, filter);
+    // Use hierarchical query (Phase 3)
+    const result = await this.chromaDB.queryHierarchicalRaw(vector, 5, filter);
     return result.chunks;
   }
 

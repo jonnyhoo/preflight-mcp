@@ -152,7 +152,7 @@ function evaluateAnswer(
  * Run a single test question with and without IGP.
  * 
  * KEY INSIGHT: IGP's value is filtering irrelevant chunks from a LARGE corpus.
- * We use crossBundleMode: 'all' to retrieve from ALL 293 chunks across 7 papers,
+ * We use crossBundleMode: 'all' to retrieve from ALL indexed papers,
  * then IGP filters out chunks from unrelated papers.
  */
 async function runTest(
@@ -169,7 +169,7 @@ async function runTest(
   // Common options - retrieve from ALL bundles to test IGP's filtering ability
   const baseOptions: QueryOptions = {
     // Don't specify bundleId - let it search all bundles
-    crossBundleMode: 'all',  // Search all 293 chunks across 7 papers
+    crossBundleMode: 'all',  // Search all indexed papers
     mode: 'hybrid',
     topK: 30, // More chunks from larger corpus to give IGP room to filter
     enableContextCompletion: true,
@@ -369,14 +369,14 @@ async function main(): Promise<void> {
   const IGP_THRESHOLD = 0; // Tp=0: filter negative-utility chunks
   
   // Test ALL questions - the key is using crossBundleMode: 'all' in runTest()
-  // This retrieves from ALL 293 chunks across 7 papers, which is where IGP adds value
+  // This retrieves from ALL indexed papers, which is where IGP adds value
   // by filtering out chunks from irrelevant papers
   const testQuestions: TestQuestion[] = dataset.questions.filter(
     (q: any) => q.evaluationCriteria // Only questions with evaluation criteria
   );
   
   console.log(`Testing ${testQuestions.length} questions with crossBundleMode: 'all'`);
-  console.log(`Retrieval pool: 293 chunks across 7 papers`);
+  console.log(`Retrieval pool: All indexed papers (L1: 9, L2: 504, L3: 126)`);
   console.log(`IGP Configuration: strategy=threshold, Tp=${IGP_THRESHOLD} (filter IG < 0)\n`);
   
   // Run tests
@@ -427,7 +427,7 @@ async function main(): Promise<void> {
     metadata: {
       testDate: new Date().toISOString(),
       phase: 'Phase 2.5 - IGP Evaluation (Cross-Bundle)',
-      testMode: 'crossBundleMode: all (293 chunks, 7 papers)',
+      testMode: 'crossBundleMode: all',
       igpStrategy: 'threshold',
       igpThreshold: IGP_THRESHOLD,
       questionsTotal: testQuestions.length,
