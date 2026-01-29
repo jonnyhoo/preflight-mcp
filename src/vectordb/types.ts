@@ -47,7 +47,7 @@ export type LegacyCollectionType = 'chunks' | 'entities' | 'relations';
 
 export type ChunkType = 'text' | 'heading' | 'table' | 'figure' | 'formula' | 'code' | 'list' | 'summary' | 'api';
 
-export type SourceType = 'repocard' | 'readme' | 'overview' | 'pdf_text' | 'pdf_table' | 'pdf_formula' | 'pdf_image';
+export type SourceType = 'repocard' | 'readme' | 'overview' | 'pdf_text' | 'pdf_table' | 'pdf_formula' | 'pdf_image' | 'code';
 
 export interface ChunkMetadata {
   sourceType: SourceType;
@@ -87,6 +87,24 @@ export interface ChunkMetadata {
   granularity?: 'section' | 'subsection' | 'paragraph' | 'element';
   /** Asset ID for figures (image filename, for traceability after bundle deletion) */
   assetId?: string;
+  
+  // Code-specific metadata (for code indexing)
+  /** Programming language (e.g., 'typescript', 'python', 'go') */
+  language?: string;
+  /** Symbol name (function/method/class name) */
+  symbolName?: string;
+  /** Symbol kind (function, method, class, etc.) */
+  symbolKind?: 'class' | 'interface' | 'function' | 'method' | 'enum' | 'type';
+  /** Parent symbol (class name for methods) */
+  parentSymbol?: string;
+  /** Importance score (0-1) for prioritization */
+  importance?: number;
+  /** Whether the symbol is exported/public */
+  isExported?: boolean;
+  /** Start line in source file */
+  startLine?: number;
+  /** End line in source file */
+  endLine?: number;
 }
 
 /**

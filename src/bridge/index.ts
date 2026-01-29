@@ -17,6 +17,8 @@ import {
 import { bridgePdfMarkdown } from './markdown-bridge.js';
 import { preprocessPdfMarkdown } from '../rag/pdf-preprocessor.js';
 import { extractArxivCategory } from '../bundle/content-id.js';
+import { classifyBundleRepo } from '../bundle/repo-classifier.js';
+import { bridgeCodeFiles } from './code-bridge.js';
 import { createModuleLogger } from '../logging/logger.js';
 
 const logger = createModuleLogger('bridge');
@@ -61,13 +63,42 @@ export {
   bridgeWebMarkdown,
 } from './markdown-bridge.js';
 
+// Code bridge
+export type {
+  CodeBridgeOptions,
+  CodeBridgeResult,
+} from './code-bridge.js';
+
+export {
+  bridgeCodeFiles,
+  bridgeCodeFile,
+} from './code-bridge.js';
+
+// Repo classifier
+export type {
+  RepoType,
+  RepoClassification,
+} from '../bundle/repo-classifier.js';
+
+export {
+  classifyRepo,
+  classifyBundleRepo,
+  isCodeBundle,
+  isDocumentationBundle,
+} from '../bundle/repo-classifier.js';
+
 // ============================================================================
 // Unified Bridge Interface
 // ============================================================================
 
 /**
  * Index a bundle to ChromaDB.
- * Processes all indexable files (OVERVIEW.md, CARD.json, README.md).
+ * Processes all indexable files (OVERVIEW.md, CARD.json, README.md, code files).
+ * 
+ * Indexing strategy based on repo classification:
+ * - Code repos: L1_repo (CARD) + L2_code (functions/classes)
+ * - Documentation repos: L1_doc (overview) + L2_section (markdown sections)
+ * - Hybrid repos: Both strategies
  */
 export async function indexBundle(
   bundlePath: string,
@@ -132,6 +163,33 @@ export async function indexBundle(
         logger.info(`Indexed ${repo.repoId} README.md: ${result.chunksWritten} chunks`);
       } catch (err) {
         const msg = `Failed to index ${repo.repoId} README.md: ${err}`;
+        logger.error(msg);
+        totalResult.errors.push(msg);
+      }
+    }
+
+    // Index code files (for github/local repos)
+    if (repo.kind === 'github' || repo.kind === 'local') {
+      try {
+        // Classify the repo to determine indexing strategy
+        const classification = await classifyBundleRepo(bundlePath, repo.repoId);
+        logger.info(`Repo ${repo.repoId} classified as ${classification.type} (code ratio: ${classification.codeRatio.toFixed(2)})`);
+        
+        // Index code for code and hybrid repos
+        if (classification.type === 'code' || classification.type === 'hybrid') {
+          const repoPath = path.join(bundlePath, 'repos', repo.repoId);
+          const { chunks, result } = await bridgeCodeFiles(
+            repoPath,
+            bundleId,
+            repo.repoId,
+            options
+          );
+          allChunks.push(...chunks);
+          mergeResults(totalResult, result);
+          logger.info(`Indexed ${repo.repoId} code: ${result.chunksWritten} chunks (${result.symbolsIndexed} symbols)`);
+        }
+      } catch (err) {
+        const msg = `Failed to index ${repo.repoId} code: ${err}`;
         logger.error(msg);
         totalResult.errors.push(msg);
       }
@@ -275,8 +333,8 @@ function getL1ContentType(chunk: ChunkDocument): 'pdf' | 'repo' | 'doc' | 'memor
     return 'pdf';
   }
   
-  // Code repositories
-  if (sourceType === 'repocard' || sourceType === 'readme') {
+  // Code repositories (including code chunks)
+  if (sourceType === 'repocard' || sourceType === 'readme' || sourceType === 'code') {
     return 'repo';
   }
   
@@ -336,10 +394,16 @@ function getCollectionLevel(chunk: ChunkDocument): CollectionLevel {
   // L2: Section-level content
   // - Explicit section granularity
   // - Top-level headings (h1, h2) in PDF
+  // - Code chunks (functions, classes, methods)
   if (
     granularity === 'section' ||
     (sourceType === 'pdf_text' && headingLevel && headingLevel <= 2)
   ) {
+    return 'l2_section';
+  }
+  
+  // Code chunks go to L2_section (they represent logical units like functions/classes)
+  if (sourceType === 'code') {
     return 'l2_section';
   }
   
