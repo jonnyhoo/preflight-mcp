@@ -65,6 +65,8 @@ export interface ChunkMetadata {
   paperId?: string;
   /** Paper version (e.g., 'v1', 'v2') */
   paperVersion?: string;
+  /** Paper title extracted from PDF */
+  paperTitle?: string;
   /** arXiv category (e.g., 'cs.AI', 'cs.CL', 'stat.ML') */
   arxivCategory?: string;
   /** Collection level for hierarchical retrieval */

@@ -16,7 +16,7 @@ import {
 } from './repocard-bridge.js';
 import { bridgePdfMarkdown } from './markdown-bridge.js';
 import { preprocessPdfMarkdown } from '../rag/pdf-preprocessor.js';
-import { extractArxivCategory } from '../bundle/content-id.js';
+import { extractArxivCategory, extractPaperTitle } from '../bundle/content-id.js';
 import { classifyBundleRepo } from '../bundle/repo-classifier.js';
 import { bridgeCodeFiles } from './code-bridge.js';
 import { createModuleLogger } from '../logging/logger.js';
@@ -246,6 +246,15 @@ export async function indexBundle(
         if (categoryInfo.primary) {
           logger.info(`Extracted arXiv category: ${categoryInfo.primary} (all: ${categoryInfo.all.join(', ')})`);
         }
+        
+        // Extract paper title from PDF (if not already set via options)
+        if (!options.paperTitle) {
+          const extractedTitle = extractPaperTitle(pdfMarkdown);
+          if (extractedTitle) {
+            options.paperTitle = extractedTitle;
+            logger.info(`Extracted paper title: ${extractedTitle.slice(0, 60)}...`);
+          }
+        }
 
         const pdfResult = await bridgePdfMarkdown(
           {
@@ -285,7 +294,7 @@ export async function indexBundle(
     }
   }
 
-  // Add contentHash, paperId, paperVersion to all chunk metadata (for deduplication)
+  // Add contentHash, paperId, paperVersion, paperTitle to all chunk metadata (for deduplication)
   if (options.contentHash || options.paperId) {
     for (const chunk of allChunks) {
       if (options.contentHash) {
@@ -296,6 +305,9 @@ export async function indexBundle(
       }
       if (options.paperVersion) {
         chunk.metadata.paperVersion = options.paperVersion;
+      }
+      if (options.paperTitle) {
+        chunk.metadata.paperTitle = options.paperTitle;
       }
     }
   }

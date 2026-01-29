@@ -155,6 +155,18 @@ export class RAGEngine {
             paperId = `name:${inputRepo.name}`;
           }
         }
+        
+        // Fallback: extract from local PDF path filename (e.g., "2601.19792v1.pdf")
+        if (!paperId) {
+          const inputRepoWithPath = manifest.inputs?.repos?.[0] as { path?: string } | undefined;
+          if (inputRepoWithPath?.path) {
+            const paperInfo = extractPaperId(inputRepoWithPath.path);
+            if (paperInfo.paperId) {
+              paperId = paperInfo.paperId;
+              paperVersion = paperInfo.version;
+            }
+          }
+        }
       }
 
       // Determine if this is PDF content (based on paperId or URL patterns)

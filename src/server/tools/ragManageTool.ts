@@ -78,29 +78,85 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
 
         switch (action) {
           case 'list': {
-            // Use hierarchical index (Phase 3)
+            // Use hierarchical index (Phase 3) - now uses contentHash/bundleId as primary key
             const items = await chromaDB.listHierarchicalContent();
             structuredContent.items = items;
 
-            textResponse += `📋 Indexed Papers (${items.length} papers)\n\n`;
+            // Categorize by type (from L1 collection)
+            const papers = items.filter(i => i.type === 'pdf' || i.type === 'doc');
+            const repos = items.filter(i => i.type === 'repo');
+
+            textResponse += `📋 Indexed Content (${items.length} total)\n\n`;
             if (items.length === 0) {
-              textResponse += 'No papers indexed yet.\n';
+              textResponse += 'No content indexed yet.\n';
             } else {
-              for (const item of items) {
-                textResponse += `• ${item.paperId}${item.paperVersion ? ` (${item.paperVersion})` : ''}\n`;
-                textResponse += `  L1: ${item.l1Count} | L2: ${item.l2Count} | L3: ${item.l3Count} (total: ${item.totalChunks})\n`;
-                if (item.bundleId) {
-                  textResponse += `  bundleId: ${item.bundleId}\n`;
+              if (papers.length > 0) {
+                textResponse += `**📄 Papers (${papers.length}):**\n`;
+                for (const item of papers) {
+                  // Display: paperId if available, otherwise contentHash
+                  let displayName = item.paperId;
+                  if (!displayName && item.contentHash) {
+                    displayName = `[hash:${item.contentHash.slice(0, 12)}...]`;
+                  }
+                  if (!displayName) {
+                    displayName = item.id;
+                  }
+                  // Remove 'name:' prefix for cleaner display
+                  if (displayName.startsWith('name:')) {
+                    displayName = displayName.slice(5);
+                  }
+                  const hasCode = item.sourceTypes.includes('l1_repo');
+                  const missingPaperId = !item.paperId;
+                  textResponse += `• ${displayName}${item.paperVersion ? ` (${item.paperVersion})` : ''}${hasCode ? ' 💻' : ''}${missingPaperId ? ' ⚠️' : ''}\n`;
+                  // Show paper title if available
+                  if (item.paperTitle) {
+                    // Truncate long titles
+                    const title = item.paperTitle.length > 70 
+                      ? item.paperTitle.slice(0, 67) + '...' 
+                      : item.paperTitle;
+                    textResponse += `  📝 ${title}\n`;
+                  }
+                  textResponse += `  L1: ${item.l1Count} | L2: ${item.l2Count} | L3: ${item.l3Count} (total: ${item.totalChunks})\n`;
+                  if (item.contentHash) {
+                    textResponse += `  hash: ${item.contentHash.slice(0, 12)}...\n`;
+                  }
+                  if (item.bundleId) {
+                    textResponse += `  bundleId: ${item.bundleId}\n`;
+                  }
                 }
+                textResponse += `\n`;
+              }
+              if (repos.length > 0) {
+                textResponse += `**📦 Repos (${repos.length}):**\n`;
+                for (const item of repos) {
+                  const displayName = item.paperId ?? item.bundleId ?? item.id;
+                  textResponse += `• ${displayName}\n`;
+                  textResponse += `  L1: ${item.l1Count} | L2: ${item.l2Count} | L3: ${item.l3Count} (total: ${item.totalChunks})\n`;
+                  if (item.bundleId) {
+                    textResponse += `  bundleId: ${item.bundleId}\n`;
+                  }
+                }
+              }
+              // Warning for items missing paperId
+              const missingPaperId = items.filter(i => !i.paperId);
+              if (missingPaperId.length > 0) {
+                textResponse += `\n⚠️ ${missingPaperId.length} item(s) missing paperId (marked with ⚠️)\n`;
               }
             }
             break;
           }
 
           case 'stats': {
-            // Use hierarchical stats (Phase 3)
+            // Use hierarchical stats for level counts
             const stats = await chromaDB.getHierarchicalStats();
+            // Use content list for accurate item counts (uses contentHash as key)
+            const contentList = await chromaDB.listHierarchicalContent();
             structuredContent.stats = stats;
+            structuredContent.contentList = contentList;
+
+            // Categorize by type
+            const papers = contentList.filter(i => i.type === 'pdf' || i.type === 'doc');
+            const repos = contentList.filter(i => i.type === 'repo');
 
             textResponse += `📊 RAG Statistics (Hierarchical)\n\n`;
             textResponse += `Total documents: ${stats.totalChunks}\n\n`;
@@ -108,10 +164,31 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
             for (const [level, count] of Object.entries(stats.byLevel)) {
               textResponse += `  • ${level}: ${count}\n`;
             }
-            if (stats.byPaperId.length > 0) {
-              textResponse += `\nBy Paper ID (${stats.byPaperId.length} papers):\n`;
-              for (const item of stats.byPaperId) {
-                textResponse += `  • ${item.paperId}: ${item.chunkCount} L1 docs\n`;
+            if (papers.length > 0) {
+              const withPaperId = papers.filter(p => p.paperId).length;
+              const missingPaperId = papers.length - withPaperId;
+              textResponse += `\n📄 Papers (${papers.length}${missingPaperId > 0 ? `, ${missingPaperId} missing paperId` : ''}):\n`;
+              for (const item of papers) {
+                let displayName = item.paperId;
+                if (!displayName && item.contentHash) {
+                  displayName = `[hash:${item.contentHash.slice(0, 12)}...]`;
+                }
+                if (!displayName) {
+                  displayName = item.id;
+                }
+                if (displayName.startsWith('name:')) {
+                  displayName = displayName.slice(5);
+                }
+                const hasCode = item.sourceTypes.includes('l1_repo');
+                const missingId = !item.paperId;
+                textResponse += `  • ${displayName}${hasCode ? ' 💻' : ''}${missingId ? ' ⚠️' : ''}: ${item.l1Count} L1 docs\n`;
+              }
+            }
+            if (repos.length > 0) {
+              textResponse += `\n📦 Repos (${repos.length}):\n`;
+              for (const item of repos) {
+                const displayName = item.paperId ?? item.bundleId ?? item.id;
+                textResponse += `  • ${displayName}: ${item.l1Count} L1 docs\n`;
               }
             }
             break;
@@ -263,24 +340,50 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
           }
 
           case 'delete_all': {
-            // Use hierarchical listing and deletion (Phase 3)
-            const items = await chromaDB.listHierarchicalContent();
-            if (items.length === 0) {
+            // Drop all hierarchical collections to truly delete everything
+            const collectionsToDelete = [
+              'preflight_rag_l1_pdf',
+              'preflight_rag_l1_doc', 
+              'preflight_rag_l1_repo',
+              'preflight_rag_l1_web',
+              'preflight_rag_l1_memory',
+              'preflight_rag_l2_section',
+              'preflight_rag_l3_chunk',
+            ];
+            
+            const basePath = `/api/v2/tenants/default_tenant/databases/default_database`;
+            let totalDeleted = 0;
+            let collectionsDeleted = 0;
+            
+            for (const colName of collectionsToDelete) {
+              try {
+                // Get count before dropping
+                const countBefore = await chromaDB.getCollectionCount(colName);
+                if (countBefore === 0) continue;
+                
+                // Drop the collection
+                const deleteResponse = await fetch(`${cfg.chromaUrl}${basePath}/collections/${colName}`, {
+                  method: 'DELETE',
+                });
+                
+                if (deleteResponse.ok) {
+                  totalDeleted += countBefore;
+                  collectionsDeleted++;
+                }
+              } catch {
+                // Collection doesn't exist, skip
+              }
+            }
+            
+            if (totalDeleted === 0) {
               textResponse += '⚠️ No content to delete.\n';
               structuredContent.deleted = false;
               structuredContent.deletedChunks = 0;
             } else {
-              let totalDeleted = 0;
-              for (const item of items) {
-                if (item.contentHash) {
-                  const count = await chromaDB.deleteByContentHashHierarchical(item.contentHash);
-                  totalDeleted += count;
-                }
-              }
-              textResponse += `🗑️ Deleted all content: ${totalDeleted} chunks from ${items.length} documents\n`;
+              textResponse += `🗑️ Deleted all content: ${totalDeleted} documents from ${collectionsDeleted} collections\n`;
               structuredContent.deleted = true;
               structuredContent.deletedChunks = totalDeleted;
-              structuredContent.deletedDocuments = items.length;
+              structuredContent.collectionsDeleted = collectionsDeleted;
             }
             break;
           }
@@ -616,13 +719,22 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
 
               textResponse += `🔬 Batch Index Quality Diagnosis (${items.length}/${allItems.length} papers)${hasMore ? ' [limited]' : ''}\n\n`;
               
-              const results: Array<{ paperId: string; score: number; grade: string; issues: string[] }> = [];
+              const results: Array<{ id: string; paperId?: string; score: number; grade: string; issues: string[] }> = [];
               let totalScore = 0;
               let issueCount = 0;
 
               for (const item of items) {
                 const result = await diagnosePaper(item.paperId, item.bundleId);
+                // Use paperId if available, otherwise contentHash or id
+                let displayName = item.paperId;
+                if (!displayName && item.contentHash) {
+                  displayName = `[hash:${item.contentHash.slice(0, 12)}...]`;
+                }
+                if (!displayName) {
+                  displayName = item.id;
+                }
                 results.push({
+                  id: item.id,
                   paperId: item.paperId,
                   score: result.score,
                   grade: result.grade,
@@ -635,7 +747,8 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
                 const issueText = result.issues.length > 0 
                   ? ` - ${result.issues.slice(0, 2).join(', ')}${result.issues.length > 2 ? '...' : ''}`
                   : '';
-                textResponse += `${result.grade === 'A' ? '✅' : result.grade === 'B' ? '🟡' : '🔴'} ${item.paperId}: ${result.score}/100 (${result.grade})${issueText}\n`;
+                const missingPaperId = !item.paperId;
+                textResponse += `${result.grade === 'A' ? '✅' : result.grade === 'B' ? '🟡' : '🔴'} ${displayName}${missingPaperId ? ' ⚠️' : ''}: ${result.score}/100 (${result.grade})${issueText}\n`;
               }
 
               const avgScore = Math.round(totalScore / items.length);

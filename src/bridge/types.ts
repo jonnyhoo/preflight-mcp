@@ -73,6 +73,8 @@ export interface BridgeOptions {
   paperId?: string;
   /** Paper version (e.g., 'v1') */
   paperVersion?: string;
+  /** Paper title extracted from PDF */
+  paperTitle?: string;
 }
 
 export interface PdfIndexArtifact {

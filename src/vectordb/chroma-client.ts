@@ -419,30 +419,76 @@ export class ChromaVectorDB {
 
   /**
    * List indexed content from hierarchical collections.
-   * Returns unique papers with their L1/L2/L3 chunk counts.
+   * Uses contentHash (for PDF) or bundleId (for repo) as primary key - NOT paperId.
+   * This ensures we can see ALL indexed content, even if paperId is missing.
    */
   async listHierarchicalContent(): Promise<Array<{
-    paperId: string;
+    /** Primary identifier: contentHash for PDF, bundleId for repo */
+    id: string;
+    /** Content type: 'pdf' | 'repo' | 'doc' | 'web' | 'memory' */
+    type: string;
+    paperId?: string;
     paperVersion?: string;
+    paperTitle?: string;
     contentHash?: string;
     bundleId?: string;
     l1Count: number;
     l2Count: number;
     l3Count: number;
     totalChunks: number;
+    sourceTypes: string[];  // e.g., ['l1_pdf', 'l1_repo'] - which L1 collections contain this content
   }>> {
-    const paperMap = new Map<string, {
-      paperId: string;
+    // Use contentHash or bundleId as primary key (not paperId which may be missing)
+    const contentMap = new Map<string, {
+      id: string;
+      type: string;
+      paperId?: string;
       paperVersion?: string;
+      paperTitle?: string;
       contentHash?: string;
       bundleId?: string;
       l1Count: number;
       l2Count: number;
       l3Count: number;
+      sourceTypes: Set<string>;
     }>();
 
-    // Query L1 collections for paper list
-    for (const level of ['l1_pdf', 'l1_doc'] as CollectionLevel[]) {
+    // Helper to get primary key for content (must be stable for deduplication)
+    const getKey = (meta: Record<string, unknown>, level: string): string | null => {
+      const contentHash = meta?.contentHash as string;
+      const repoId = meta?.repoId as string;
+      
+      // For PDF: use contentHash (file content hash - stable)
+      if (level === 'l1_pdf' || level === 'l1_doc') {
+        if (contentHash) return `hash:${contentHash}`;
+      }
+      
+      // For repo: use repoId + contentHash (repoId = owner/repo, contentHash = commit hash)
+      // This ensures same repo + same version = same key
+      if (level === 'l1_repo') {
+        if (repoId && contentHash) {
+          return `repo:${repoId}@${contentHash.slice(0, 12)}`;
+        }
+        // Fallback: just repoId (same repo = same key, will overwrite different versions)
+        if (repoId) {
+          return `repo:${repoId}`;
+        }
+      }
+      
+      // Fallback chain: contentHash > repoId > paperId > bundleId
+      // Note: bundleId is NOT good for dedup as it changes every create
+      if (contentHash) return `hash:${contentHash}`;
+      if (repoId) return `repo:${repoId}`;
+      const paperId = meta?.paperId as string;
+      if (paperId) return `paper:${paperId}`;
+      // Last resort: bundleId (but warn this is bad for dedup)
+      const bundleId = meta?.bundleId as string;
+      if (bundleId) return `bundle:${bundleId}`;
+      return null;
+    };
+
+    // Query ALL L1 collections
+    for (const level of ['l1_pdf', 'l1_doc', 'l1_repo', 'l1_web', 'l1_memory'] as CollectionLevel[]) {
       try {
         const collection = await this.ensureHierarchicalCollection(level);
         const response = await this.request<ChromaGetResponse>(
@@ -453,21 +499,31 @@ export class ChromaVectorDB {
 
         for (const meta of response.metadatas ?? []) {
           const m = meta as Record<string, unknown>;
-          const paperId = m?.paperId as string;
-          if (!paperId) continue;
+          const key = getKey(m, level);
+          if (!key) continue;
 
-          const existing = paperMap.get(paperId);
+          const type = level.replace('l1_', '');
+          const existing = contentMap.get(key);
           if (existing) {
             existing.l1Count++;
+            existing.sourceTypes.add(level);
+            // Update paperTitle if not set (in case first chunk didn't have it)
+            if (!existing.paperTitle && m?.paperTitle) {
+              existing.paperTitle = m.paperTitle as string;
+            }
           } else {
-            paperMap.set(paperId, {
-              paperId,
+            contentMap.set(key, {
+              id: key,
+              type,
+              paperId: m?.paperId as string | undefined,
               paperVersion: m?.paperVersion as string | undefined,
+              paperTitle: m?.paperTitle as string | undefined,
               contentHash: m?.contentHash as string | undefined,
               bundleId: m?.bundleId as string | undefined,
               l1Count: 1,
               l2Count: 0,
               l3Count: 0,
+              sourceTypes: new Set([level]),
             });
           }
         }
@@ -476,7 +532,7 @@ export class ChromaVectorDB {
       }
     }
 
-    // Count L2/L3 chunks per paper
+    // Count L2/L3 chunks - use same key logic
     for (const [level, countKey] of [['l2_section', 'l2Count'], ['l3_chunk', 'l3Count']] as const) {
       try {
         const collection = await this.ensureHierarchicalCollection(level as CollectionLevel);
@@ -487,12 +543,25 @@ export class ChromaVectorDB {
         );
 
         for (const meta of response.metadatas ?? []) {
-          const paperId = (meta as Record<string, unknown>)?.paperId as string;
-          if (!paperId) continue;
-
-          const existing = paperMap.get(paperId);
-          if (existing) {
-            (existing as any)[countKey]++;
+          const m = meta as Record<string, unknown>;
+          // Try to find matching content by contentHash or bundleId
+          const hash = m?.contentHash as string;
+          const bundleId = m?.bundleId as string;
+          const paperId = m?.paperId as string;
+          
+          // Try each possible key
+          const possibleKeys = [
+            hash ? `hash:${hash}` : null,
+            bundleId ? `bundle:${bundleId}` : null,
+            paperId ? `paper:${paperId}` : null,
+          ].filter(Boolean) as string[];
+          
+          for (const key of possibleKeys) {
+            const existing = contentMap.get(key);
+            if (existing) {
+              (existing as any)[countKey]++;
+              break; // Only count once
+            }
           }
         }
       } catch {
@@ -500,9 +569,19 @@ export class ChromaVectorDB {
       }
     }
 
-    return Array.from(paperMap.values()).map(p => ({
-      ...p,
+    return Array.from(contentMap.values()).map(p => ({
+      id: p.id,
+      type: p.type,
+      paperId: p.paperId,
+      paperVersion: p.paperVersion,
+      paperTitle: p.paperTitle,
+      contentHash: p.contentHash,
+      bundleId: p.bundleId,
+      l1Count: p.l1Count,
+      l2Count: p.l2Count,
+      l3Count: p.l3Count,
       totalChunks: p.l1Count + p.l2Count + p.l3Count,
+      sourceTypes: Array.from(p.sourceTypes),
     }));
   }
 

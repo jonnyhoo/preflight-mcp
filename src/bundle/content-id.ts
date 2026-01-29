@@ -245,3 +245,56 @@ function isValidArxivCategory(cat: string): boolean {
   const pattern = /^[a-z]+(-[a-z]+)?\.[A-Z]{2,4}$/;
   return pattern.test(cat);
 }
+
+// ============================================================================
+// Paper Title Extraction
+// ============================================================================
+
+/**
+ * Extract paper title from PDF markdown content.
+ * 
+ * Searches for the first meaningful H1 heading (# Title).
+ * Skips generic headings like "PDF Document" or "Abstract".
+ * 
+ * @param markdown - PDF markdown content
+ * @returns Paper title or undefined if not found
+ * 
+ * @example
+ * ```typescript
+ * extractPaperTitle('# PDF Document\n> Source: ...\n---\n# VERI-SURE: A Framework...\n...')
+ * // => 'VERI-SURE: A Framework...'
+ * ```
+ */
+export function extractPaperTitle(markdown: string): string | undefined {
+  if (!markdown) return undefined;
+  
+  // Search first ~3000 chars for title
+  const firstPart = markdown.slice(0, 3000);
+  
+  // Find all H1 headings
+  const h1Matches = firstPart.matchAll(/^# (.+)$/gm);
+  
+  // Skip generic headings
+  const skipPatterns = [
+    /^PDF Document$/i,
+    /^Abstract$/i,
+    /^Summary$/i,
+    /^Overview$/i,
+    /^Table of Contents$/i,
+    /^Contents$/i,
+  ];
+  
+  for (const match of h1Matches) {
+    const title = match[1]?.trim();
+    if (!title) continue;
+    
+    // Skip generic headings
+    const isGeneric = skipPatterns.some(p => p.test(title));
+    if (isGeneric) continue;
+    
+    // Found a real title
+    return title;
+  }
+  
+  return undefined;
+}
