@@ -6,8 +6,6 @@
 
 import { ChromaVectorDB } from '../vectordb/chroma-client.js';
 import { indexBundle as bridgeIndexBundle } from '../bridge/index.js';
-import { buildAstGraph } from '../kg/ast-graph-builder.js';
-import { KGStorage } from '../kg/storage.js';
 import { RAGRetriever } from './retriever.js';
 import { RAGGenerator } from './generator.js';
 import { ContextCompleter } from './context-completer.js';
@@ -56,7 +54,6 @@ export class RAGEngine {
   private chromaDB: ChromaVectorDB;
   private embedding: RAGConfig['embedding'];
   private llm: RAGConfig['llm'];
-  private kgStorage: KGStorage;
   private retriever: RAGRetriever;
   private hierarchicalRetriever: HierarchicalRetriever;
   private generator: RAGGenerator;
@@ -66,8 +63,7 @@ export class RAGEngine {
     this.chromaDB = new ChromaVectorDB({ url: config.chromaUrl });
     this.embedding = config.embedding;
     this.llm = config.llm;
-    this.kgStorage = new KGStorage();
-    this.retriever = new RAGRetriever(this.chromaDB, this.embedding, this.kgStorage);
+    this.retriever = new RAGRetriever(this.chromaDB, this.embedding);
     this.hierarchicalRetriever = new HierarchicalRetriever(this.chromaDB, this.embedding);
     this.generator = new RAGGenerator(this.llm);
     this.contextCompleter = new ContextCompleter({
@@ -255,24 +251,7 @@ export class RAGEngine {
         }
       }
 
-      // 2. KG: Build AST graph for code repos
-      logger.info(`Building AST graph...`);
-      const graphResult = await buildAstGraph(bundlePath);
-      
-      if (graphResult.graph.nodes.size > 0) {
-        // Load into KGStorage for retrieval
-        this.kgStorage.loadGraph(graphResult.graph);
-        const stats = this.kgStorage.getStats();
-        entitiesCount = stats.nodeCount;
-        relationsCount = stats.edgeCount;
-
-        // Store AST graph to ChromaDB (as JSON, no embedding needed)
-        const graphJson = this.kgStorage.toJSON();
-        await this.chromaDB.storeAstGraph(bundleId, graphJson);
-        logger.info(`Stored AST graph: ${entitiesCount} nodes, ${relationsCount} edges`);
-      }
-
-      errors.push(...graphResult.errors);
+      // Note: AST graph storage removed - code symbols are now directly vectorized
     } catch (err) {
       const msg = `Index failed: ${err}`;
       logger.error(msg);
@@ -293,34 +272,12 @@ export class RAGEngine {
   }
 
   /**
-   * Load AST graph from ChromaDB for a bundle.
-   * Call this before querying if the graph wasn't built in current session.
-   */
-  async loadAstGraph(bundleId: string): Promise<boolean> {
-    try {
-      const graphJson = await this.chromaDB.loadAstGraph(bundleId);
-      if (graphJson) {
-        this.kgStorage = KGStorage.fromJSON(graphJson);
-        // Update retriever with loaded KG
-        this.retriever = new RAGRetriever(this.chromaDB, this.embedding, this.kgStorage);
-        const stats = this.kgStorage.getStats();
-        logger.info(`Loaded AST graph: ${stats.nodeCount} nodes, ${stats.edgeCount} edges`);
-        return true;
-      }
-      return false;
-    } catch (err) {
-      logger.warn(`Failed to load AST graph: ${err}`);
-      return false;
-    }
-  }
-
-  /**
    * Query the RAG system.
    */
   async query(question: string, options?: QueryOptions): Promise<QueryResult> {
     const startTime = Date.now();
     const opts = {
-      mode: options?.mode ?? 'hybrid',
+      mode: options?.mode ?? 'naive', // Default to naive since KG graph expansion removed
       topK: options?.topK ?? 10,
       enableContextCompletion: options?.enableContextCompletion ?? true,
       maxHops: options?.maxHops ?? 2,
@@ -329,11 +286,6 @@ export class RAGEngine {
       expandToParent: options?.expandToParent ?? false,
       expandToSiblings: options?.expandToSiblings ?? false,
     };
-
-    // If KG is empty and bundleId provided, try to load from ChromaDB
-    if (this.kgStorage.getStats().nodeCount === 0 && options?.bundleId) {
-      await this.loadAstGraph(options.bundleId);
-    }
 
     // Build filter (Phase 1: Cross-bundle support)
     let filter: { bundleId?: string; bundleIds?: string[]; repoId?: string } | undefined;

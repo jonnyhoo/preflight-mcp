@@ -210,11 +210,6 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
           const llmType = useVerifierLlm ? 'verifier' : 'main';
           logger.info(`Querying: "${question}" (mode: ${mode ?? 'hybrid'}, llm: ${llmType}/${llmModel})`);
 
-          // Try to load AST graph if not indexing in same call (only for single bundle mode)
-          if (!index && bundleId) {
-            await engine.loadAstGraph(bundleId);
-          }
-
           // High-quality defaults (as per plan - don't add new config items, just use best quality)
           const result = await engine.query(question, {
             mode: (mode as QueryMode) ?? 'hybrid',

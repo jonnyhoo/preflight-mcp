@@ -30,6 +30,3 @@ export {
   sortByImportance,
   applyQuota,
 } from './code-filter.js';
-
-// Storage
-export { KGStorage } from './storage.js';

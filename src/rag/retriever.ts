@@ -1,13 +1,14 @@
 /**
- * RAG Retriever - Multi-mode retrieval with graph expansion.
- * Based on Reliable Graph-RAG paper.
+ * RAG Retriever - Vector similarity search for code and documents.
+ * 
+ * Note: KG graph expansion removed - code symbols are now directly vectorized.
+ * All modes (naive/local/hybrid) now use pure vector similarity search.
  * 
  * @module rag/retriever
  */
 
 import type { ChromaVectorDB } from '../vectordb/chroma-client.js';
 import type { ChunkDocument, QueryFilter } from '../vectordb/types.js';
-import type { KGStorage } from '../kg/storage.js';
 import type { RetrieveResult, QueryMode, RAGConfig } from './types.js';
 import { createModuleLogger } from '../logging/logger.js';
 
@@ -19,17 +20,14 @@ const logger = createModuleLogger('rag-retriever');
 
 export class RAGRetriever {
   private chromaDB: ChromaVectorDB;
-  private kgStorage: KGStorage | null;
   private embedding: RAGConfig['embedding'];
 
   constructor(
     chromaDB: ChromaVectorDB,
     embedding: RAGConfig['embedding'],
-    kgStorage?: KGStorage
   ) {
     this.chromaDB = chromaDB;
     this.embedding = embedding;
-    this.kgStorage = kgStorage ?? null;
   }
 
   /**
@@ -59,106 +57,27 @@ export class RAGRetriever {
   }
 
   /**
-   * Local retrieval: Vector search + entity neighbor expansion.
+   * Local retrieval: Now same as naive (KG graph expansion removed).
+   * @deprecated Use naiveRetrieve directly
    */
   async localRetrieve(
     query: string,
     topK: number,
     filter?: QueryFilter
   ): Promise<RetrieveResult> {
-    // First, do naive retrieval
-    const naiveResult = await this.naiveRetrieve(query, topK, filter);
-
-    if (!this.kgStorage) {
-      return naiveResult;
-    }
-
-    // Extract symbol names from chunks (code chunks use metadata, others use pattern matching)
-    const mentionedSymbols = this.extractMentionedSymbols(naiveResult.chunks);
-    
-    if (mentionedSymbols.length === 0) {
-      return naiveResult;
-    }
-
-    // Get 1-hop neighbors for each mentioned symbol
-    const expandedTypes = new Set<string>();
-    for (const symbolName of mentionedSymbols) {
-      const neighbors = this.kgStorage.getNeighbors(symbolName, 1);
-      neighbors.forEach(n => expandedTypes.add(n.name));
-    }
-
-    // Get chunks related to expanded types
-    const expandedChunks = await this.getChunksByTypes([...expandedTypes], filter);
-
-    // Merge and deduplicate
-    const merged = this.mergeChunks(naiveResult.chunks, expandedChunks);
-
-    return {
-      chunks: merged,
-      expandedTypes: [...expandedTypes],
-    };
+    return this.naiveRetrieve(query, topK, filter);
   }
 
   /**
-   * Hybrid retrieval: Vector + bidirectional graph traversal + InterfaceConsumerExpand.
-   * This is the core algorithm from the paper.
+   * Hybrid retrieval: Now same as naive (KG graph expansion removed).
+   * @deprecated Use naiveRetrieve directly
    */
   async hybridRetrieve(
     query: string,
     topK: number,
     filter?: QueryFilter
   ): Promise<RetrieveResult> {
-    // 1. Vector retrieval for initial chunks
-    const naiveResult = await this.naiveRetrieve(query, topK, filter);
-
-    if (!this.kgStorage) {
-      return naiveResult;
-    }
-
-    // 2. Extract symbol names from chunks (code chunks use metadata, others use pattern matching)
-    const mentionedSymbols = this.extractMentionedSymbols(naiveResult.chunks);
-    
-    if (mentionedSymbols.length === 0) {
-      return naiveResult;
-    }
-
-    logger.debug(`Found ${mentionedSymbols.length} mentioned symbols: ${mentionedSymbols.join(', ')}`);
-
-    // 3. Bidirectional graph traversal
-    const expandedTypes = new Set<string>();
-    
-    for (const symbolName of mentionedSymbols) {
-      // Successors: what this symbol depends on
-      const successors = this.kgStorage.getSuccessors(symbolName, 1);
-      successors.forEach(n => expandedTypes.add(n.name));
-
-      // Predecessors: what depends on this symbol
-      const predecessors = this.kgStorage.getPredecessors(symbolName, 1);
-      predecessors.forEach(n => expandedTypes.add(n.name));
-    }
-
-    // 4. InterfaceConsumerExpand: If mentioned symbol is interface, expand to implementors
-    for (const symbolName of mentionedSymbols) {
-      const node = this.kgStorage.getNode(symbolName);
-      if (node?.kind === 'interface') {
-        const implementors = this.kgStorage.getImplementors(symbolName);
-        implementors.forEach(n => expandedTypes.add(n.name));
-        logger.debug(`Interface ${symbolName} has ${implementors.length} implementors`);
-      }
-    }
-
-    logger.debug(`Graph expansion found ${expandedTypes.size} related types`);
-
-    // 5. Get chunks for expanded types
-    const expandedChunks = await this.getChunksByTypes([...expandedTypes], filter);
-
-    // 6. Rank and merge results
-    const merged = this.rankAndMerge(naiveResult.chunks, expandedChunks, topK);
-
-    return {
-      chunks: merged,
-      expandedTypes: [...expandedTypes],
-    };
+    return this.naiveRetrieve(query, topK, filter);
   }
 
   /**
@@ -265,151 +184,4 @@ export class RAGRetriever {
     };
   }
 
-  // --------------------------------------------------------------------------
-  // Helper Methods
-  // --------------------------------------------------------------------------
-
-  /**
-   * Extract symbol names mentioned in chunks.
-   * 
-   * For code chunks (sourceType: 'code'), extracts symbols directly from metadata.
-   * For other chunks, uses pattern matching to find type references.
-   * 
-   * @returns Array of symbol names that exist in the KG
-   */
-  private extractMentionedSymbols(
-    chunks: Array<ChunkDocument & { score: number }>
-  ): string[] {
-    if (!this.kgStorage) return [];
-
-    const mentioned = new Set<string>();
-    const knownSymbols = new Set(this.kgStorage.getAllNodes().map(n => n.name));
-
-    for (const chunk of chunks) {
-      // Code chunks: extract symbols directly from metadata (高优先级)
-      if (chunk.metadata.sourceType === 'code') {
-        // Symbol name (function/method/class name)
-        if (chunk.metadata.symbolName && knownSymbols.has(chunk.metadata.symbolName)) {
-          mentioned.add(chunk.metadata.symbolName);
-        }
-        // Parent symbol (class name for methods)
-        if (chunk.metadata.parentSymbol && knownSymbols.has(chunk.metadata.parentSymbol)) {
-          mentioned.add(chunk.metadata.parentSymbol);
-        }
-        continue; // 代码 chunk 不需要文本匹配
-      }
-
-      // Non-code chunks: use pattern matching (README, documentation, etc.)
-      const content = chunk.content;
-      
-      // Pattern 1: Backtick-wrapped identifiers: `TypeName` or `functionName`
-      const backtickMatches = content.match(/`([A-Za-z_][A-Za-z0-9_]*)`/g);
-      if (backtickMatches) {
-        for (const match of backtickMatches) {
-          const name = match.slice(1, -1);
-          if (knownSymbols.has(name)) {
-            mentioned.add(name);
-          }
-        }
-      }
-
-      // Pattern 2: PascalCase words (likely class/interface names)
-      const pascalMatches = content.match(/\b[A-Z][a-z]+(?:[A-Z][a-z]+)+\b/g);
-      if (pascalMatches) {
-        for (const name of pascalMatches) {
-          if (knownSymbols.has(name)) {
-            mentioned.add(name);
-          }
-        }
-      }
-
-      // Pattern 3: Code blocks might have class/function definitions
-      const classMatches = content.match(/class\s+([A-Z][a-zA-Z0-9_]*)/g);
-      if (classMatches) {
-        for (const match of classMatches) {
-          const name = match.replace('class ', '');
-          if (knownSymbols.has(name)) {
-            mentioned.add(name);
-          }
-        }
-      }
-      
-      // Pattern 4: function/method definitions
-      const funcMatches = content.match(/(?:function|def|func)\s+([a-zA-Z_][a-zA-Z0-9_]*)/g);
-      if (funcMatches) {
-        for (const match of funcMatches) {
-          const name = match.replace(/^(?:function|def|func)\s+/, '');
-          if (knownSymbols.has(name)) {
-            mentioned.add(name);
-          }
-        }
-      }
-    }
-
-    return [...mentioned];
-  }
-
-  /**
-   * Get chunks related to specific types by searching for type names.
-   */
-  private async getChunksByTypes(
-    typeNames: string[],
-    filter?: QueryFilter
-  ): Promise<Array<ChunkDocument & { score: number }>> {
-    if (typeNames.length === 0) return [];
-
-    // Create a query from type names
-    const query = typeNames.slice(0, 5).join(' '); // Limit to avoid too long query
-    const { vector } = await this.embedding.embed(query);
-    
-    // Use hierarchical query (Phase 3)
-    const result = await this.chromaDB.queryHierarchicalRaw(vector, 5, filter);
-    return result.chunks;
-  }
-
-  /**
-   * Simple merge of two chunk arrays, deduplicating by ID.
-   */
-  private mergeChunks(
-    primary: Array<ChunkDocument & { score: number }>,
-    secondary: Array<ChunkDocument & { score: number }>
-  ): Array<ChunkDocument & { score: number }> {
-    const seen = new Set<string>();
-    const result: Array<ChunkDocument & { score: number }> = [];
-
-    for (const chunk of primary) {
-      if (!seen.has(chunk.id)) {
-        seen.add(chunk.id);
-        result.push(chunk);
-      }
-    }
-
-    for (const chunk of secondary) {
-      if (!seen.has(chunk.id)) {
-        seen.add(chunk.id);
-        result.push(chunk);
-      }
-    }
-
-    return result;
-  }
-
-  /**
-   * Rank and merge chunks, keeping top K.
-   */
-  private rankAndMerge(
-    primary: Array<ChunkDocument & { score: number }>,
-    expanded: Array<ChunkDocument & { score: number }>,
-    topK: number
-  ): Array<ChunkDocument & { score: number }> {
-    // Boost primary results slightly
-    const boosted = primary.map(c => ({ ...c, score: c.score * 1.1 }));
-    
-    // Merge
-    const merged = this.mergeChunks(boosted, expanded);
-    
-    // Sort by score and take top K
-    merged.sort((a, b) => b.score - a.score);
-    return merged.slice(0, topK);
-  }
 }
