@@ -9,9 +9,13 @@
 // AST Graph Types
 // ============================================================================
 
-export type AstNodeKind = 'class' | 'interface' | 'enum' | 'function' | 'type';
+export type AstNodeKind = 
+  | 'class' | 'interface' | 'enum' | 'function' | 'type'  // 现有类型
+  | 'method' | 'block';  // 新增: 方法、代码块
 
-export type AstEdgeRelation = 'extends' | 'implements' | 'injects';
+export type AstEdgeRelation = 
+  | 'extends' | 'implements' | 'injects'  // 现有关系
+  | 'contains' | 'calls';  // 新增: 包含关系、调用关系
 
 export interface AstGraphNode {
   name: string;
@@ -19,8 +23,16 @@ export interface AstGraphNode {
   filePath: string;
   /** Start line in source file */
   startLine?: number;
+  /** End line in source file (for code extraction) */
+  endLine?: number;
   /** Brief description extracted from comments */
   description?: string;
+  /** Code content for vectorization (truncated to maxContentLength) */
+  content?: string;
+  /** Importance score (0-1) for prioritization */
+  importance?: number;
+  /** Whether this symbol is exported/public */
+  isExported?: boolean;
 }
 
 export interface AstGraphEdge {

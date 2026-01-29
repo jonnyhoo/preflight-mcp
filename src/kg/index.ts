@@ -21,5 +21,17 @@ export { DEFAULT_AST_GRAPH_OPTIONS } from './types.js';
 // Builder
 export { buildAstGraph } from './ast-graph-builder.js';
 
+// Code Filter
+export type { CodeFilterOptions } from './code-filter.js';
+export {
+  DEFAULT_CODE_FILTER_OPTIONS,
+  shouldIndexFile,
+  shouldIndexFunction,
+  calculateImportance,
+  truncateContent,
+  sortByImportance,
+  applyQuota,
+} from './code-filter.js';
+
 // Storage
 export { KGStorage, astGraphToEntities, astGraphToRelations } from './storage.js';

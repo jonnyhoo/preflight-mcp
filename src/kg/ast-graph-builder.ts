@@ -20,7 +20,9 @@ type SyntaxNode = ReturnType<Tree['rootNode']['child']> & {
   childForFieldName(name: string): SyntaxNode | null;
   previousNamedSibling: SyntaxNode | null;
   previousSibling: SyntaxNode | null;
+  parent: SyntaxNode | null;
   startPosition: { row: number; column: number };
+  endPosition: { row: number; column: number };
 };
 import type { TreeSitterLanguageId } from '../ast/types.js';
 import type {
@@ -33,6 +35,11 @@ import type {
   AstEdgeRelation,
 } from './types.js';
 import { DEFAULT_AST_GRAPH_OPTIONS } from './types.js';
+import {
+  calculateImportance,
+  truncateContent,
+  DEFAULT_CODE_FILTER_OPTIONS,
+} from './code-filter.js';
 import { createModuleLogger } from '../logging/logger.js';
 
 const logger = createModuleLogger('kg');
@@ -45,7 +52,70 @@ interface TypeDeclaration {
   name: string;
   kind: AstNodeKind;
   startLine: number;
+  endLine: number;
   description?: string;
+  content?: string;
+  isExported?: boolean;
+  /** Parent class/interface name for methods */
+  parentName?: string;
+}
+
+/**
+ * Check if a node is exported (public API).
+ */
+function isNodeExported(node: SyntaxNode, lang: TreeSitterLanguageId): boolean {
+  if (lang === 'typescript' || lang === 'tsx' || lang === 'javascript') {
+    // Check for 'export' keyword in parent or siblings
+    const parent = node.parent;
+    if (parent?.type === 'export_statement') return true;
+    // Check if preceded by 'export' keyword
+    const prev = node.previousSibling;
+    if (prev?.type === 'export' || prev?.text === 'export') return true;
+    // Check for 'export' in node text (e.g., export class Foo)
+    const firstChild = node.children[0];
+    if (firstChild?.text === 'export') return true;
+  }
+  if (lang === 'go') {
+    // Go: exported if name starts with uppercase
+    const nameNode = node.childForFieldName('name');
+    if (nameNode) {
+      const firstChar = nameNode.text[0];
+      return firstChar === firstChar?.toUpperCase();
+    }
+  }
+  if (lang === 'python') {
+    // Python: not starting with underscore
+    const nameNode = node.childForFieldName('name');
+    if (nameNode) {
+      return !nameNode.text.startsWith('_');
+    }
+  }
+  if (lang === 'rust') {
+    // Rust: has 'pub' keyword
+    const firstChild = node.children[0];
+    if (firstChild?.type === 'visibility_modifier') return true;
+  }
+  if (lang === 'java') {
+    // Java: has 'public' modifier
+    for (const child of node.children) {
+      if (child.type === 'modifiers') {
+        if (child.text.includes('public')) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Extract content for a node from file content.
+ */
+function extractNodeContent(
+  node: SyntaxNode,
+  fileContent: string,
+  maxLength: number
+): string {
+  const content = node.text;
+  return truncateContent(content, maxLength);
 }
 
 /**
@@ -54,7 +124,9 @@ interface TypeDeclaration {
 function extractTypeDeclarations(
   tree: Tree,
   lang: TreeSitterLanguageId,
-  _filePath: string
+  _filePath: string,
+  fileContent: string,
+  maxContentLength: number
 ): TypeDeclaration[] {
   const declarations: TypeDeclaration[] = [];
   const root = tree.rootNode;
@@ -70,8 +142,13 @@ function extractTypeDeclarations(
             name: nameNode.text,
             kind: 'class',
             startLine: node.startPosition.row + 1,
+            endLine: node.endPosition.row + 1,
             description: extractLeadingComment(node),
+            content: extractNodeContent(node, fileContent, maxContentLength),
+            isExported: isNodeExported(node, lang),
           });
+          // Extract methods from class
+          extractClassMethods(node, nameNode.text, lang, fileContent, maxContentLength, declarations);
         }
       }
 
@@ -83,7 +160,10 @@ function extractTypeDeclarations(
             name: nameNode.text,
             kind: 'interface',
             startLine: node.startPosition.row + 1,
+            endLine: node.endPosition.row + 1,
             description: extractLeadingComment(node),
+            content: extractNodeContent(node, fileContent, maxContentLength),
+            isExported: isNodeExported(node, lang),
           });
         }
       }
@@ -96,7 +176,10 @@ function extractTypeDeclarations(
             name: nameNode.text,
             kind: 'type',
             startLine: node.startPosition.row + 1,
+            endLine: node.endPosition.row + 1,
             description: extractLeadingComment(node),
+            content: extractNodeContent(node, fileContent, maxContentLength),
+            isExported: isNodeExported(node, lang),
           });
         }
       }
@@ -109,14 +192,22 @@ function extractTypeDeclarations(
             name: nameNode.text,
             kind: 'enum',
             startLine: node.startPosition.row + 1,
+            endLine: node.endPosition.row + 1,
             description: extractLeadingComment(node),
+            content: extractNodeContent(node, fileContent, maxContentLength),
+            isExported: isNodeExported(node, lang),
           });
         }
+      }
+
+      // Top-level function declarations
+      if (node.type === 'function_declaration' || node.type === 'lexical_declaration') {
+        extractTopLevelFunctions(node, lang, fileContent, maxContentLength, declarations);
       }
     });
   }
 
-  // Python class declarations
+  // Python class and function declarations
   if (lang === 'python') {
     traverseNode(root, (node) => {
       if (node.type === 'class_definition') {
@@ -126,7 +217,27 @@ function extractTypeDeclarations(
             name: nameNode.text,
             kind: 'class',
             startLine: node.startPosition.row + 1,
+            endLine: node.endPosition.row + 1,
             description: extractDocstring(node),
+            content: extractNodeContent(node, fileContent, maxContentLength),
+            isExported: isNodeExported(node, lang),
+          });
+          // Extract methods from class
+          extractPythonMethods(node, nameNode.text, fileContent, maxContentLength, declarations);
+        }
+      }
+      // Top-level functions
+      if (node.type === 'function_definition' && node.parent?.type === 'module') {
+        const nameNode = node.childForFieldName('name');
+        if (nameNode) {
+          declarations.push({
+            name: nameNode.text,
+            kind: 'function',
+            startLine: node.startPosition.row + 1,
+            endLine: node.endPosition.row + 1,
+            description: extractDocstring(node),
+            content: extractNodeContent(node, fileContent, maxContentLength),
+            isExported: isNodeExported(node, lang),
           });
         }
       }
@@ -143,8 +254,13 @@ function extractTypeDeclarations(
             name: nameNode.text,
             kind: 'class',
             startLine: node.startPosition.row + 1,
+            endLine: node.endPosition.row + 1,
             description: extractJavadoc(node),
+            content: extractNodeContent(node, fileContent, maxContentLength),
+            isExported: isNodeExported(node, lang),
           });
+          // Extract methods from class
+          extractJavaMethods(node, nameNode.text, fileContent, maxContentLength, declarations);
         }
       }
       if (node.type === 'interface_declaration') {
@@ -154,7 +270,10 @@ function extractTypeDeclarations(
             name: nameNode.text,
             kind: 'interface',
             startLine: node.startPosition.row + 1,
+            endLine: node.endPosition.row + 1,
             description: extractJavadoc(node),
+            content: extractNodeContent(node, fileContent, maxContentLength),
+            isExported: isNodeExported(node, lang),
           });
         }
       }
@@ -165,14 +284,17 @@ function extractTypeDeclarations(
             name: nameNode.text,
             kind: 'enum',
             startLine: node.startPosition.row + 1,
+            endLine: node.endPosition.row + 1,
             description: extractJavadoc(node),
+            content: extractNodeContent(node, fileContent, maxContentLength),
+            isExported: isNodeExported(node, lang),
           });
         }
       }
     });
   }
 
-  // Go type declarations
+  // Go type and function declarations
   if (lang === 'go') {
     traverseNode(root, (node) => {
       if (node.type === 'type_declaration') {
@@ -186,9 +308,45 @@ function extractTypeDeclarations(
               name: nameNode.text,
               kind,
               startLine: node.startPosition.row + 1,
+              endLine: node.endPosition.row + 1,
               description: extractLeadingComment(node),
+              content: extractNodeContent(node, fileContent, maxContentLength),
+              isExported: isNodeExported(node, lang),
             });
           }
+        }
+      }
+      // Go functions
+      if (node.type === 'function_declaration') {
+        const nameNode = node.childForFieldName('name');
+        if (nameNode) {
+          declarations.push({
+            name: nameNode.text,
+            kind: 'function',
+            startLine: node.startPosition.row + 1,
+            endLine: node.endPosition.row + 1,
+            description: extractLeadingComment(node),
+            content: extractNodeContent(node, fileContent, maxContentLength),
+            isExported: isNodeExported(node, lang),
+          });
+        }
+      }
+      // Go methods (function with receiver)
+      if (node.type === 'method_declaration') {
+        const nameNode = node.childForFieldName('name');
+        const receiverNode = node.childForFieldName('receiver');
+        if (nameNode && receiverNode) {
+          const receiverType = extractGoReceiverType(receiverNode);
+          declarations.push({
+            name: nameNode.text,
+            kind: 'method',
+            startLine: node.startPosition.row + 1,
+            endLine: node.endPosition.row + 1,
+            description: extractLeadingComment(node),
+            content: extractNodeContent(node, fileContent, maxContentLength),
+            isExported: isNodeExported(node, lang),
+            parentName: receiverType,
+          });
         }
       }
     });
@@ -204,7 +362,10 @@ function extractTypeDeclarations(
             name: nameNode.text,
             kind: 'class', // Rust struct ≈ class
             startLine: node.startPosition.row + 1,
+            endLine: node.endPosition.row + 1,
             description: extractRustDoc(node),
+            content: extractNodeContent(node, fileContent, maxContentLength),
+            isExported: isNodeExported(node, lang),
           });
         }
       }
@@ -215,7 +376,10 @@ function extractTypeDeclarations(
             name: nameNode.text,
             kind: 'interface', // Rust trait ≈ interface
             startLine: node.startPosition.row + 1,
+            endLine: node.endPosition.row + 1,
             description: extractRustDoc(node),
+            content: extractNodeContent(node, fileContent, maxContentLength),
+            isExported: isNodeExported(node, lang),
           });
         }
       }
@@ -226,7 +390,25 @@ function extractTypeDeclarations(
             name: nameNode.text,
             kind: 'enum',
             startLine: node.startPosition.row + 1,
+            endLine: node.endPosition.row + 1,
             description: extractRustDoc(node),
+            content: extractNodeContent(node, fileContent, maxContentLength),
+            isExported: isNodeExported(node, lang),
+          });
+        }
+      }
+      // Rust functions
+      if (node.type === 'function_item') {
+        const nameNode = node.childForFieldName('name');
+        if (nameNode) {
+          declarations.push({
+            name: nameNode.text,
+            kind: 'function',
+            startLine: node.startPosition.row + 1,
+            endLine: node.endPosition.row + 1,
+            description: extractRustDoc(node),
+            content: extractNodeContent(node, fileContent, maxContentLength),
+            isExported: isNodeExported(node, lang),
           });
         }
       }
@@ -234,6 +416,182 @@ function extractTypeDeclarations(
   }
 
   return declarations;
+}
+
+// ============================================================================
+// Method Extraction Helpers
+// ============================================================================
+
+/**
+ * Extract methods from TypeScript/JavaScript class.
+ */
+function extractClassMethods(
+  classNode: SyntaxNode,
+  className: string,
+  lang: TreeSitterLanguageId,
+  fileContent: string,
+  maxContentLength: number,
+  declarations: TypeDeclaration[]
+): void {
+  const body = classNode.childForFieldName('body');
+  if (!body) return;
+
+  for (const child of body.namedChildren) {
+    if (child.type === 'method_definition' || child.type === 'public_field_definition') {
+      const nameNode = child.childForFieldName('name');
+      if (nameNode && child.type === 'method_definition') {
+        declarations.push({
+          name: nameNode.text,
+          kind: 'method',
+          startLine: child.startPosition.row + 1,
+          endLine: child.endPosition.row + 1,
+          description: extractLeadingComment(child),
+          content: extractNodeContent(child, fileContent, maxContentLength),
+          isExported: isNodeExported(classNode, lang), // Methods inherit class export status
+          parentName: className,
+        });
+      }
+    }
+  }
+}
+
+/**
+ * Extract methods from Python class.
+ */
+function extractPythonMethods(
+  classNode: SyntaxNode,
+  className: string,
+  fileContent: string,
+  maxContentLength: number,
+  declarations: TypeDeclaration[]
+): void {
+  const body = classNode.childForFieldName('body');
+  if (!body) return;
+
+  for (const child of body.namedChildren) {
+    if (child.type === 'function_definition') {
+      const nameNode = child.childForFieldName('name');
+      if (nameNode) {
+        declarations.push({
+          name: nameNode.text,
+          kind: 'method',
+          startLine: child.startPosition.row + 1,
+          endLine: child.endPosition.row + 1,
+          description: extractDocstring(child),
+          content: extractNodeContent(child, fileContent, maxContentLength),
+          isExported: !nameNode.text.startsWith('_'),
+          parentName: className,
+        });
+      }
+    }
+  }
+}
+
+/**
+ * Extract methods from Java class.
+ */
+function extractJavaMethods(
+  classNode: SyntaxNode,
+  className: string,
+  fileContent: string,
+  maxContentLength: number,
+  declarations: TypeDeclaration[]
+): void {
+  const body = classNode.childForFieldName('body');
+  if (!body) return;
+
+  for (const child of body.namedChildren) {
+    if (child.type === 'method_declaration') {
+      const nameNode = child.childForFieldName('name');
+      if (nameNode) {
+        // Check for public modifier
+        let isPublic = false;
+        for (const mod of child.children) {
+          if (mod.type === 'modifiers' && mod.text.includes('public')) {
+            isPublic = true;
+            break;
+          }
+        }
+        declarations.push({
+          name: nameNode.text,
+          kind: 'method',
+          startLine: child.startPosition.row + 1,
+          endLine: child.endPosition.row + 1,
+          description: extractJavadoc(child),
+          content: extractNodeContent(child, fileContent, maxContentLength),
+          isExported: isPublic,
+          parentName: className,
+        });
+      }
+    }
+  }
+}
+
+/**
+ * Extract top-level functions from TypeScript/JavaScript.
+ */
+function extractTopLevelFunctions(
+  node: SyntaxNode,
+  lang: TreeSitterLanguageId,
+  fileContent: string,
+  maxContentLength: number,
+  declarations: TypeDeclaration[]
+): void {
+  if (node.type === 'function_declaration') {
+    const nameNode = node.childForFieldName('name');
+    if (nameNode) {
+      declarations.push({
+        name: nameNode.text,
+        kind: 'function',
+        startLine: node.startPosition.row + 1,
+        endLine: node.endPosition.row + 1,
+        description: extractLeadingComment(node),
+        content: extractNodeContent(node, fileContent, maxContentLength),
+        isExported: isNodeExported(node, lang),
+      });
+    }
+  }
+  // Arrow functions in const declarations
+  if (node.type === 'lexical_declaration') {
+    for (const child of node.namedChildren) {
+      if (child.type === 'variable_declarator') {
+        const nameNode = child.childForFieldName('name');
+        const valueNode = child.childForFieldName('value');
+        if (nameNode && valueNode?.type === 'arrow_function') {
+          declarations.push({
+            name: nameNode.text,
+            kind: 'function',
+            startLine: node.startPosition.row + 1,
+            endLine: node.endPosition.row + 1,
+            description: extractLeadingComment(node),
+            content: extractNodeContent(node, fileContent, maxContentLength),
+            isExported: isNodeExported(node, lang),
+          });
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Extract receiver type from Go method.
+ */
+function extractGoReceiverType(receiverNode: SyntaxNode): string | undefined {
+  // Receiver is like (r *ReceiverType) or (r ReceiverType)
+  for (const child of receiverNode.namedChildren) {
+    if (child.type === 'parameter_declaration') {
+      const typeNode = child.childForFieldName('type');
+      if (typeNode) {
+        // Handle pointer types
+        if (typeNode.type === 'pointer_type') {
+          const innerType = typeNode.namedChildren[0];
+          return innerType?.text;
+        }
+        return typeNode.text;
+      }
+    }
+  }
+  return undefined;
 }
 
 // ============================================================================
@@ -577,6 +935,8 @@ export async function buildAstGraph(
   const files = await collectSourceFiles(repoPath, opts);
   logger.info(`Found ${files.length} source files to analyze`);
 
+  const maxContentLength = DEFAULT_CODE_FILTER_OPTIONS.maxContentLength;
+
   // Pass 1: Extract all type declarations
   for (const filePath of files) {
     try {
@@ -595,16 +955,39 @@ export async function buildAstGraph(
 
       try {
         const relativePath = path.relative(repoPath, filePath).replace(/\\/g, '/');
-        const declarations = extractTypeDeclarations(tree, lang, relativePath);
+        const declarations = extractTypeDeclarations(tree, lang, relativePath, content, maxContentLength);
 
         for (const decl of declarations) {
-          graph.nodes.set(decl.name, {
+          // Use unique key: for methods, include parent name
+          const nodeKey = decl.parentName 
+            ? `${decl.parentName}.${decl.name}`
+            : decl.name;
+
+          const node: AstGraphNode = {
             name: decl.name,
             kind: decl.kind,
             filePath: relativePath,
             startLine: decl.startLine,
+            endLine: decl.endLine,
             description: decl.description,
-          });
+            content: decl.content,
+            isExported: decl.isExported,
+          };
+
+          // Calculate importance score
+          node.importance = calculateImportance(node);
+
+          graph.nodes.set(nodeKey, node);
+
+          // Add 'contains' edge for methods/functions belonging to a class
+          if (decl.parentName && graph.nodes.has(decl.parentName)) {
+            graph.edges.push({
+              src: decl.parentName,
+              tgt: nodeKey,
+              relation: 'contains',
+              srcFile: relativePath,
+            });
+          }
         }
       } finally {
         tree.delete();
@@ -617,7 +1000,7 @@ export async function buildAstGraph(
     }
   }
 
-  logger.info(`Extracted ${graph.nodes.size} type declarations`);
+  logger.info(`Extracted ${graph.nodes.size} declarations (types + functions/methods)`);
 
   // Pass 2: Extract relationships
   const knownTypes = new Set(graph.nodes.keys());
