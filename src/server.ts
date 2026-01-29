@@ -40,6 +40,7 @@ import {
   registerCheckTools,
   registerDistillTools,
   registerRagTools,
+  registerArxivTools,
 } from './server/tools/index.js';
 
 // Read version from package.json at startup
@@ -216,6 +217,9 @@ export async function startServer(): Promise<void> {
 
   // RAG tools (1): preflight_rag (index + query)
   registerRagTools(deps);
+
+  // arXiv search tools (1): preflight_arxiv_search
+  registerArxivTools(deps);
 
   // ==========================================================================
   // PROMPTS - Interactive guidance for users

@@ -30,10 +30,8 @@ export function registerDeleteBundleTool({ server, cfg }: ToolDependencies, core
     {
       title: 'Delete bundle',
       description:
-        'Delete/remove a bundle permanently. ' +
-        '⚠️ SAFETY: By default runs in dryRun mode (preview only). ' +
-        'To actually delete: set dryRun=false AND confirm=bundleId. ' +
-        'Use when: "delete bundle", "remove bundle", "清除bundle", "删除索引", "移除仓库".',
+        'Delete a bundle. Default: dryRun=true (preview). To delete: dryRun=false, confirm=bundleId.\n' +
+        'Use when: "delete bundle", "删除bundle".',
       inputSchema: DeleteBundleInputSchema,
       outputSchema: {
         dryRun: z.boolean(),

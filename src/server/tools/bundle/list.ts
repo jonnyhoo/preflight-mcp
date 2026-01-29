@@ -28,7 +28,8 @@ export function registerListBundlesTool({ server, cfg }: ToolDependencies, coreO
     {
       title: 'List bundles',
       description:
-        'List available preflight bundles in a stable, minimal format. Use when: "show bundles", "what bundles exist", "list repos", "show my knowledge bases", "what have I indexed", "查看bundle", "有哪些bundle", "列出仓库".',
+        'List available bundles with IDs, repos, and tags.\n' +
+        'Use when: "show bundles", "list repos", "查看bundle", "列出仓库".',
       inputSchema: ListBundlesInputSchema,
       outputSchema: {
         bundles: z.array(

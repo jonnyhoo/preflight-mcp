@@ -511,17 +511,8 @@ export function createSearchAndReadHandler(deps: {
 export const searchAndReadToolDescription = {
   title: 'Search and read excerpts',
   description:
-    'Search bundle and return excerpts with context in one call. ' +
-    'Works for code repositories, PDF documents, AND web documentation.\n\n' +
-    '**For Code:** Find functions, classes, implementations.\n' +
-    '**For PDF/Documents:** Search paper content, find sections.\n' +
-    '**For Web Docs:** Search documentation pages, find API references.\n\n' +
-    '**LLM Usage Guide:**\n' +
-    '- Use when you need to find AND read content in one step\n' +
-    '- Results include citation-ready evidence[] with path + range\n\n' +
-    '**When to use vs other tools:**\n' +
-    '- search_and_read: Find specific content (most common)\n' +
-    '- get_overview: Want structure first\n' +
-    '- read_file: Know exact file path\n\n' +
-    'Triggers: "search", "find", "搜索", "查找", "搜索文档", "search docs"',
+    'Search bundle and return excerpts with context. Works for code, PDFs, and web docs.\n' +
+    'Example: `{"bundleId": "xxx", "query": "handleRequest"}`\n' +
+    'Returns citation-ready evidence with path + line range.\n' +
+    'Use when: "search", "find", "搜索", "查找".',
 };

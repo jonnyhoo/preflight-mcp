@@ -213,8 +213,11 @@ RULES:
 2. If uncertain, write "Unknown"
 3. NEVER include source code or secrets
 4. Focus on "what" and "why", not "how"
-5. keyAPIs: Extract core features, skills, commands, or API names that users would search for
-6. Look for supported platforms/tools in README (e.g., "works with X", "plugin for Y")
+5. keyAPIs: Extract 3-8 core features/APIs/commands users would search for (NO more than 8)
+6. useCases: Provide 2-4 practical use cases
+7. designHighlights: List 2-5 key design decisions or patterns
+8. limitations: List 1-3 known limitations or trade-offs
+9. Look for supported platforms/tools in README (e.g., "works with X", "plugin for Y")
 
 Output format:
 {"oneLiner":"...","problemSolved":"...","useCases":[],"designHighlights":[],"limitations":[],"quickStart":"...","keyAPIs":[]}`;

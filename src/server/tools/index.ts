@@ -12,6 +12,7 @@ export { registerSearchTools } from './searchTools.js';
 export { registerLspTools } from './lspTools.js';
 export { registerCheckTools } from './checkTools.js';
 export { registerDistillTools } from './distillTools.js';
+export { registerArxivTools } from './arxivTools.js';
 
 // Re-export individual RAG tools for fine-grained control
 export { registerRagQueryTool } from './ragQueryTool.js';

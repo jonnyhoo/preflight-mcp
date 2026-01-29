@@ -30,16 +30,10 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
     {
       title: 'Read bundle file(s)',
       description:
-        'Read specific file(s) from a bundle.\n\n' +
-        '**Common usage:**\n' +
-        '- Read code: `{bundleId, file: "repos/owner/repo/norm/src/main.ts"}`\n' +
-        '- Read PDF content: `{bundleId, file: "pdf_xxx.md"}`\n' +
-        '- Read web page: `{bundleId, file: "repos/web/.../norm/docs/intro.md"}`\n' +
-        '- Read specific lines: `{bundleId, file: "...", ranges: ["50-100"]}`\n\n' +
-        '**When to use:** You know the exact file path (from search results or tree)\n\n' +
-        '**Use `preflight_get_overview` instead if:** you want overview first\n' +
-        '**Use `preflight_search_and_read` instead if:** you need to find content first\n\n' +
-        'Triggers: "读取", "read", "查看", "阅读页面", "read page"',
+        'Read file(s) from bundle by path. Use when you know the exact path.\n' +
+        'Example: `{"bundleId": "xxx", "file": "repos/owner/repo/norm/src/main.ts"}`\n' +
+        'Use search_and_read if you need to find content first.\n' +
+        'Use when: "read file", "读取", "查看文件".',
       inputSchema: {
         bundleId: z.string().describe('Bundle ID to read.'),
         file: z.string().optional().describe('Specific file to read (e.g., "deps/dependency-graph.json"). If omitted, uses mode-based batch reading.'),

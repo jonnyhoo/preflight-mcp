@@ -336,6 +336,7 @@ export async function classifyRepo(repoPath: string): Promise<RepoClassification
 /**
  * Classify a repository from a bundle path.
  * Looks for repo content in the standard bundle structure.
+ * Handles both direct repo layout and norm/ subdirectory layout.
  * 
  * @param bundlePath - Path to the bundle root
  * @param repoId - Repository ID within the bundle
@@ -346,14 +347,24 @@ export async function classifyBundleRepo(
   repoId: string
 ): Promise<RepoClassification> {
   // Try standard repo location
-  const repoPath = path.join(bundlePath, 'repos', repoId);
+  const baseRepoPath = path.join(bundlePath, 'repos', repoId);
+  const normPath = path.join(baseRepoPath, 'norm');
+  
+  // Prefer norm/ subdirectory if exists (bundle structure)
+  try {
+    await fs.access(normPath);
+    logger.debug(`Classifying norm path: ${normPath}`);
+    return classifyRepo(normPath);
+  } catch {
+    // Fallback to repo root
+  }
   
   try {
-    await fs.access(repoPath);
-    return classifyRepo(repoPath);
+    await fs.access(baseRepoPath);
+    return classifyRepo(baseRepoPath);
   } catch {
     // Repo path doesn't exist, classify the bundle itself
-    logger.warn(`Repo path ${repoPath} not found, classifying bundle`);
+    logger.warn(`Repo path ${baseRepoPath} not found, classifying bundle`);
     return classifyRepo(bundlePath);
   }
 }

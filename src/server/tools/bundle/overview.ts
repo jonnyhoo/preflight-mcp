@@ -28,16 +28,10 @@ export function registerGetOverviewTool({ server, cfg }: ToolDependencies, coreO
     {
       title: 'Get bundle overview',
       description:
-        '⭐ **START HERE** - Get bundle overview in one call. ' +
-        'This is the recommended FIRST tool to call when exploring any bundle. ' +
-        'Use when: "了解项目", "项目概览", "what is this project", "show overview", "get started", "了解论文", "文档概览", "了解文档站".\n\n' +
-        '**For Code Repositories:** Project summary, architecture, entry points\n' +
-        '**For PDF/Documents:** Title, authors, abstract, table of contents\n' +
-        '**For Web Documentation:** Site structure, main topics, page index\n\n' +
-        '**Next steps after overview:**\n' +
-        '1. `preflight_search_and_read` - Search and read specific content\n' +
-        '2. `preflight_repo_tree` - See file/page structure\n' +
-        '3. `preflight_read_file` - Read specific file/page',
+        '⭐ START HERE - Get bundle overview (summary, structure, entry points).\n' +
+        'Works for code repos, PDFs, and web docs.\n' +
+        'Next: search_and_read → repo_tree → read_file.\n' +
+        'Use when: "overview", "概览", "what is this project".',
       inputSchema: {
         bundleId: z.string().describe('Bundle ID to get overview for.'),
       },

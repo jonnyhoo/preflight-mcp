@@ -4,10 +4,7 @@
  * @module kg/storage
  */
 
-import crypto from 'node:crypto';
-import type { ChromaVectorDB } from '../vectordb/chroma-client.js';
-import type { EntityDocument, RelationDocument } from '../vectordb/types.js';
-import type { AstGraph, AstGraphNode, AstGraphEdge, KGEntity, KGRelation } from './types.js';
+import type { AstGraph, AstGraphNode, AstGraphEdge } from './types.js';
 import { createModuleLogger } from '../logging/logger.js';
 
 const logger = createModuleLogger('kg-storage');
@@ -237,32 +234,3 @@ export class KGStorage {
   }
 }
 
-// ============================================================================
-// Conversion Utilities
-// ============================================================================
-
-/**
- * Convert AST graph to KG entities.
- */
-export function astGraphToEntities(graph: AstGraph): KGEntity[] {
-  return Array.from(graph.nodes.values()).map(node => ({
-    id: `entity_${crypto.createHash('sha256').update(node.name).digest('hex').slice(0, 12)}`,
-    name: node.name,
-    kind: node.kind,
-    filePath: node.filePath,
-    description: node.description ?? `${node.kind} ${node.name}`,
-  }));
-}
-
-/**
- * Convert AST graph to KG relations.
- */
-export function astGraphToRelations(graph: AstGraph): KGRelation[] {
-  return graph.edges.map(edge => ({
-    id: `rel_${crypto.createHash('sha256').update(`${edge.src}-${edge.relation}-${edge.tgt}`).digest('hex').slice(0, 12)}`,
-    srcEntity: edge.src,
-    tgtEntity: edge.tgt,
-    relationType: edge.relation,
-    srcFile: edge.srcFile,
-  }));
-}

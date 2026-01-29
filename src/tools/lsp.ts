@@ -43,14 +43,11 @@ export type LspOutput = {
   error?: string;
 };
 
-export const lspToolDescription = `Precise code navigation via language servers. Use for go-to-definition, find-references on LOCAL projects.
-
-IMPORTANT: Requires REAL file paths (e.g., /home/user/project/src/main.ts), NOT bundle paths. Project must exist locally with dependencies installed.
-
-Actions: definition, references, hover, symbols, diagnostics
-Supported: .py, .go, .rs, .ts, .tsx, .js, .jsx
-
-Use preflight_assistant for bundle-based search instead.`;
+export const lspToolDescription =
+  'Precise code navigation via LSP (definition, references, hover, symbols, diagnostics).\n' +
+  'Example: `{"action": "definition", "file": "/path/to/file.py", "line": 10, "column": 5}`\n' +
+  'Requires LOCAL file paths. Supports: .py, .go, .rs, .ts, .tsx, .js, .jsx.\n' +
+  'Use when: "跳转定义", "go to definition", "find references".';
 const OVERALL_TIMEOUT_GRACE_MS = 4000;
 const MIN_OVERALL_TIMEOUT_MS = 12000;
 

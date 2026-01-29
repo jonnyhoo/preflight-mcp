@@ -22,30 +22,10 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
     {
       title: 'RAG index and query',
       description:
-        'Index bundle to ChromaDB for RAG queries, or ask knowledge questions about indexed content.\n\n' +
-        '**Usage:**\n' +
-        '- Index: `{"bundleId": "<id>", "index": true}`\n' +
-        '- Query single bundle: `{"bundleId": "<id>", "question": "这个项目怎么用？"}`\n' +
-        '- Query multiple bundles: `{"crossBundleMode": "specified", "bundleIds": ["id1", "id2"], "question": "比较两篇论文的方法"}`\n' +
-        '- Query all bundles: `{"crossBundleMode": "all", "question": "哪篇论文讨论了transformer？"}`\n' +
-        '- Both: `{"bundleId": "<id>", "index": true, "question": "..."}`\n\n' +
-        '**Cross-bundle retrieval:**\n' +
-        '- `crossBundleMode: "single"` (default): Query single bundle (specify `bundleId`)\n' +
-        '- `crossBundleMode: "specified"`: Query specific bundles (specify `bundleIds` array)\n' +
-        '- `crossBundleMode: "all"`: Query all indexed bundles (no bundleId needed)\n' +
-        'Note: AST graph expansion (hybrid mode) only works in single-bundle mode.\n\n' +
-        '**Deduplication:** Same PDF won\'t be indexed twice. If skipped, use `force: true` to replace:\n' +
-        '- Replace: `{"bundleId": "<id>", "index": true, "force": true}`\n\n' +
-        '**Query modes:** `naive` (vector only), `local` (vector + neighbor), `hybrid` (vector + AST graph, default)\n\n' +
-        '**Cross-validation (recommended for important queries):**\n' +
-        'For higher answer reliability, call this tool twice with `useVerifierLlm: true` on the second call. ' +
-        'This uses a different LLM (configured as `verifierLlm*` in config.json) to independently answer the same question. ' +
-        'Compare both answers to verify correctness.\n' +
-        '- First call: `{"bundleId": "<id>", "question": "..."}` (uses default LLM)\n' +
-        '- Second call: `{"bundleId": "<id>", "question": "...", "useVerifierLlm": true}` (uses verifier LLM)\n\n' +
-        '**Config:** Requires `chromaUrl` and `embeddingEnabled` in `~/.preflight/config.json`\n' +
-        'Optional: `verifierLlmApiBase`, `verifierLlmApiKey`, `verifierLlmModel` for cross-validation.\n' +
-        'Use when: "RAG问答", "知识检索", "语义搜索", "跨文档检索", "对比论文", "index bundle", "向量查询", "重新索引", "覆盖旧版本".',
+        'Index bundle to vector DB and/or answer questions via RAG retrieval.\n' +
+        'Example: `{"bundleId": "<id>", "index": true}` or `{"bundleId": "<id>", "question": "..."}`.\n' +
+        'Cross-bundle: `{"crossBundleMode": "all", "question": "..."}`.\n' +
+        'Use when: "RAG", "向量检索", "index", "语义问答".',
       inputSchema: {
         bundleId: z.string().optional().describe('Bundle ID to index or query (single mode, backward compatible)'),
         bundleIds: z.array(z.string()).optional().describe('Multiple bundle IDs to query (Phase 1: cross-bundle retrieval)'),

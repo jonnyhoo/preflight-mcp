@@ -20,35 +20,10 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
     {
       title: 'RAG content management',
       description:
-        'Debug and manage ChromaDB vector database. Use this tool to inspect index structure, debug retrieval issues, and manage content.\n\n' +
-        '## Quick Reference\n' +
-        '| Action | Purpose | Example |\n' +
-        '|--------|---------|--------|\n' +
-        '| `collections` | View all collections (L1/L2/L3 hierarchy) | `{"action": "collections"}` |\n' +
-        '| `stats` | Total chunks, unique docs, by paperId | `{"action": "stats"}` |\n' +
-        '| `list` | List indexed content with contentHash | `{"action": "list"}` |\n' +
-        '| `sample` | Sample chunks from specific collection | `{"action": "sample", "collection": "preflight_rag_l1_pdf", "limit": 3}` |\n' +
-        '| `inspect` | View chunk content and ALL metadata | `{"action": "inspect", "limit": 5}` |\n' +
-        '| `search_raw` | Raw vector search (no LLM) | `{"action": "search_raw", "query": "transformer", "limit": 5}` |\n' +
-        '| `delete` | Delete by contentHash | `{"action": "delete", "contentHash": "abc123..."}` |\n' +
-        '| `delete_all` | ⚠️ Delete everything | `{"action": "delete_all"}` |\n' +
-        '| `drop_collection` | ⚠️ Drop entire collection | `{"action": "drop_collection", "collection": "preflight_chunks"}` |\n' +
-        '| `diagnose` | 🔬 Diagnose index quality | `{"action": "diagnose"}` (all) or `{"action": "diagnose", "paperId": "arxiv:..."}` |\n\n' +
-        '## When to Use\n' +
-        '- **"检查索引质量" / "为什么RAG答案不好"** → `diagnose` with paperId (quality score, section coverage, issues)\n' +
-        '- **"检查分层索引"** → `collections` (see L1_pdf/L1_repo/L2_section/L3_chunk counts)\n' +
-        '- **"查看哪些论文已索引"** → `list` (shows paperId and chunk counts)\n' +
-        '- **"为什么搜不到xxx"** → `search_raw` with the query (test retrieval without LLM)\n' +
-        '- **"检查chunk内容/metadata"** → `inspect` (see pageIndex, sectionHeading, etc.)\n' +
-        '- **"查看L1层有什么"** → `sample` with collection="preflight_rag_l1_pdf"\n' +
-        '- **"清空数据库"** → `delete_all`\n' +
-        '- **"删除某个collection"** → `drop_collection` with collection name\n\n' +
-        '## Hierarchical Structure\n' +
-        '```\n' +
-        'L1 (coarse): l1_pdf, l1_repo, l1_doc, l1_memory, l1_web\n' +
-        'L2 (section): l2_section\n' +
-        'L3 (chunk): l3_chunk\n' +
-        '```',
+        'Manage ChromaDB: list/stats/inspect/delete indexed content, diagnose quality.\n' +
+        'Example: `{"action": "stats"}`, `{"action": "diagnose", "paperId": "arxiv:..."}`\n' +
+        'Actions: collections, stats, list, sample, inspect, search_raw, delete, delete_all, drop_collection, diagnose.\n' +
+        'Use when: "检查索引", "debug RAG", "清空数据库".',
       inputSchema: {
         action: z.enum(['list', 'stats', 'collections', 'sample', 'delete', 'delete_all', 'drop_collection', 'inspect', 'search_raw', 'diagnose']).describe('Action to perform'),
         contentHash: z.string().optional().describe('Content hash to delete (required for delete action)'),

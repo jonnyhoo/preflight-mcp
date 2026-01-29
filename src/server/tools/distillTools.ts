@@ -17,10 +17,10 @@ export function registerDistillTools({ server }: ToolDependencies): void {
     'preflight_generate_card',
     {
       title: 'Generate knowledge card',
-      description: 'Extract a knowledge card from a bundle. Cards capture "what is this project" and "why is it valuable" for later retrieval.\n\n' +
-        '**Usage:** `{\"bundleId\": \"<id>\"}` or `{\"bundleId\": \"<id>\", \"repoId\": \"owner/repo\"}`\n' +
-        '**Options:** `regenerate: true` to force refresh, `format: \"markdown\"` for human-readable output.\n' +
-        'Use when: "生成卡片", "蒸馏项目", "提取知识", "create card", "distill repo".',
+      description:
+        'Extract knowledge card (project summary, use cases, key APIs) from bundle.\n' +
+        'Example: `{"bundleId": "<id>", "format": "markdown"}`\n' +
+        'Use when: "生成卡片", "蒸馏", "distill", "summarize project".',
       inputSchema: {
         bundleId: z.string().describe('Bundle ID'),
         repoId: z.string().optional().describe('Repo ID (default: first repo in bundle)'),

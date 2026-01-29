@@ -87,22 +87,3 @@ export interface AstGraphBuildResult {
   errors: string[];
 }
 
-// ============================================================================
-// Storage Types (for ChromaDB)
-// ============================================================================
-
-export interface KGEntity {
-  id: string;
-  name: string;
-  kind: AstNodeKind;
-  filePath: string;
-  description: string;
-}
-
-export interface KGRelation {
-  id: string;
-  srcEntity: string;
-  tgtEntity: string;
-  relationType: AstEdgeRelation;
-  srcFile: string;
-}

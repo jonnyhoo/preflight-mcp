@@ -28,32 +28,10 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
     'preflight_create_bundle',
     {
       title: 'Create bundle',
-      description: 'Create a bundle from GitHub repos, local directories, PDFs, or web documentation sites.\n\n' +
-        '**Examples (LLM-ready):**\n' +
-        '- GitHub repo: `{"repos": [{"kind": "github", "repo": "owner/repo"}]}`\n' +
-        '- Local repo: `{"repos": [{"kind": "local", "repo": "local/<folder>", "path": "C:\\\\path\\\\to\\\\dir"}]}`\n' +
-        '- Web docs: `{"repos": [{"kind": "web", "url": "https://docs.example.com"}]}`\n' +
-        '- Web docs (filtered): `{"repos": [{"kind": "web", "url": "https://docs.example.com", "config": {"includePatterns": ["/api/"], "maxPages": 100}}]}`\n' +
-        '- Online PDF: `{"repos": [{"kind": "pdf", "url": "https://arxiv.org/pdf/2512.14982"}]}`\n' +
-        '- Local PDF: `{"repos": [{"kind": "pdf", "path": "C:\\\\docs\\\\paper.pdf"}]}`\n\n' +
-        '**⚡ Batch PDF Support (MinerU only):**\n' +
-        'When passing MULTIPLE PDFs, each PDF creates its OWN INDEPENDENT BUNDLE (for RAG compatibility).\n' +
-        'MinerU batch API is used for efficient parallel parsing, then separate bundles are created:\n' +
-        '```json\n' +
-        '{"repos": [\n' +
-        '  {"kind": "pdf", "url": "https://arxiv.org/pdf/paper1.pdf"},\n' +
-        '  {"kind": "pdf", "url": "https://arxiv.org/pdf/paper2.pdf"},\n' +
-        '  {"kind": "pdf", "path": "C:\\\\docs\\\\paper3.pdf"}\n' +
-        ']}\n' +
-        '```\n' +
-        '→ Creates 3 separate bundles (one per PDF), parsed in parallel via MinerU batch API.\n' +
-        'Note: VLM Parser (vlmParser=true) does NOT support batch - processes one PDF at a time.\n\n' +
-        '**Web crawl modes:**\n' +
-        '- Default (no useSpa): For static sites, SSR sites, GitHub Pages, Hugo, Jekyll. Fast and lightweight.\n' +
-        '- `useSpa: true`: ONLY for sites that require JavaScript to render content (React/Vue/Angular CSR). Slow, uses headless browser. Also add `skipLlmsTxt: true` for SPA sites.\n' +
-        '- Signs you need useSpa: page shows "Loading..." or blank content, or site has anti-bot protection.\n\n' +
-        '**Options:** `ifExists: "returnExisting"` to reuse existing bundle.\n' +
-        'Use when: "analyze repo", "index project", "crawl docs", "分析项目", "理解代码", "爬取文档".',
+      description:
+        'Create a bundle from GitHub repos, local directories, PDFs, or web docs.\n' +
+        'Example: `{"repos": [{"kind": "github", "repo": "owner/repo"}]}`\n' +
+        'Use when: "analyze repo", "index project", "分析项目", "爬取文档".',
       inputSchema: CreateBundleInputSchema,
       outputSchema: {
         bundleId: z.string().optional(),

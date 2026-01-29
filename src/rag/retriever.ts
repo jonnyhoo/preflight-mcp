@@ -73,17 +73,17 @@ export class RAGRetriever {
       return naiveResult;
     }
 
-    // Extract type names mentioned in chunks
-    const mentionedTypes = this.extractMentionedTypes(naiveResult.chunks);
+    // Extract symbol names from chunks (code chunks use metadata, others use pattern matching)
+    const mentionedSymbols = this.extractMentionedSymbols(naiveResult.chunks);
     
-    if (mentionedTypes.length === 0) {
+    if (mentionedSymbols.length === 0) {
       return naiveResult;
     }
 
-    // Get 1-hop neighbors for each mentioned type
+    // Get 1-hop neighbors for each mentioned symbol
     const expandedTypes = new Set<string>();
-    for (const typeName of mentionedTypes) {
-      const neighbors = this.kgStorage.getNeighbors(typeName, 1);
+    for (const symbolName of mentionedSymbols) {
+      const neighbors = this.kgStorage.getNeighbors(symbolName, 1);
       neighbors.forEach(n => expandedTypes.add(n.name));
     }
 
@@ -115,35 +115,35 @@ export class RAGRetriever {
       return naiveResult;
     }
 
-    // 2. Extract mentioned types from chunks
-    const mentionedTypes = this.extractMentionedTypes(naiveResult.chunks);
+    // 2. Extract symbol names from chunks (code chunks use metadata, others use pattern matching)
+    const mentionedSymbols = this.extractMentionedSymbols(naiveResult.chunks);
     
-    if (mentionedTypes.length === 0) {
+    if (mentionedSymbols.length === 0) {
       return naiveResult;
     }
 
-    logger.debug(`Found ${mentionedTypes.length} mentioned types: ${mentionedTypes.join(', ')}`);
+    logger.debug(`Found ${mentionedSymbols.length} mentioned symbols: ${mentionedSymbols.join(', ')}`);
 
     // 3. Bidirectional graph traversal
     const expandedTypes = new Set<string>();
     
-    for (const typeName of mentionedTypes) {
-      // Successors: what this type depends on
-      const successors = this.kgStorage.getSuccessors(typeName, 1);
+    for (const symbolName of mentionedSymbols) {
+      // Successors: what this symbol depends on
+      const successors = this.kgStorage.getSuccessors(symbolName, 1);
       successors.forEach(n => expandedTypes.add(n.name));
 
-      // Predecessors: what depends on this type
-      const predecessors = this.kgStorage.getPredecessors(typeName, 1);
+      // Predecessors: what depends on this symbol
+      const predecessors = this.kgStorage.getPredecessors(symbolName, 1);
       predecessors.forEach(n => expandedTypes.add(n.name));
     }
 
-    // 4. InterfaceConsumerExpand: If mentioned type is interface, expand to implementors
-    for (const typeName of mentionedTypes) {
-      const node = this.kgStorage.getNode(typeName);
+    // 4. InterfaceConsumerExpand: If mentioned symbol is interface, expand to implementors
+    for (const symbolName of mentionedSymbols) {
+      const node = this.kgStorage.getNode(symbolName);
       if (node?.kind === 'interface') {
-        const implementors = this.kgStorage.getImplementors(typeName);
+        const implementors = this.kgStorage.getImplementors(symbolName);
         implementors.forEach(n => expandedTypes.add(n.name));
-        logger.debug(`Interface ${typeName} has ${implementors.length} implementors`);
+        logger.debug(`Interface ${symbolName} has ${implementors.length} implementors`);
       }
     }
 
@@ -270,26 +270,44 @@ export class RAGRetriever {
   // --------------------------------------------------------------------------
 
   /**
-   * Extract type names mentioned in chunks.
-   * Uses simple pattern matching for common patterns.
+   * Extract symbol names mentioned in chunks.
+   * 
+   * For code chunks (sourceType: 'code'), extracts symbols directly from metadata.
+   * For other chunks, uses pattern matching to find type references.
+   * 
+   * @returns Array of symbol names that exist in the KG
    */
-  private extractMentionedTypes(
+  private extractMentionedSymbols(
     chunks: Array<ChunkDocument & { score: number }>
   ): string[] {
     if (!this.kgStorage) return [];
 
     const mentioned = new Set<string>();
-    const knownTypes = new Set(this.kgStorage.getAllNodes().map(n => n.name));
+    const knownSymbols = new Set(this.kgStorage.getAllNodes().map(n => n.name));
 
     for (const chunk of chunks) {
+      // Code chunks: extract symbols directly from metadata (高优先级)
+      if (chunk.metadata.sourceType === 'code') {
+        // Symbol name (function/method/class name)
+        if (chunk.metadata.symbolName && knownSymbols.has(chunk.metadata.symbolName)) {
+          mentioned.add(chunk.metadata.symbolName);
+        }
+        // Parent symbol (class name for methods)
+        if (chunk.metadata.parentSymbol && knownSymbols.has(chunk.metadata.parentSymbol)) {
+          mentioned.add(chunk.metadata.parentSymbol);
+        }
+        continue; // 代码 chunk 不需要文本匹配
+      }
+
+      // Non-code chunks: use pattern matching (README, documentation, etc.)
       const content = chunk.content;
       
-      // Pattern 1: Backtick-wrapped identifiers: `TypeName`
-      const backtickMatches = content.match(/`([A-Z][a-zA-Z0-9_]*)`/g);
+      // Pattern 1: Backtick-wrapped identifiers: `TypeName` or `functionName`
+      const backtickMatches = content.match(/`([A-Za-z_][A-Za-z0-9_]*)`/g);
       if (backtickMatches) {
         for (const match of backtickMatches) {
           const name = match.slice(1, -1);
-          if (knownTypes.has(name)) {
+          if (knownSymbols.has(name)) {
             mentioned.add(name);
           }
         }
@@ -299,18 +317,29 @@ export class RAGRetriever {
       const pascalMatches = content.match(/\b[A-Z][a-z]+(?:[A-Z][a-z]+)+\b/g);
       if (pascalMatches) {
         for (const name of pascalMatches) {
-          if (knownTypes.has(name)) {
+          if (knownSymbols.has(name)) {
             mentioned.add(name);
           }
         }
       }
 
-      // Pattern 3: Code blocks might have class definitions
+      // Pattern 3: Code blocks might have class/function definitions
       const classMatches = content.match(/class\s+([A-Z][a-zA-Z0-9_]*)/g);
       if (classMatches) {
         for (const match of classMatches) {
           const name = match.replace('class ', '');
-          if (knownTypes.has(name)) {
+          if (knownSymbols.has(name)) {
+            mentioned.add(name);
+          }
+        }
+      }
+      
+      // Pattern 4: function/method definitions
+      const funcMatches = content.match(/(?:function|def|func)\s+([a-zA-Z_][a-zA-Z0-9_]*)/g);
+      if (funcMatches) {
+        for (const match of funcMatches) {
+          const name = match.replace(/^(?:function|def|func)\s+/, '');
+          if (knownSymbols.has(name)) {
             mentioned.add(name);
           }
         }

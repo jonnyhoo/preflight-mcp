@@ -171,15 +171,26 @@ export async function indexBundle(
     // Index code files (for github/local repos)
     if (repo.kind === 'github' || repo.kind === 'local') {
       try {
+        // Determine code path: prefer repos/<repoId>/norm if exists, fallback to repos/<repoId>
+        const baseRepoPath = path.join(bundlePath, 'repos', repo.repoId);
+        const normPath = path.join(baseRepoPath, 'norm');
+        let codePath: string;
+        try {
+          await fs.access(normPath);
+          codePath = normPath; // Use norm/ subdirectory (bundle structure)
+          logger.debug(`Using norm path for code analysis: ${normPath}`);
+        } catch {
+          codePath = baseRepoPath; // Fallback to repo root
+        }
+        
         // Classify the repo to determine indexing strategy
         const classification = await classifyBundleRepo(bundlePath, repo.repoId);
         logger.info(`Repo ${repo.repoId} classified as ${classification.type} (code ratio: ${classification.codeRatio.toFixed(2)})`);
         
         // Index code for code and hybrid repos
         if (classification.type === 'code' || classification.type === 'hybrid') {
-          const repoPath = path.join(bundlePath, 'repos', repo.repoId);
           const { chunks, result } = await bridgeCodeFiles(
-            repoPath,
+            codePath,
             bundleId,
             repo.repoId,
             options

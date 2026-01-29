@@ -12,8 +12,6 @@ export type {
   AstGraph,
   AstGraphBuildOptions,
   AstGraphBuildResult,
-  KGEntity,
-  KGRelation,
 } from './types.js';
 
 export { DEFAULT_AST_GRAPH_OPTIONS } from './types.js';
@@ -34,4 +32,4 @@ export {
 } from './code-filter.js';
 
 // Storage
-export { KGStorage, astGraphToEntities, astGraphToRelations } from './storage.js';
+export { KGStorage } from './storage.js';

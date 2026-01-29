@@ -480,11 +480,34 @@ function detectDocFrameworks(files: IngestedFile[]): string[] {
  * 
  * We detect frameworks that significantly shape the project's architecture.
  * Pure utility libraries (requests, axios, lodash) are excluded.
+ * 
+ * When dependencies are empty (no requirements.txt, etc.), falls back to
+ * analyzing module imports from Phase 2 analysis.
  */
-function detectFrameworks(deps: DependencyInfo, files: IngestedFile[]): string[] {
+function detectFrameworks(
+  deps: DependencyInfo,
+  files: IngestedFile[],
+  modules?: ModuleInfo[]
+): string[] {
   const frameworks = new Set<string>();
 
-  const allDeps = [...deps.runtime, ...deps.dev].map((d) => d.name.toLowerCase());
+  // Primary source: declared dependencies
+  let allDeps = [...deps.runtime, ...deps.dev].map((d) => d.name.toLowerCase());
+
+  // Fallback: if no declared dependencies, extract from module imports
+  // This handles projects without requirements.txt, pyproject.toml, etc.
+  if (allDeps.length === 0 && modules && modules.length > 0) {
+    const importSet = new Set<string>();
+    for (const mod of modules) {
+      for (const imp of mod.imports) {
+        // Normalize import: take the base package name
+        // e.g., "torch.nn" -> "torch", "sklearn.cluster" -> "sklearn"
+        const basePkg = imp.split('.')[0]!.toLowerCase();
+        importSet.add(basePkg);
+      }
+    }
+    allDeps = Array.from(importSet);
+  }
 
   // ==========================================================================
   // JavaScript/TypeScript
@@ -812,9 +835,23 @@ export async function extractBundleFacts(params: {
   const entryPoints = entryPointsArrays.flat();
 
   const dependencies = await extractDependencies(allFiles, params.bundleRoot);
+
+  // Extract feature/skill information from well-known directories
+  const features = await extractFeatures(allFiles);
+
+  // Phase 2: Module analysis (optional, more expensive)
+  // Run BEFORE framework detection so we can use imports as fallback
+  let modules: ModuleInfo[] | undefined;
+  let patterns: string[] | undefined;
+  let techStack: TechStackInfo | undefined;
+
+  if (params.enablePhase2) {
+    modules = await analyzeModules(allFiles);
+    patterns = detectArchitecturePatterns(allFiles, modules);
+  }
   
-  // Detect code frameworks from dependencies
-  let frameworks = detectFrameworks(dependencies, allFiles);
+  // Detect code frameworks from dependencies (with module imports as fallback)
+  let frameworks = detectFrameworks(dependencies, allFiles, modules);
   
   // Detect doc frameworks if framework detection is enabled
   if (params.enableFrameworkDetection) {
@@ -828,17 +865,8 @@ export async function extractBundleFacts(params: {
     frameworks = [...new Set([...frameworks, ...agentPlatforms])].sort();
   }
 
-  // Extract feature/skill information from well-known directories
-  const features = await extractFeatures(allFiles);
-
-  // Phase 2: Module analysis (optional, more expensive)
-  let modules: ModuleInfo[] | undefined;
-  let patterns: string[] | undefined;
-  let techStack: TechStackInfo | undefined;
-
+  // Update techStack now that frameworks are detected
   if (params.enablePhase2) {
-    modules = await analyzeModules(allFiles);
-    patterns = detectArchitecturePatterns(allFiles, modules);
     techStack = analyzeTechStack(languages, dependencies, frameworks);
   }
 

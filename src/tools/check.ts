@@ -41,26 +41,10 @@ export type CheckOutput = {
 // Tool Description
 // ============================================================================
 
-export const checkToolDescription = `Run code quality checks on a project directory.
-
-Available checks:
-- **duplicates**: Detect copy-paste code patterns (150+ languages via jscpd)
-- **doccheck**: Check documentation-code consistency (TypeScript, JavaScript, Python, Java)
-- **deadcode**: Detect unused/orphaned files and exports
-- **circular**: Detect circular import dependencies
-- **complexity**: Detect high complexity functions (long functions, deep nesting, many params)
-- **errorprone**: Detect error-prone patterns (null checks, type coercion, async issues)
-- **security**: Detect security vulnerabilities (hardcoded secrets, injection risks, unsafe patterns)
-
-Severity levels:
-- ❌ Error: Critical issues that should be fixed
-- ⚠️ Warning: Issues that may cause problems
-- ℹ️ Info: Suggestions for improvement
-
-Example usage:
-- Check all: path="/home/user/project"
-- Check specific: path="/home/user/project", checks=["deadcode", "circular"]
-- Security scan: path="/home/user/project", checks=["security", "errorprone"]`;
+export const checkToolDescription =
+  'Run code quality checks: duplicates, deadcode, circular, complexity, security, etc.\n' +
+  'Example: `{"path": "/project", "checks": ["deadcode", "security"]}`\n' +
+  'Use when: "check code", "代码检查", "find issues".';
 
 // ============================================================================
 // Formatting
