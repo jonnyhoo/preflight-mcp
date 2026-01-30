@@ -29,9 +29,11 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
     {
       title: 'Create bundle',
       description:
-        'Create a bundle from GitHub repos, local directories, PDFs, or web docs.\n' +
+        'Create a bundle from GitHub repos, local directories, PDFs, web docs, or markdown folders.\n' +
+        'Supports: code repos, documentation-only repos (no CARD.json needed), data repos (csv/json/yaml).\n' +
         'Example: `{"repos": [{"kind": "github", "repo": "owner/repo"}]}`\n' +
-        'Use when: "analyze repo", "index project", "分析项目", "爬取文档".',
+        'Markdown: `{"repos": [{"kind": "markdown", "path": "C:\\\\docs", "name": "My Docs"}]}`\n' +
+        'Use when: "analyze repo", "index project", "分析项目", "爬取文档", "索引文档", "markdown folder".',
       inputSchema: CreateBundleInputSchema,
       outputSchema: {
         bundleId: z.string().optional(),

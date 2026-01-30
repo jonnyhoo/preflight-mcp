@@ -271,8 +271,26 @@ export class RAGEngine {
           paperId,
           paperVersion,
           paperTitle,  // From arXiv API (primary) or PDF extraction (fallback)
+          confirmLargeDocIndex: options?.confirmLargeDocIndex,
         }
       );
+      
+      // Handle pending confirmation (large doc count requires user confirmation)
+      if (bridgeResult.pendingConfirmation) {
+        logger.info(`Index paused: ${bridgeResult.pendingConfirmation.message}`);
+        return {
+          chunksWritten: 0,
+          entitiesCount: 0,
+          relationsCount: 0,
+          errors: [],
+          durationMs: Date.now() - startTime,
+          contentHash,
+          paperId,
+          paperVersion,
+          pendingConfirmation: bridgeResult.pendingConfirmation,
+        };
+      }
+      
       chunksWritten = bridgeResult.chunksWritten;
       errors.push(...bridgeResult.errors);
       logger.info(`Indexed ${chunksWritten} document chunks`);

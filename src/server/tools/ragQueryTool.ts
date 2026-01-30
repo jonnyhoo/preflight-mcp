@@ -23,9 +23,10 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
       title: 'RAG index and query',
       description:
         'Index bundle to vector DB and/or answer questions via RAG retrieval.\n' +
+        'Supports: code repos (README + code), documentation repos (all .md files), PDFs, web docs.\n' +
         'Example: `{"bundleId": "<id>", "index": true}` or `{"bundleId": "<id>", "question": "..."}`.\n' +
         'Cross-bundle: `{"crossBundleMode": "all", "question": "..."}`.\n' +
-        'Use when: "RAG", "向量检索", "index", "语义问答".',
+        'Use when: "RAG", "向量检索", "index", "语义问答", "索引文档仓库".',
       inputSchema: {
         bundleId: z.string().optional().describe('Bundle ID to index or query (single mode, backward compatible)'),
         bundleIds: z.array(z.string()).optional().describe('Multiple bundle IDs to query (Phase 1: cross-bundle retrieval)'),
@@ -45,6 +46,7 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
         expandToParent: z.boolean().optional().describe('Expand to parent chunks for more context (default: true)'),
         expandToSiblings: z.boolean().optional().describe('Expand to sibling chunks at same level (default: true)'),
         useVerifierLlm: z.boolean().optional().describe('Use verifier LLM instead of default LLM for cross-validation. Configure verifierLlm* in config.json. Call twice (once without, once with this flag) and compare answers for reliability.'),
+        confirmLargeDocIndex: z.boolean().optional().describe('Confirm indexing for documentation repos with 200+ markdown files. When large doc count detected, indexing pauses and returns file count. Set this to true to proceed.'),
       },
       outputSchema: {
         // Config info
@@ -119,7 +121,7 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
     },
     async (args) => {
       try {
-        const { bundleId, bundleIds, crossBundleMode, index, force, qualityThreshold, question, mode, topK, repoId, expandToParent, expandToSiblings, useVerifierLlm } = args;
+        const { bundleId, bundleIds, crossBundleMode, index, force, qualityThreshold, question, mode, topK, repoId, expandToParent, expandToSiblings, useVerifierLlm, confirmLargeDocIndex } = args;
 
         // Validate: at least one action
         if (!index && !question) {
@@ -208,6 +210,12 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
           };
           rejected?: boolean;
           rejectionReason?: string;
+          pendingConfirmation?: {
+            reason: 'large_doc_count';
+            docFileCount: number;
+            estimatedTimeMinutes: number;
+            message: string;
+          };
         } | null = null;
 
         let queryResult: {
@@ -237,7 +245,7 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
             throw new Error('bundleId and bundlePath required for indexing');
           }
           logger.info(`Indexing bundle: ${bundleId}${force ? ' (force)' : ''}${qualityThreshold ? ` (threshold=${qualityThreshold})` : ''}`);
-          const result = await engine.indexBundle(bundlePath, bundleId, { force, qualityThreshold });
+          const result = await engine.indexBundle(bundlePath, bundleId, { force, qualityThreshold, confirmLargeDocIndex });
           indexResult = {
             chunksWritten: result.chunksWritten,
             entitiesCount: result.entitiesCount,
@@ -254,6 +262,7 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
             qaSummary: result.qaSummary,
             rejected: result.rejected,
             rejectionReason: result.rejectionReason,
+            pendingConfirmation: result.pendingConfirmation,
           };
           if (result.skipped) {
             logger.info(`Skipped indexing: content already exists (${result.existingChunks} chunks)`);
@@ -307,6 +316,23 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
         textResponse += `🔧 Config: ChromaDB=${cfg.chromaUrl} | Embedding=${embeddingEndpoint} | ${llmInfo}\n\n`;
 
         if (indexResult) {
+          // Handle pending confirmation (large doc count)
+          if (indexResult.pendingConfirmation) {
+            const pc = indexResult.pendingConfirmation;
+            textResponse += `⏸️ **Confirmation Required**\n`;
+            textResponse += `   Found ${pc.docFileCount} markdown files in documentation repo.\n`;
+            textResponse += `   Estimated indexing time: ~${pc.estimatedTimeMinutes} minutes.\n`;
+            textResponse += `   To proceed, call again with \`confirmLargeDocIndex: true\`.\n`;
+            
+            return {
+              content: [{ type: 'text', text: textResponse }],
+              structuredContent: {
+                pendingConfirmation: pc,
+                bundleId,
+              },
+            };
+          }
+          
           if (indexResult.rejected) {
             // Rejected due to low quality
             textResponse += `❌ Rejected: ${indexResult.rejectionReason}\n`;

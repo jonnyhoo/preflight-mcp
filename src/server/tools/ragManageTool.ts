@@ -88,10 +88,16 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
             // Get repo bundleIds first to identify doc items that belong to repos
             const repos = items.filter(i => i.type === 'repo');
             const repoBundleIds = new Set(repos.map(r => r.bundleId).filter(Boolean));
-            // Papers: pdf type, or doc type WITH paperId (exclude doc items without paperId even if not in repo)
+            // Papers: pdf type, or doc type WITH paperId
             const papers = items.filter(i => 
               i.type === 'pdf' || 
               (i.type === 'doc' && i.paperId)
+            );
+            // Code docs: doc type without paperId but related to code (has bundleId matching repo, or has relatedPaperId)
+            const codeDocs = items.filter(i => 
+              i.type === 'doc' && 
+              !i.paperId && 
+              (repoBundleIds.has(i.bundleId) || (i as any).relatedPaperId || i.id.startsWith('bundle:'))
             );
 
             textResponse += `📋 Indexed Content (${items.length} total)\n\n`;
@@ -134,6 +140,31 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
                 }
                 textResponse += `\n`;
               }
+              // Code docs section (independent code repos without paper association)
+              if (codeDocs.length > 0) {
+                textResponse += `**💻 Code Docs (${codeDocs.length}):**\n`;
+                for (const item of codeDocs) {
+                  // Try to get a readable name
+                  let displayName = (item as any).repoId;
+                  if (!displayName && item.bundleId) {
+                    displayName = `[bundle:${item.bundleId.slice(0, 8)}...]`;
+                  }
+                  if (!displayName) {
+                    displayName = item.id;
+                  }
+                  // Show linked paper if available
+                  const linkedPaper = (item as any).relatedPaperId;
+                  textResponse += `• ${displayName}${linkedPaper ? ' 🔗' : ''}\n`;
+                  if (linkedPaper) {
+                    textResponse += `  📎 Linked to: ${linkedPaper}\n`;
+                  }
+                  textResponse += `  L1: ${item.l1Count} | L2: ${item.l2Count} | L3: ${item.l3Count} (total: ${item.totalChunks})\n`;
+                  if (item.bundleId) {
+                    textResponse += `  bundleId: ${item.bundleId}\n`;
+                  }
+                }
+                textResponse += `\n`;
+              }
               if (repos.length > 0) {
                 textResponse += `**📦 Repos (${repos.length}):**\n`;
                 for (const item of repos) {
@@ -158,10 +189,10 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
                   }
                 }
               }
-              // Warning for papers missing paperId (exclude repos and repo-related docs)
-              const missingPaperId = papers.filter(i => !i.paperId && i.type !== 'repo');
+              // Warning for PDF papers missing paperId only (not code docs)
+              const missingPaperId = papers.filter(i => !i.paperId && i.type === 'pdf');
               if (missingPaperId.length > 0) {
-                textResponse += `\n⚠️ ${missingPaperId.length} paper(s) missing paperId (marked with ⚠️)\n`;
+                textResponse += `\n⚠️ ${missingPaperId.length} PDF paper(s) missing paperId (marked with ⚠️)\n`;
               }
             }
             break;
@@ -178,10 +209,16 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
             // Categorize by type (same logic as list)
             const repos = contentList.filter(i => i.type === 'repo');
             const repoBundleIds = new Set(repos.map(r => r.bundleId).filter(Boolean));
-            // Papers: pdf type, or doc type WITH paperId (exclude doc items without paperId even if not in repo)
+            // Papers: pdf type, or doc type WITH paperId
             const papers = contentList.filter(i => 
               i.type === 'pdf' || 
               (i.type === 'doc' && i.paperId)
+            );
+            // Code docs: doc type without paperId but related to code
+            const codeDocs = contentList.filter(i => 
+              i.type === 'doc' && 
+              !i.paperId && 
+              (repoBundleIds.has(i.bundleId) || (i as any).relatedPaperId || i.id.startsWith('bundle:'))
             );
 
             textResponse += `📊 RAG Statistics (Hierarchical)\n\n`;
@@ -191,11 +228,7 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
               textResponse += `  • ${level}: ${count}\n`;
             }
             if (papers.length > 0) {
-              // Only count actual papers (exclude QA reports and repo docs)
-              const actualPapers = papers.filter(p => p.type === 'pdf' || (p.type === 'doc' && p.paperId));
-              const withPaperId = actualPapers.filter(p => p.paperId).length;
-              const missingPaperId = actualPapers.length - withPaperId;
-              textResponse += `\n📄 Papers (${actualPapers.length}${missingPaperId > 0 ? `, ${missingPaperId} missing paperId` : ''}):\n`;
+              textResponse += `\n📄 Papers (${papers.length}):\n`;
               for (const item of papers) {
                 let displayName = item.paperId;
                 if (!displayName && item.contentHash) {
@@ -208,8 +241,21 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
                   displayName = displayName.slice(5);
                 }
                 const hasCode = item.sourceTypes.includes('l1_repo');
-                const missingId = !item.paperId;
-                textResponse += `  • ${displayName}${hasCode ? ' 💻' : ''}${missingId ? ' ⚠️' : ''}: ${item.l1Count} L1 docs\n`;
+                textResponse += `  • ${displayName}${hasCode ? ' 💻' : ''}: ${item.l1Count} L1 docs\n`;
+              }
+            }
+            if (codeDocs.length > 0) {
+              textResponse += `\n💻 Code Docs (${codeDocs.length}):\n`;
+              for (const item of codeDocs) {
+                let displayName = (item as any).repoId;
+                if (!displayName && item.bundleId) {
+                  displayName = `[bundle:${item.bundleId.slice(0, 8)}...]`;
+                }
+                if (!displayName) {
+                  displayName = item.id;
+                }
+                const linkedPaper = (item as any).relatedPaperId;
+                textResponse += `  • ${displayName}${linkedPaper ? ` 🔗 ${linkedPaper}` : ''}: ${item.l1Count} L1 docs\n`;
               }
             }
             if (repos.length > 0) {
@@ -223,7 +269,8 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
                 if (!displayName) {
                   displayName = item.bundleId ?? item.id;
                 }
-                textResponse += `  • ${displayName}: ${item.l1Count} L1 docs\n`;
+                const linkedPaper = (item as any).relatedPaperId;
+                textResponse += `  • ${displayName}${linkedPaper ? ` 🔗 ${linkedPaper}` : ''}: ${item.l1Count} L1 docs\n`;
               }
             }
             break;

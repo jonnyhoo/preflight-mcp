@@ -75,6 +75,8 @@ export interface BridgeOptions {
   paperVersion?: string;
   /** Paper title extracted from PDF */
   paperTitle?: string;
+  /** Confirm indexing when doc file count exceeds threshold */
+  confirmLargeDocIndex?: boolean;
 }
 
 export interface PdfIndexArtifact {
@@ -105,6 +107,19 @@ export interface BridgeResult {
    * Available when indexing code repositories.
    */
   chunks?: ChunkDocument[];
+  /**
+   * Pending confirmation for large doc index.
+   * When set, indexing is paused and requires user confirmation.
+   */
+  pendingConfirmation?: {
+    reason: 'large_doc_count';
+    /** Number of markdown/doc files found */
+    docFileCount: number;
+    /** Estimated indexing time in minutes */
+    estimatedTimeMinutes: number;
+    /** Human-readable message for LLM to relay to user */
+    message: string;
+  };
 }
 
 // ============================================================================

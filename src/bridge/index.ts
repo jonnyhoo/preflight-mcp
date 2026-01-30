@@ -25,6 +25,12 @@ import { createModuleLogger } from '../logging/logger.js';
 
 const logger = createModuleLogger('bridge');
 
+/** Threshold for large doc index confirmation (file count) */
+const LARGE_DOC_THRESHOLD = 200;
+
+/** Estimated minutes per 100 files for embedding generation */
+const MINUTES_PER_100_FILES = 1;
+
 // Types
 export type {
   SemanticChunk,
@@ -263,6 +269,22 @@ export async function indexBundle(
           
           const markdownFiles = await findMdFilesInRepo(codePath);
           logger.info(`Found ${markdownFiles.length} markdown files in documentation repo ${repo.repoId}`);
+          
+          // Check if confirmation needed for large doc count
+          if (markdownFiles.length > LARGE_DOC_THRESHOLD && !options.confirmLargeDocIndex) {
+            const estimatedMinutes = Math.ceil(markdownFiles.length / 100 * MINUTES_PER_100_FILES);
+            logger.info(`Large doc count (${markdownFiles.length}) requires confirmation`);
+            totalResult.pendingConfirmation = {
+              reason: 'large_doc_count',
+              docFileCount: markdownFiles.length,
+              estimatedTimeMinutes: estimatedMinutes,
+              message: `Found ${markdownFiles.length} markdown files in documentation repo "${repo.repoId}". ` +
+                `Estimated indexing time: ~${estimatedMinutes} minutes. ` +
+                `To proceed, call again with confirmLargeDocIndex: true.`,
+            };
+            // Return early with pending confirmation (don't index yet)
+            return totalResult;
+          }
           
           for (const mdPath of markdownFiles) {
             try {

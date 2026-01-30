@@ -260,6 +260,19 @@ export interface IndexResult {
   rejected?: boolean;
   /** Rejection reason */
   rejectionReason?: string;
+  /**
+   * Pending confirmation for large doc index.
+   * When set, indexing is paused and requires user confirmation.
+   */
+  pendingConfirmation?: {
+    reason: 'large_doc_count';
+    /** Number of markdown/doc files found */
+    docFileCount: number;
+    /** Estimated indexing time in minutes */
+    estimatedTimeMinutes: number;
+    /** Human-readable message for LLM to relay to user */
+    message: string;
+  };
 }
 
 /**
@@ -270,6 +283,8 @@ export interface IndexOptions {
   force?: boolean;
   /** Minimum quality score (0-100) to accept indexing. If QA score < threshold, chunks are rolled back. Default: 0 (no rejection). Recommended: 60 for production. */
   qualityThreshold?: number;
+  /** Confirm indexing when doc file count exceeds threshold (200+ files). Set to true to proceed with large doc index. */
+  confirmLargeDocIndex?: boolean;
 }
 
 // ============================================================================
