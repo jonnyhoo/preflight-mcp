@@ -298,3 +298,122 @@ export function extractPaperTitle(markdown: string): string | undefined {
   
   return undefined;
 }
+
+// ============================================================================
+// arXiv API Metadata Fetching
+// ============================================================================
+
+/**
+ * Paper metadata from arXiv API.
+ */
+export interface ArxivMetadata {
+  title: string;
+  authors: string[];
+  abstract: string;
+  primaryCategory?: string;
+  categories?: string[];
+  published?: string;
+  updated?: string;
+}
+
+const ARXIV_API_BASE = 'https://export.arxiv.org/api/query';
+const ARXIV_API_TIMEOUT_MS = 10_000;
+
+/**
+ * Fetch paper metadata from arXiv API.
+ * 
+ * @param paperId - Paper ID in format "arxiv:YYMM.NNNNN" or just "YYMM.NNNNN"
+ * @returns Paper metadata or undefined if not found/error
+ * 
+ * @example
+ * ```typescript
+ * const meta = await fetchArxivMetadata('arxiv:2601.17532');
+ * // => { title: 'Less is More for RAG...', authors: [...], abstract: '...' }
+ * ```
+ */
+export async function fetchArxivMetadata(paperId: string): Promise<ArxivMetadata | undefined> {
+  // Extract numeric ID from "arxiv:YYMM.NNNNN" format
+  const arxivId = paperId.replace(/^arxiv:/i, '').replace(/v\d+$/, '');
+  
+  if (!arxivId || !/^\d{4}\.\d{4,5}$/.test(arxivId)) {
+    return undefined;
+  }
+  
+  try {
+    const url = `${ARXIV_API_BASE}?id_list=${arxivId}&max_results=1`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), ARXIV_API_TIMEOUT_MS);
+    
+    const response = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    
+    if (!response.ok) {
+      return undefined;
+    }
+    
+    const xmlText = await response.text();
+    return parseArxivEntry(xmlText);
+  } catch {
+    // Network error, timeout, or parse error
+    return undefined;
+  }
+}
+
+/**
+ * Parse single entry from arXiv Atom feed.
+ */
+function parseArxivEntry(xmlText: string): ArxivMetadata | undefined {
+  const getTagContent = (xml: string, tag: string): string => {
+    const match = xml.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, 'i'));
+    return match ? match[1]!.trim() : '';
+  };
+  
+  // Find entry
+  const entryMatch = xmlText.match(/<entry>([\s\S]*?)<\/entry>/);
+  if (!entryMatch) {
+    return undefined;
+  }
+  
+  const entry = entryMatch[1]!;
+  
+  // Extract title (clean whitespace)
+  const title = getTagContent(entry, 'title').replace(/\s+/g, ' ').trim();
+  if (!title) {
+    return undefined;
+  }
+  
+  // Extract authors
+  const authorMatches = entry.match(/<author>[\s\S]*?<name>([\s\S]*?)<\/name>[\s\S]*?<\/author>/gi) || [];
+  const authors = authorMatches.map(a => {
+    const nameMatch = a.match(/<name>([\s\S]*?)<\/name>/i);
+    return nameMatch ? nameMatch[1]!.replace(/\s+/g, ' ').trim() : '';
+  }).filter(Boolean);
+  
+  // Extract abstract
+  const abstract = getTagContent(entry, 'summary').replace(/\s+/g, ' ').trim();
+  
+  // Extract categories
+  const categoryMatches = entry.match(/<category[^>]*term="([^"]+)"[^>]*\/>/gi) || [];
+  const categories = categoryMatches.map(c => {
+    const termMatch = c.match(/term="([^"]+)"/i);
+    return termMatch ? termMatch[1]! : '';
+  }).filter(Boolean);
+  
+  // Extract primary category
+  const primaryCatMatch = entry.match(/<arxiv:primary_category[^>]*term="([^"]+)"[^>]*\/>/i);
+  const primaryCategory = primaryCatMatch ? primaryCatMatch[1]! : categories[0];
+  
+  // Extract dates
+  const published = getTagContent(entry, 'published');
+  const updated = getTagContent(entry, 'updated');
+  
+  return {
+    title,
+    authors,
+    abstract,
+    primaryCategory,
+    categories,
+    published,
+    updated,
+  };
+}

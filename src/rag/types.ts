@@ -226,6 +226,37 @@ export interface IndexResult {
   existingChunks?: number;
   /** Number of chunks deleted (when force=true) */
   deletedChunks?: number;
+  /** Quality score from QA (0-100, higher is better) */
+  qualityScore?: number;
+  /** QA report summary for display */
+  qaSummary?: {
+    passed: boolean;
+    parseOk: boolean;
+    chunkOk: boolean;
+    ragOk?: boolean;
+    tablesDetected: number;
+    figuresDetected: number;
+    totalChunks: number;
+    orphanChunks: number;
+    ragPassedCount?: number;
+    ragTotalCount?: number;
+    avgFaithfulness?: number;
+    issues: string[];
+  };
+  /** Whether indexing was rejected due to low quality score */
+  rejected?: boolean;
+  /** Rejection reason */
+  rejectionReason?: string;
+}
+
+/**
+ * Options for indexing a bundle.
+ */
+export interface IndexOptions {
+  /** Force replace existing content with same hash */
+  force?: boolean;
+  /** Minimum quality score (0-100) to accept indexing. If QA score < threshold, chunks are rolled back. Default: 0 (no rejection). Recommended: 60 for production. */
+  qualityThreshold?: number;
 }
 
 // ============================================================================

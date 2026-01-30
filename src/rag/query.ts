@@ -11,37 +11,26 @@ import { RAGGenerator } from './generator.js';
 import { ContextCompleter } from './context-completer.js';
 import { HierarchicalRetriever } from './hierarchical-retriever.js';
 import type { SemanticChunk } from '../bridge/types.js';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { readManifest, type BundleManifestV1 } from '../bundle/manifest.js';
-import { extractPaperId } from '../bundle/content-id.js';
+import { extractPaperId, fetchArxivMetadata } from '../bundle/content-id.js';
 import type { 
   QueryOptions, 
   QueryResult, 
-  IndexResult,
   RAGConfig,
   DEFAULT_QUERY_OPTIONS,
 } from './types.js';
 import { IGPPruner, type IGPOptions } from './pruning/igp-pruner.js';
 import { createModuleLogger } from '../logging/logger.js';
-import { persistQAReport, runFullQA } from '../quality/index-qa.js';
+import { persistQAReport, runFullQA, type QAReport } from '../quality/index-qa.js';
+import { runCodeRepoQA, type CodeRepoQAReport } from '../quality/code-repo-qa.js';
+import type { IndexResult, IndexOptions } from './types.js';
 
 const logger = createModuleLogger('rag');
 
-// ============================================================================
-// Index Options
-// ============================================================================
-
-/**
- * Index options for deduplication control.
- */
-export interface IndexOptions {
-  /** 
-   * Force re-index even if content already exists.
-   * Default: true for PDF content (to handle parser/strategy changes)
-   * Default: false for other content
-   */
-  force?: boolean;
-}
+// Re-export IndexOptions from types for backward compatibility
+export type { IndexOptions } from './types.js';
 
 // ============================================================================
 // RAG Engine
@@ -101,6 +90,12 @@ export class RAGEngine {
   /**
    * Index a bundle to ChromaDB.
    * Performs deduplication check based on source file contentHash.
+   * 
+   * @param bundlePath - Path to the bundle directory
+   * @param bundleId - Unique bundle identifier
+   * @param options - Index options
+   * @param options.force - Force re-index even if content exists (default: true for PDF, false for code)
+   * @param options.qualityThreshold - Minimum QA score (0-100) to accept. If score < threshold, chunks are rolled back.
    */
   async indexBundle(
     bundlePath: string,
@@ -115,8 +110,11 @@ export class RAGEngine {
     let contentHash: string | undefined;
     let paperId: string | undefined;
     let paperVersion: string | undefined;
+    let paperTitle: string | undefined;
     let existingChunks: number | undefined;
     let deletedChunks: number | undefined;
+    let qaReport: QAReport | undefined;
+    let codeQaReport: CodeRepoQAReport | undefined;
 
     try {
       // Read manifest to get contentHash (headSha) and source URL
@@ -169,8 +167,46 @@ export class RAGEngine {
         }
       }
 
+      // Fetch paper title from arXiv API if available
+      if (paperId?.startsWith('arxiv:')) {
+        try {
+          const arxivMeta = await fetchArxivMetadata(paperId);
+          if (arxivMeta?.title) {
+            paperTitle = arxivMeta.title;
+            logger.info(`Fetched paper title from arXiv: ${paperTitle.slice(0, 60)}...`);
+          }
+        } catch (err) {
+          logger.warn(`Failed to fetch arXiv metadata: ${err}`);
+        }
+      }
+
       // Determine if this is PDF content (based on paperId or URL patterns)
       const isPdfContent = !!(paperId || manifest?.repos?.[0]?.pdfUrl);
+      
+      // For code repos (non-PDF): require CARD.json to exist before indexing
+      // This ensures repo is properly analyzed and documented before RAG indexing
+      if (!isPdfContent && manifest?.repos?.[0]) {
+        const repoId = manifest.repos[0].id;
+        const safeRepoId = repoId.replace(/\//g, '~');
+        const cardPath = path.join(bundlePath, 'cards', safeRepoId, 'CARD.json');
+        try {
+          await fs.access(cardPath);
+        } catch {
+          const msg = `Code repository must have CARD.json before indexing. ` +
+            `Run preflight_generate_card first for bundle ${bundleId}`;
+          logger.error(msg);
+          return {
+            chunksWritten: 0,
+            entitiesCount: 0,
+            relationsCount: 0,
+            errors: [msg],
+            durationMs: Date.now() - startTime,
+            contentHash,
+            paperId,
+            paperVersion,
+          };
+        }
+      }
       
       // For PDF: default to force=true (to handle parser/strategy changes)
       // User can explicitly set force=false to skip if already indexed
@@ -215,6 +251,7 @@ export class RAGEngine {
           contentHash,
           paperId,
           paperVersion,
+          paperTitle,  // From arXiv API (primary) or PDF extraction (fallback)
         }
       );
       chunksWritten = bridgeResult.chunksWritten;
@@ -240,7 +277,7 @@ export class RAGEngine {
                 }
               : undefined;
 
-            const report = await runFullQA(
+            qaReport = await runFullQA(
               artifact.markdown,
               artifact.chunks,
               contentHash,
@@ -248,12 +285,11 @@ export class RAGEngine {
               queryFn
             );
 
-            await persistQAReport(this.chromaDB, report, this.embedding);
+            await persistQAReport(this.chromaDB, qaReport, this.embedding);
 
-            if (!report.passed) {
-              const msg = `Index QA failed for ${paperId ?? contentHash.slice(0, 12)}: ${report.allIssues.join('; ')}`;
-              logger.error(msg);
-              errors.push(msg);
+            if (!qaReport.passed) {
+              const msg = `Index QA: issues found for ${paperId ?? contentHash.slice(0, 12)}: ${qaReport.allIssues.join('; ')}`;
+              logger.warn(msg);
             }
           } catch (err) {
             const msg = `Index QA error: ${err}`;
@@ -263,12 +299,79 @@ export class RAGEngine {
         }
       }
 
+      // 1.2 Index-Time QA for Code Repo
+      if (!isPdfContent && chunksWritten > 0) {
+        try {
+          // Load CARD.json for QA
+          const repoInfo = manifest?.repos?.[0];
+          let card = null;
+          if (repoInfo) {
+            const safeRepoId = repoInfo.id.replace(/\//g, '~');
+            const cardPath = path.join(bundlePath, 'cards', safeRepoId, 'CARD.json');
+            try {
+              const cardContent = await fs.readFile(cardPath, 'utf-8');
+              card = JSON.parse(cardContent);
+            } catch {
+              logger.warn(`Could not read CARD.json for code QA`);
+            }
+          }
+
+          // Get chunks from bridge result for QA
+          const chunks = bridgeResult.chunks ?? [];
+          codeQaReport = runCodeRepoQA(chunks, bundleId, card, contentHash);
+          logger.info(`Code QA: score=${codeQaReport.qualityScore}, passed=${codeQaReport.passed}`);
+
+          if (!codeQaReport.passed) {
+            const msg = `Code QA: issues found: ${codeQaReport.allIssues.join('; ')}`;
+            logger.warn(msg);
+          }
+        } catch (err) {
+          const msg = `Code QA error: ${err}`;
+          logger.error(msg);
+          errors.push(msg);
+        }
+      }
+
       // Note: AST graph storage removed - code symbols are now directly vectorized
+
+      // 1.3 Quality Threshold Check: rollback if score < threshold
+      const qualityThreshold = options?.qualityThreshold ?? 0;
+      const qualityScore = qaReport 
+        ? (qaReport.passed ? 100 : Math.max(0, 100 - qaReport.allIssues.length * 20))
+        : codeQaReport?.qualityScore ?? 100;
+
+      if (qualityThreshold > 0 && qualityScore < qualityThreshold && chunksWritten > 0) {
+        // Rollback: delete all chunks we just wrote
+        const rollbackCount = await this.chromaDB.deleteByBundleHierarchical(bundleId);
+        const rejectionReason = `Quality score ${qualityScore} < threshold ${qualityThreshold}`;
+        logger.warn(`Index rejected: ${rejectionReason}. Rolled back ${rollbackCount} chunks.`);
+
+        return {
+          chunksWritten: 0,
+          entitiesCount: 0,
+          relationsCount: 0,
+          errors,
+          durationMs: Date.now() - startTime,
+          contentHash,
+          paperId,
+          paperVersion,
+          deletedChunks: rollbackCount,
+          qualityScore,
+          qaSummary: buildQaSummary(qaReport, codeQaReport),
+          rejected: true,
+          rejectionReason,
+        };
+      }
     } catch (err) {
       const msg = `Index failed: ${err}`;
       logger.error(msg);
       errors.push(msg);
     }
+
+    // Build QA summary for return
+    const qualityScore = qaReport
+      ? (qaReport.passed ? 100 : Math.max(0, 100 - qaReport.allIssues.length * 20))
+      : codeQaReport?.qualityScore;
 
     return {
       chunksWritten,
@@ -280,6 +383,8 @@ export class RAGEngine {
       paperId,
       paperVersion,
       deletedChunks,
+      qualityScore,
+      qaSummary: buildQaSummary(qaReport, codeQaReport),
     };
   }
 
@@ -538,4 +643,54 @@ export async function ragQuery(
 ): Promise<QueryResult> {
   const engine = new RAGEngine(config);
   return engine.query(question, options);
+}
+
+// ============================================================================
+// QA Summary Builder
+// ============================================================================
+
+/**
+ * Build a QA summary from PDF or Code repo QA reports.
+ */
+function buildQaSummary(
+  pdfQa: QAReport | undefined,
+  codeQa: CodeRepoQAReport | undefined
+): IndexResult['qaSummary'] | undefined {
+  if (pdfQa) {
+    // PDF QA summary
+    return {
+      passed: pdfQa.passed,
+      parseOk: pdfQa.parseQA.isValid,
+      chunkOk: pdfQa.chunkQA.isValid,
+      ragOk: pdfQa.ragQA?.isValid,
+      tablesDetected: pdfQa.parseQA.tablesDetected,
+      figuresDetected: pdfQa.parseQA.figuresDetected,
+      totalChunks: pdfQa.chunkQA.totalChunks,
+      orphanChunks: pdfQa.chunkQA.orphanChunks,
+      ragPassedCount: pdfQa.ragQA?.passedCount,
+      ragTotalCount: pdfQa.ragQA?.testQuestionCount,
+      avgFaithfulness: pdfQa.ragQA?.avgFaithfulness,
+      issues: pdfQa.allIssues,
+    };
+  }
+
+  if (codeQa) {
+    // Code repo QA summary (map to similar structure)
+    return {
+      passed: codeQa.passed,
+      parseOk: codeQa.cardQA.isValid, // CARD = "parse" for code
+      chunkOk: codeQa.codeQA.isValid, // Code symbols = "chunks" for code
+      ragOk: codeQa.docsQA.isValid,   // Docs = "RAG readiness" for code
+      tablesDetected: 0,
+      figuresDetected: 0,
+      totalChunks: codeQa.codeQA.totalCodeChunks,
+      orphanChunks: 0, // Not applicable for code
+      ragPassedCount: undefined,
+      ragTotalCount: undefined,
+      avgFaithfulness: undefined,
+      issues: codeQa.allIssues,
+    };
+  }
+
+  return undefined;
 }

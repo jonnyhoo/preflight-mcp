@@ -26,6 +26,7 @@ import {
   getLLMConfig, callLLMWithJSON,
   CARD_GENERATION_SYSTEM_PROMPT, buildCardGenerationPrompt, truncateContext,
 } from './llm-client.js';
+import { extractUniversalMetadata, type ExtractedMetadata } from './metadata-extractor.js';
 
 const logger = createModuleLogger('repo-card');
 
@@ -382,6 +383,19 @@ export async function generateRepoCard(
   const paths = await getBundlePaths2(bundleId);
   const fp = await computeFingerprint(paths);
 
+  // Extract universal metadata (rule-based, no LLM needed)
+  const repoParts = effectiveRepoId.includes('/') ? effectiveRepoId.split('/') : ['', effectiveRepoId];
+  const repoDir = path.join(paths.reposDir, repoParts[0] ?? '', repoParts[1] ?? effectiveRepoId, 'norm');
+  let universalMeta: ExtractedMetadata = {};
+  try {
+    universalMeta = await extractUniversalMetadata(paths.rootDir, repoDir);
+    if (Object.keys(universalMeta).length > 0) {
+      logger.info(`Extracted universal metadata: ${JSON.stringify(universalMeta)}`);
+    }
+  } catch (e) {
+    logger.warn(`Failed to extract universal metadata: ${e}`);
+  }
+
   const card: RepoCard = {
     schemaVersion: 1,
     cardId: generateCardId(bundleId, effectiveRepoId),
@@ -411,6 +425,12 @@ export async function generateRepoCard(
     rating: existing?.rating,
     tags: context.tags || [],
     relatedBundles: existing?.relatedBundles,
+    // Universal metadata (rule-extracted)
+    arxivId: universalMeta.arxivId,
+    doi: universalMeta.doi,
+    githubUrl: universalMeta.githubUrl,
+    license: universalMeta.license,
+    authors: universalMeta.authors,
     confidence: generatedBy === 'llm' ? 0.8 : 0.5,
     evidence,
     needsReview,

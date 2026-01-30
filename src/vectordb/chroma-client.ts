@@ -289,6 +289,7 @@ export class ChromaVectorDB {
         contentHash: c.metadata.contentHash ?? '',
         paperId: c.metadata.paperId ?? '',
         paperVersion: c.metadata.paperVersion ?? '',
+        paperTitle: c.metadata.paperTitle ?? '',
         arxivCategory: c.metadata.arxivCategory ?? '',
         collectionLevel: level,
         sectionHeading: c.metadata.sectionHeading ?? '',
@@ -297,6 +298,8 @@ export class ChromaVectorDB {
         parentChunkId: c.metadata.parentChunkId ?? '',
         granularity: c.metadata.granularity ?? '',
         pageIndex: c.metadata.pageIndex ?? 0,
+        relatedPaperId: c.metadata.relatedPaperId ?? '',
+        fieldName: c.metadata.fieldName ?? '',
       }));
 
       await this.request('POST', `${this.getBasePath()}/collections/${collection.id}/upsert`, {
@@ -432,6 +435,8 @@ export class ChromaVectorDB {
     paperTitle?: string;
     contentHash?: string;
     bundleId?: string;
+    repoId?: string;  // For code repos: e.g., 'local/C3Box', 'facebook/react'
+    relatedPaperId?: string;  // For code repos linked to papers via CARD.json arxivId
     l1Count: number;
     l2Count: number;
     l3Count: number;
@@ -447,6 +452,8 @@ export class ChromaVectorDB {
       paperTitle?: string;
       contentHash?: string;
       bundleId?: string;
+      repoId?: string;
+      relatedPaperId?: string;
       l1Count: number;
       l2Count: number;
       l3Count: number;
@@ -520,6 +527,8 @@ export class ChromaVectorDB {
               paperTitle: m?.paperTitle as string | undefined,
               contentHash: m?.contentHash as string | undefined,
               bundleId: m?.bundleId as string | undefined,
+              repoId: m?.repoId as string | undefined,
+              relatedPaperId: m?.relatedPaperId as string | undefined,
               l1Count: 1,
               l2Count: 0,
               l3Count: 0,
@@ -544,14 +553,18 @@ export class ChromaVectorDB {
 
         for (const meta of response.metadatas ?? []) {
           const m = meta as Record<string, unknown>;
-          // Try to find matching content by contentHash or bundleId
+          // Try to find matching content by contentHash, repoId, paperId, or bundleId
           const hash = m?.contentHash as string;
+          const repoId = m?.repoId as string;
           const bundleId = m?.bundleId as string;
           const paperId = m?.paperId as string;
           
-          // Try each possible key
+          // Try each possible key (must match L1 key logic)
           const possibleKeys = [
             hash ? `hash:${hash}` : null,
+            // For repo chunks: match by repoId (same key used in L1_repo)
+            repoId && hash ? `repo:${repoId}@${hash.slice(0, 12)}` : null,
+            repoId ? `repo:${repoId}` : null,
             bundleId ? `bundle:${bundleId}` : null,
             paperId ? `paper:${paperId}` : null,
           ].filter(Boolean) as string[];
@@ -577,6 +590,8 @@ export class ChromaVectorDB {
       paperTitle: p.paperTitle,
       contentHash: p.contentHash,
       bundleId: p.bundleId,
+      repoId: p.repoId,
+      relatedPaperId: p.relatedPaperId,
       l1Count: p.l1Count,
       l2Count: p.l2Count,
       l3Count: p.l3Count,
@@ -1161,6 +1176,50 @@ export class ChromaVectorDB {
   }
 
   /**
+   * Get chunks by bundleId from hierarchical collections.
+   * Used for counting before delete.
+   */
+  async getChunksByBundleIdHierarchical(bundleId: string): Promise<ChunkDocument[]> {
+    const levels: CollectionLevel[] = ['l1_pdf', 'l1_doc', 'l2_section', 'l3_chunk'];
+    const allChunks: ChunkDocument[] = [];
+    const foundIds = new Set<string>();
+
+    await Promise.all(
+      levels.map(async (level) => {
+        try {
+          const collection = await this.ensureHierarchicalCollection(level);
+          const response = await this.request<ChromaGetResponse>(
+            'POST',
+            `${this.getBasePath()}/collections/${collection.id}/get`,
+            { where: { bundleId }, include: ['documents', 'metadatas'] }
+          );
+
+          for (let i = 0; i < response.ids.length; i++) {
+            const id = response.ids[i]!;
+            if (foundIds.has(id)) continue;
+            foundIds.add(id);
+            
+            allChunks.push({
+              id,
+              content: response.documents?.[i] ?? '',
+              metadata: (response.metadatas?.[i] as unknown as ChunkMetadata) ?? {
+                sourceType: 'overview',
+                bundleId: '',
+                chunkIndex: 0,
+                chunkType: 'text',
+              },
+            });
+          }
+        } catch {
+          // Collection may not exist
+        }
+      })
+    );
+
+    return allChunks;
+  }
+
+  /**
    * Delete chunks by contentHash from all hierarchical collections.
    * Used for force replace.
    */
@@ -1192,9 +1251,14 @@ export class ChromaVectorDB {
 
   /**
    * Delete all chunks for a bundle from hierarchical collections.
+   * @returns Number of chunks deleted
    */
-  async deleteByBundleHierarchical(bundleId: string): Promise<void> {
+  async deleteByBundleHierarchical(bundleId: string): Promise<number> {
     const levels: CollectionLevel[] = ['l1_pdf', 'l1_doc', 'l2_section', 'l3_chunk'];
+
+    // First count existing chunks
+    const existing = await this.getChunksByBundleIdHierarchical(bundleId);
+    if (existing.length === 0) return 0;
 
     await Promise.all(
       levels.map(async (level) => {
@@ -1209,7 +1273,8 @@ export class ChromaVectorDB {
       })
     );
 
-    logger.info(`Deleted chunks for bundle: ${bundleId} from hierarchical collections`);
+    logger.info(`Deleted ${existing.length} chunks for bundle: ${bundleId} from hierarchical collections`);
+    return existing.length;
   }
 
   // --------------------------------------------------------------------------

@@ -68,6 +68,13 @@ export interface RepoCard {
   tags: string[];
   relatedBundles?: string[];
 
+  // Universal metadata (rule-extracted)
+  arxivId?: string;
+  doi?: string;
+  githubUrl?: string;
+  license?: string;
+  authors?: string[];
+
   // Quality
   confidence: number;
   evidence: FieldEvidence[];

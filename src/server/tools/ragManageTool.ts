@@ -21,13 +21,15 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
       title: 'RAG content management',
       description:
         'Manage ChromaDB: list/stats/inspect/delete indexed content, diagnose quality.\n' +
-        'Example: `{"action": "stats"}`, `{"action": "diagnose", "paperId": "arxiv:..."}`\n' +
+        'Example: `{"action": "stats"}`, `{"action": "delete", "bundleId": "xxx"}`\n' +
         'Actions: collections, stats, list, sample, inspect, search_raw, delete, delete_all, drop_collection, diagnose.\n' +
-        'Use when: "检查索引", "debug RAG", "清空数据库".',
+        'Delete supports: contentHash OR bundleId (use bundleId from list output).\n' +
+        'Paper-Code linking: Code repos with CARD.json containing arxivId are linked via relatedPaperId metadata.\n' +
+        'Use when: "检查索引", "debug RAG", "清空数据库", "删除索引", "查看论文代码关联".',
       inputSchema: {
         action: z.enum(['list', 'stats', 'collections', 'sample', 'delete', 'delete_all', 'drop_collection', 'inspect', 'search_raw', 'diagnose']).describe('Action to perform'),
-        contentHash: z.string().optional().describe('Content hash to delete (required for delete action)'),
-        bundleId: z.string().optional().describe('Filter by bundle ID (for inspect and search_raw)'),
+        contentHash: z.string().optional().describe('Content hash to delete (for delete action)'),
+        bundleId: z.string().optional().describe('Bundle ID - for delete/inspect/search_raw. Use bundleId from `list` output to delete specific content.'),
         collection: z.string().optional().describe('Collection name (for sample or drop_collection, e.g., "preflight_rag_l1_pdf")'),
         query: z.string().optional().describe('Search query text (required for search_raw)'),
         limit: z.number().optional().describe('Max number of results (default 5)'),
@@ -82,9 +84,15 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
             const items = await chromaDB.listHierarchicalContent();
             structuredContent.items = items;
 
-            // Categorize by type (from L1 collection)
-            const papers = items.filter(i => i.type === 'pdf' || i.type === 'doc');
+          // Categorize by type (from L1 collection)
+            // Get repo bundleIds first to identify doc items that belong to repos
             const repos = items.filter(i => i.type === 'repo');
+            const repoBundleIds = new Set(repos.map(r => r.bundleId).filter(Boolean));
+            // Papers: pdf type, or doc type that doesn't belong to a repo (has paperId or doesn't share bundleId with a repo)
+            const papers = items.filter(i => 
+              i.type === 'pdf' || 
+              (i.type === 'doc' && (i.paperId || !repoBundleIds.has(i.bundleId)))
+            );
 
             textResponse += `📋 Indexed Content (${items.length} total)\n\n`;
             if (items.length === 0) {
@@ -129,8 +137,21 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
               if (repos.length > 0) {
                 textResponse += `**📦 Repos (${repos.length}):**\n`;
                 for (const item of repos) {
-                  const displayName = item.paperId ?? item.bundleId ?? item.id;
-                  textResponse += `• ${displayName}\n`;
+                  // For repos: prefer repoId, then extract from id if it starts with 'repo:'
+                  let displayName = (item as any).repoId;
+                  if (!displayName && item.id.startsWith('repo:')) {
+                    displayName = item.id.slice(5).split('@')[0]; // 'repo:local/C3Box@xxx' -> 'local/C3Box'
+                  }
+                  if (!displayName) {
+                    displayName = item.bundleId ?? item.id;
+                  }
+                  // Show linked paper indicator
+                  const hasLinkedPaper = !!(item as any).relatedPaperId;
+                  textResponse += `• ${displayName}${hasLinkedPaper ? ' 🔗' : ''}\n`;
+                  // Show relatedPaperId if available (paper-code link)
+                  if ((item as any).relatedPaperId) {
+                    textResponse += `  📎 Linked to: ${(item as any).relatedPaperId}\n`;
+                  }
                   textResponse += `  L1: ${item.l1Count} | L2: ${item.l2Count} | L3: ${item.l3Count} (total: ${item.totalChunks})\n`;
                   if (item.bundleId) {
                     textResponse += `  bundleId: ${item.bundleId}\n`;
@@ -154,9 +175,13 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
             structuredContent.stats = stats;
             structuredContent.contentList = contentList;
 
-            // Categorize by type
-            const papers = contentList.filter(i => i.type === 'pdf' || i.type === 'doc');
+            // Categorize by type (same logic as list)
             const repos = contentList.filter(i => i.type === 'repo');
+            const repoBundleIds = new Set(repos.map(r => r.bundleId).filter(Boolean));
+            const papers = contentList.filter(i => 
+              i.type === 'pdf' || 
+              (i.type === 'doc' && (i.paperId || !repoBundleIds.has(i.bundleId)))
+            );
 
             textResponse += `📊 RAG Statistics (Hierarchical)\n\n`;
             textResponse += `Total documents: ${stats.totalChunks}\n\n`;
@@ -187,7 +212,14 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
             if (repos.length > 0) {
               textResponse += `\n📦 Repos (${repos.length}):\n`;
               for (const item of repos) {
-                const displayName = item.paperId ?? item.bundleId ?? item.id;
+                // For repos: prefer repoId, then extract from id if it starts with 'repo:'
+                let displayName = (item as any).repoId;
+                if (!displayName && item.id.startsWith('repo:')) {
+                  displayName = item.id.slice(5).split('@')[0]; // 'repo:local/C3Box@xxx' -> 'local/C3Box'
+                }
+                if (!displayName) {
+                  displayName = item.bundleId ?? item.id;
+                }
                 textResponse += `  • ${displayName}: ${item.l1Count} L1 docs\n`;
               }
             }
@@ -304,10 +336,13 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
                 textResponse += `--- Sample ${i + 1} ---\n`;
                 textResponse += `ID: ${id}\n`;
                 if (meta.paperId) textResponse += `Paper: ${meta.paperId}\n`;
+                if (meta.relatedPaperId) textResponse += `Related Paper: ${meta.relatedPaperId}\n`;
                 if (meta.sourceType) textResponse += `Source: ${meta.sourceType}\n`;
+                if (meta.repoId) textResponse += `Repo: ${meta.repoId}\n`;
                 if (meta.sectionHeading) textResponse += `Section: ${meta.sectionHeading}\n`;
                 if (meta.pageIndex) textResponse += `Page: ${meta.pageIndex}\n`;
                 if (meta.collectionLevel) textResponse += `Level: ${meta.collectionLevel}\n`;
+                if (meta.fieldName) textResponse += `FieldName: ${meta.fieldName}\n`;
                 
                 const preview = doc.length > 200 ? doc.slice(0, 200) + '...' : doc;
                 textResponse += `Content: ${preview}\n\n`;
@@ -321,20 +356,40 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
           }
 
           case 'delete': {
-            if (!contentHash) {
-              throw new Error('contentHash is required for delete action');
+            if (!contentHash && !bundleId) {
+              throw new Error(
+                'Either contentHash or bundleId is required for delete action.\n' +
+                'Example: {"action": "delete", "bundleId": "xxx-xxx-xxx"}\n' +
+                'Tip: Use `{"action": "list"}` to see bundleId for each indexed content.'
+              );
             }
 
-            // Use hierarchical deletion (Phase 3)
-            const deletedCount = await chromaDB.deleteByContentHashHierarchical(contentHash);
+            let deletedCount = 0;
+            let deleteTarget = '';
+
+            if (bundleId) {
+              // Delete by bundleId - count first, then delete
+              const existing = await chromaDB.getChunksByBundleIdHierarchical(bundleId);
+              deletedCount = existing.length;
+              if (deletedCount > 0) {
+                await chromaDB.deleteByBundleHierarchical(bundleId);
+              }
+              deleteTarget = `bundleId: ${bundleId}`;
+            } else if (contentHash) {
+              // Delete by contentHash
+              deletedCount = await chromaDB.deleteByContentHashHierarchical(contentHash);
+              deleteTarget = `contentHash: ${contentHash.slice(0, 12)}...`;
+            }
+
             structuredContent.deleted = deletedCount > 0;
             structuredContent.deletedChunks = deletedCount;
 
             if (deletedCount > 0) {
               textResponse += `🗑️ Deleted ${deletedCount} chunks\n`;
-              textResponse += `   contentHash: ${contentHash.slice(0, 12)}...\n`;
+              textResponse += `   ${deleteTarget}\n`;
             } else {
-              textResponse += `⚠️ No chunks found with contentHash: ${contentHash.slice(0, 12)}...\n`;
+              textResponse += `⚠️ No chunks found with ${deleteTarget}\n`;
+              textResponse += `💡 Tip: Use \`{"action": "list"}\` to see available bundleIds.\n`;
             }
             break;
           }
@@ -521,13 +576,98 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
 
           case 'diagnose': {
             // Index Quality Diagnosis
-            // If no paperId/bundleId provided, diagnose all indexed papers
+            // First tries to read stored QA reports from indexing (produced by index-qa.ts)
+            // Falls back to live analysis if no stored report found
             
             // Key sections to check for academic papers
             // Note: 'method' includes common variations like methodology, approach
             const KEY_SECTIONS = ['abstract', 'introduction', 'method', 'experiment', 'result', 'conclusion', 'related work'];
             const METHOD_VARIATIONS = ['method', 'methodology', 'approach', 'framework', 'architecture'];
             const basePath = `/api/v2/tenants/default_tenant/databases/default_database`;
+
+            // Helper: try to read stored QA report from ChromaDB
+            const tryGetStoredQAReport = async (targetPaperId: string | undefined, targetContentHash: string | undefined): Promise<{
+              found: boolean;
+              report?: {
+                reportId: string;
+                contentHash: string;
+                paperId?: string;
+                timestamp: string;
+                strategyVersion: string;
+                parseQA: { isValid: boolean; tablesDetected: number; figuresDetected: number; issues: string[] };
+                chunkQA: { isValid: boolean; totalChunks: number; orphanChunks: number; issues: string[] };
+                ragQA?: { isValid: boolean; passedCount: number; testQuestionCount: number; avgFaithfulness: number; issues: string[] };
+                passed: boolean;
+                allIssues: string[];
+              };
+            }> => {
+              try {
+                // QA reports are stored in l1_pdf with:
+                // - id starting with 'qa_' + contentHash prefix (e.g., qa_0bf68228811d_1769734976924)
+                // - paperId in metadata
+                // - content contains QA_REPORT_JSON marker
+                const colsResponse = await fetch(`${cfg.chromaUrl}${basePath}/collections`);
+                const cols = await colsResponse.json() as Array<{ name: string; id: string }>;
+                const l1PdfCol = cols.find(c => c.name === 'preflight_rag_l1_pdf');
+                if (!l1PdfCol) return { found: false };
+
+                // Get all items and filter for QA reports (id starts with 'qa_')
+                // No where clause needed - just get all and filter client-side
+                const getResponse = await fetch(
+                  `${cfg.chromaUrl}${basePath}/collections/${l1PdfCol.id}/get`,
+                  {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      include: ['documents', 'metadatas'],
+                      limit: 1000,
+                    }),
+                  }
+                );
+                const data = await getResponse.json() as {
+                  ids: string[];
+                  documents?: (string | null)[];
+                  metadatas?: (Record<string, unknown> | null)[];
+                };
+
+                if (!data.ids || data.ids.length === 0) return { found: false };
+
+                // Find QA reports (id starts with 'qa_') and match by paperId or contentHash
+                for (let i = 0; i < data.ids.length; i++) {
+                  const id = data.ids[i];
+                  if (!id?.startsWith('qa_')) continue; // Only QA reports
+
+                  const meta = data.metadatas?.[i];
+                  const content = data.documents?.[i] ?? '';
+                  
+                  // Match by paperId
+                  if (targetPaperId && meta?.paperId === targetPaperId) {
+                    const jsonMatch = content.match(/QA_REPORT_JSON:\n(.+)$/s);
+                    if (jsonMatch) {
+                      return { found: true, report: JSON.parse(jsonMatch[1]!) };
+                    }
+                  }
+                  
+                  // Match by contentHash (stored in bundleId or contentHash field, or in id prefix)
+                  if (targetContentHash) {
+                    const matchesBundleId = meta?.bundleId === targetContentHash;
+                    const matchesContentHash = meta?.contentHash === targetContentHash;
+                    const matchesIdPrefix = id.startsWith(`qa_${targetContentHash.slice(0, 12)}`);
+                    
+                    if (matchesBundleId || matchesContentHash || matchesIdPrefix) {
+                      const jsonMatch = content.match(/QA_REPORT_JSON:\n(.+)$/s);
+                      if (jsonMatch) {
+                        return { found: true, report: JSON.parse(jsonMatch[1]!) };
+                      }
+                    }
+                  }
+                }
+
+                return { found: false };
+              } catch {
+                return { found: false };
+              }
+            };
 
             // Helper function to diagnose a single paper
             const diagnosePaper = async (targetPaperId: string | undefined, targetBundleId: string | undefined): Promise<{
@@ -775,6 +915,73 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
             }
 
             // Single paper mode
+            // First try to get stored QA report (from index-time QA)
+            const contentList = await chromaDB.listHierarchicalContent();
+            const targetItem = paperId 
+              ? contentList.find(i => i.paperId === paperId)
+              : contentList.find(i => i.bundleId === bundleId);
+            
+            const storedQA = await tryGetStoredQAReport(paperId, targetItem?.contentHash);
+
+            if (storedQA.found && storedQA.report) {
+              // Display stored QA report (from index time)
+              const report = storedQA.report;
+              const qaScore = report.passed ? 100 : Math.max(0, 100 - report.allIssues.length * 20);
+              const qaGrade = report.passed ? 'A' : 'B';
+
+              textResponse += `🔬 Index Quality Diagnosis (from stored QA report)\n`;
+              textResponse += `Paper: ${report.paperId ?? paperId ?? bundleId}\n`;
+              textResponse += `Report ID: ${report.reportId}\n`;
+              textResponse += `Timestamp: ${report.timestamp}\n`;
+              textResponse += `Strategy: ${report.strategyVersion}\n\n`;
+
+              textResponse += `📊 **QA Result: ${report.passed ? 'PASSED' : 'FAILED'} (score: ${qaScore})**\n\n`;
+
+              textResponse += `**Parse QA** ${report.parseQA.isValid ? '✅' : '❌'}\n`;
+              textResponse += `  • Tables detected: ${report.parseQA.tablesDetected}\n`;
+              textResponse += `  • Figures detected: ${report.parseQA.figuresDetected}\n`;
+              if (report.parseQA.issues.length > 0) {
+                textResponse += `  • Issues: ${report.parseQA.issues.join('; ')}\n`;
+              }
+              textResponse += `\n`;
+
+              textResponse += `**Chunk QA** ${report.chunkQA.isValid ? '✅' : '❌'}\n`;
+              textResponse += `  • Total chunks: ${report.chunkQA.totalChunks}\n`;
+              textResponse += `  • Orphan chunks: ${report.chunkQA.orphanChunks}\n`;
+              if (report.chunkQA.issues.length > 0) {
+                textResponse += `  • Issues: ${report.chunkQA.issues.join('; ')}\n`;
+              }
+              textResponse += `\n`;
+
+              if (report.ragQA) {
+                textResponse += `**RAG QA** ${report.ragQA.isValid ? '✅' : '❌'}\n`;
+                textResponse += `  • Test questions: ${report.ragQA.passedCount}/${report.ragQA.testQuestionCount} passed\n`;
+                textResponse += `  • Avg faithfulness: ${report.ragQA.avgFaithfulness.toFixed(2)}\n`;
+                if (report.ragQA.issues.length > 0) {
+                  textResponse += `  • Issues: ${report.ragQA.issues.join('; ')}\n`;
+                }
+                textResponse += `\n`;
+              }
+
+              if (report.allIssues.length > 0) {
+                textResponse += `⚠️ **All Issues (${report.allIssues.length})**\n`;
+                for (const issue of report.allIssues) {
+                  textResponse += `  • ${issue}\n`;
+                }
+              } else {
+                textResponse += `✅ **No issues found**\n`;
+              }
+
+              structuredContent.paperId = paperId;
+              structuredContent.bundleId = bundleId;
+              structuredContent.storedQA = true;
+              structuredContent.qaReport = report;
+              structuredContent.score = qaScore;
+              structuredContent.grade = qaGrade;
+              break;
+            }
+
+            // Fallback: live analysis (no stored QA report found)
             const result = await diagnosePaper(paperId, bundleId);
             if (result.score === 0 && result.issues.includes('❌ No chunks found')) {
               textResponse += `⚠️ No chunks found for ${paperId ? `paperId: ${paperId}` : `bundleId: ${bundleId}`}\n`;
@@ -782,8 +989,8 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
               break;
             }
 
-            // Build detailed response for single paper
-            textResponse += `🔬 Index Quality Diagnosis\n`;
+            // Build detailed response for single paper (live analysis)
+            textResponse += `🔬 Index Quality Diagnosis (live analysis)\n`;
             textResponse += `Paper: ${paperId ?? bundleId}\n\n`;
             
             textResponse += `📊 **Quality Score: ${result.score}/100 (Grade: ${result.grade})**\n`;
@@ -818,8 +1025,12 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
               textResponse += `\n📝 **L1 Content Preview**\n---\n${result.l1Preview}...\n`;
             }
 
+            textResponse += `\n💡 **Note**: No stored QA report found. This is live analysis.\n`;
+            textResponse += `   Re-index with \`index: true\` to generate and store a QA report.\n`;
+
             structuredContent.paperId = paperId;
             structuredContent.bundleId = bundleId;
+            structuredContent.storedQA = false;
             structuredContent.score = result.score;
             structuredContent.grade = result.grade;
             structuredContent.distribution = result.distribution;

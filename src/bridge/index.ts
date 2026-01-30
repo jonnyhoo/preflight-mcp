@@ -135,10 +135,31 @@ export async function indexBundle(
 
   // Index each repo
   for (const repo of files.repos) {
+    // Load CARD.json to extract relatedPaperId (arxivId) for code repo linking
+    let relatedPaperId: string | undefined;
+    if (repo.cardPath) {
+      try {
+        const cardContent = await fs.readFile(repo.cardPath, 'utf8');
+        const card = JSON.parse(cardContent);
+        if (card.arxivId) {
+          relatedPaperId = card.arxivId;
+          logger.info(`Found arxivId in CARD.json: ${relatedPaperId}`);
+        }
+      } catch (err) {
+        logger.debug(`Could not read CARD.json for relatedPaperId: ${err}`);
+      }
+    }
+
     // Index CARD.json
     if (repo.cardPath) {
       try {
         const { chunks, result } = await bridgeRepoCard(repo.cardPath, bundleId, options);
+        // Add relatedPaperId to all CARD chunks
+        if (relatedPaperId) {
+          for (const chunk of chunks) {
+            chunk.metadata.relatedPaperId = relatedPaperId;
+          }
+        }
         allChunks.push(...chunks);
         mergeResults(totalResult, result);
         logger.info(`Indexed ${repo.repoId} CARD.json: ${result.chunksWritten} chunks`);
@@ -158,6 +179,12 @@ export async function indexBundle(
           repo.repoId, 
           options
         );
+        // Add relatedPaperId to all README chunks
+        if (relatedPaperId) {
+          for (const chunk of chunks) {
+            chunk.metadata.relatedPaperId = relatedPaperId;
+          }
+        }
         allChunks.push(...chunks);
         mergeResults(totalResult, result);
         logger.info(`Indexed ${repo.repoId} README.md: ${result.chunksWritten} chunks`);
@@ -195,6 +222,12 @@ export async function indexBundle(
             repo.repoId,
             options
           );
+          // Add relatedPaperId to all code chunks
+          if (relatedPaperId) {
+            for (const chunk of chunks) {
+              chunk.metadata.relatedPaperId = relatedPaperId;
+            }
+          }
           allChunks.push(...chunks);
           mergeResults(totalResult, result);
           logger.info(`Indexed ${repo.repoId} code: ${result.chunksWritten} chunks (${result.symbolsIndexed} symbols)`);
@@ -327,6 +360,11 @@ export async function indexBundle(
 
   if (pdfArtifacts.length > 0) {
     totalResult.pdfArtifacts = pdfArtifacts;
+  }
+
+  // Return all chunks for code repo QA (PDF chunks are in pdfArtifacts)
+  if (allChunks.length > 0 && pdfArtifacts.length === 0) {
+    totalResult.chunks = allChunks;
   }
 
   return totalResult;

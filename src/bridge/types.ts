@@ -100,6 +100,11 @@ export interface BridgeResult {
    * Used for index-time QA so we can evaluate exactly what we indexed (bundle will be deleted).
    */
   pdfArtifacts?: PdfIndexArtifact[];
+  /**
+   * All chunks indexed (for code repo QA).
+   * Available when indexing code repositories.
+   */
+  chunks?: ChunkDocument[];
 }
 
 // ============================================================================

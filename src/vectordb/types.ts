@@ -107,6 +107,8 @@ export interface ChunkMetadata {
   startLine?: number;
   /** End line in source file */
   endLine?: number;
+  /** Related paper ID (for code repos linked to papers, e.g., 'arxiv:2601.20852') */
+  relatedPaperId?: string;
 }
 
 /**

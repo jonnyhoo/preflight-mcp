@@ -32,6 +32,12 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
         crossBundleMode: z.enum(['single', 'specified', 'all']).optional().describe('Cross-bundle mode: single (default), specified (use bundleIds), all (query everything)'),
         index: z.boolean().optional().describe('Index bundle to vector DB (default: false). Skips if content already indexed.'),
         force: z.boolean().optional().describe('Force replace existing content with same hash. Use when: switching parser (MinerU→VLM), updating paper version, or re-indexing after bundle changes. Deletes old chunks before indexing new ones.'),
+        qualityThreshold: z.number().optional().describe(
+          'Minimum QA score (0-100) for indexing acceptance. ' +
+          'If QA score < threshold, indexing is rejected and chunks are rolled back. ' +
+          'Recommended: 60 for production quality assurance. ' +
+          'Example: {"bundleId": "xxx", "index": true, "qualityThreshold": 60}'
+        ),
         question: z.string().optional().describe('Question to ask about the bundle'),
         mode: z.enum(['naive', 'local', 'hybrid']).optional().describe('Query mode (default: hybrid)'),
         topK: z.number().optional().describe('Number of chunks to retrieve (default: 10)'),
@@ -58,6 +64,24 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
         paperVersion: z.string().optional().describe('Paper version (e.g., v1)'),
         existingChunks: z.number().optional().describe('Number of existing chunks (when skipped)'),
         deletedChunks: z.number().optional().describe('Number of chunks deleted (when force=true)'),
+        // QA info
+        qualityScore: z.number().optional().describe('QA quality score (0-100)'),
+        rejected: z.boolean().optional().describe('Whether indexing was rejected due to low quality'),
+        rejectionReason: z.string().optional().describe('Reason for rejection'),
+        qaSummary: z.object({
+          passed: z.boolean(),
+          parseOk: z.boolean(),
+          chunkOk: z.boolean(),
+          ragOk: z.boolean().optional(),
+          tablesDetected: z.number(),
+          figuresDetected: z.number(),
+          totalChunks: z.number(),
+          orphanChunks: z.number(),
+          ragPassedCount: z.number().optional(),
+          ragTotalCount: z.number().optional(),
+          avgFaithfulness: z.number().optional(),
+          issues: z.array(z.string()),
+        }).optional().describe('QA summary with parse/chunk/RAG results'),
         // Query result
         answer: z.string().optional(),
         sources: z
@@ -88,7 +112,7 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
     },
     async (args) => {
       try {
-        const { bundleId, bundleIds, crossBundleMode, index, force, question, mode, topK, repoId, expandToParent, expandToSiblings, useVerifierLlm } = args;
+        const { bundleId, bundleIds, crossBundleMode, index, force, qualityThreshold, question, mode, topK, repoId, expandToParent, expandToSiblings, useVerifierLlm } = args;
 
         // Validate: at least one action
         if (!index && !question) {
@@ -153,6 +177,23 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
           paperVersion?: string;
           existingChunks?: number;
           deletedChunks?: number;
+          qualityScore?: number;
+          qaSummary?: {
+            passed: boolean;
+            parseOk: boolean;
+            chunkOk: boolean;
+            ragOk?: boolean;
+            tablesDetected: number;
+            figuresDetected: number;
+            totalChunks: number;
+            orphanChunks: number;
+            ragPassedCount?: number;
+            ragTotalCount?: number;
+            avgFaithfulness?: number;
+            issues: string[];
+          };
+          rejected?: boolean;
+          rejectionReason?: string;
         } | null = null;
 
         let queryResult: {
@@ -181,8 +222,8 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
           if (!bundleId || !bundlePath) {
             throw new Error('bundleId and bundlePath required for indexing');
           }
-          logger.info(`Indexing bundle: ${bundleId}${force ? ' (force)' : ''}`);
-          const result = await engine.indexBundle(bundlePath, bundleId, { force });
+          logger.info(`Indexing bundle: ${bundleId}${force ? ' (force)' : ''}${qualityThreshold ? ` (threshold=${qualityThreshold})` : ''}`);
+          const result = await engine.indexBundle(bundlePath, bundleId, { force, qualityThreshold });
           indexResult = {
             chunksWritten: result.chunksWritten,
             entitiesCount: result.entitiesCount,
@@ -195,6 +236,10 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
             paperVersion: result.paperVersion,
             existingChunks: result.existingChunks,
             deletedChunks: result.deletedChunks,
+            qualityScore: result.qualityScore,
+            qaSummary: result.qaSummary,
+            rejected: result.rejected,
+            rejectionReason: result.rejectionReason,
           };
           if (result.skipped) {
             logger.info(`Skipped indexing: content already exists (${result.existingChunks} chunks)`);
@@ -248,7 +293,28 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
         textResponse += `🔧 Config: ChromaDB=${cfg.chromaUrl} | Embedding=${embeddingEndpoint} | ${llmInfo}\n\n`;
 
         if (indexResult) {
-          if (indexResult.skipped) {
+          if (indexResult.rejected) {
+            // Rejected due to low quality
+            textResponse += `❌ Rejected: ${indexResult.rejectionReason}\n`;
+            textResponse += `   contentHash: ${indexResult.contentHash?.slice(0, 12)}...\n`;
+            if (indexResult.paperId) {
+              textResponse += `   paperId: ${indexResult.paperId}${indexResult.paperVersion ? ` (${indexResult.paperVersion})` : ''}\n`;
+            }
+            textResponse += `   Rolled back: ${indexResult.deletedChunks} chunks\n`;
+            // Show QA summary for rejected
+            if (indexResult.qaSummary) {
+              const qa = indexResult.qaSummary;
+              textResponse += `   📊 QA: FAILED (score: ${indexResult.qualityScore})\n`;
+              textResponse += `      Parse: ${qa.parseOk ? 'OK' : 'FAIL'} (${qa.tablesDetected} tables, ${qa.figuresDetected} figures)\n`;
+              textResponse += `      Chunks: ${qa.totalChunks} total, ${qa.orphanChunks} orphan\n`;
+              if (qa.ragOk !== undefined) {
+                textResponse += `      RAG: ${qa.ragPassedCount}/${qa.ragTotalCount} passed (avg faith: ${qa.avgFaithfulness?.toFixed(2) ?? 'N/A'})\n`;
+              }
+              if (qa.issues.length > 0) {
+                textResponse += `      Issues: ${qa.issues.slice(0, 3).join('; ')}\n`;
+              }
+            }
+          } else if (indexResult.skipped) {
             textResponse += `⚠️ Skipped: content already indexed\n`;
             textResponse += `   contentHash: ${indexResult.contentHash?.slice(0, 12)}...\n`;
             if (indexResult.paperId) {
@@ -257,15 +323,24 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
             textResponse += `   existingChunks: ${indexResult.existingChunks}\n`;
             textResponse += `   Hint: Use force=true to replace.\n`;
           } else {
-            if (indexResult.deletedChunks) {
+            if (indexResult.deletedChunks && !indexResult.rejected) {
               textResponse += `🔄 Replaced: ${indexResult.contentHash?.slice(0, 12)}...\n`;
               textResponse += `   Deleted: ${indexResult.deletedChunks} chunks\n`;
             } else {
               textResponse += `✅ Indexed bundle: ${bundleId}\n`;
             }
             textResponse += `   Chunks: ${indexResult.chunksWritten}\n`;
-            textResponse += `   Entities: ${indexResult.entitiesCount ?? 0}\n`;
-            textResponse += `   Relations: ${indexResult.relationsCount ?? 0}\n`;
+            // Show QA summary for successful index
+            if (indexResult.qaSummary) {
+              const qa = indexResult.qaSummary;
+              const statusEmoji = qa.passed ? 'PASSED' : 'WARNING';
+              textResponse += `   📊 QA: ${statusEmoji} (score: ${indexResult.qualityScore})\n`;
+              textResponse += `      Parse: ${qa.parseOk ? 'OK' : 'FAIL'} (${qa.tablesDetected} tables, ${qa.figuresDetected} figures)\n`;
+              textResponse += `      Chunks: ${qa.totalChunks} total, ${qa.orphanChunks} orphan\n`;
+              if (qa.ragOk !== undefined) {
+                textResponse += `      RAG: ${qa.ragPassedCount}/${qa.ragTotalCount} passed (avg faith: ${qa.avgFaithfulness?.toFixed(2) ?? 'N/A'})\n`;
+              }
+            }
             if (indexResult.contentHash) {
               textResponse += `   contentHash: ${indexResult.contentHash.slice(0, 12)}...\n`;
             }
@@ -359,8 +434,10 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
         };
 
         if (indexResult) {
-          structuredContent.indexed = !indexResult.skipped;
+          structuredContent.indexed = !indexResult.skipped && !indexResult.rejected;
           structuredContent.skipped = indexResult.skipped;
+          structuredContent.rejected = indexResult.rejected;
+          structuredContent.rejectionReason = indexResult.rejectionReason;
           structuredContent.chunksWritten = indexResult.chunksWritten;
           structuredContent.entitiesCount = indexResult.entitiesCount;
           structuredContent.relationsCount = indexResult.relationsCount;
@@ -370,6 +447,8 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
           structuredContent.paperVersion = indexResult.paperVersion;
           structuredContent.existingChunks = indexResult.existingChunks;
           structuredContent.deletedChunks = indexResult.deletedChunks;
+          structuredContent.qualityScore = indexResult.qualityScore;
+          structuredContent.qaSummary = indexResult.qaSummary;
           if (indexResult.errors.length > 0) {
             structuredContent.indexErrors = indexResult.errors;
           }
