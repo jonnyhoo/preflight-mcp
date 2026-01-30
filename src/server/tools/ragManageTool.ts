@@ -88,10 +88,10 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
             // Get repo bundleIds first to identify doc items that belong to repos
             const repos = items.filter(i => i.type === 'repo');
             const repoBundleIds = new Set(repos.map(r => r.bundleId).filter(Boolean));
-            // Papers: pdf type, or doc type that doesn't belong to a repo (has paperId or doesn't share bundleId with a repo)
+            // Papers: pdf type, or doc type WITH paperId (exclude doc items without paperId even if not in repo)
             const papers = items.filter(i => 
               i.type === 'pdf' || 
-              (i.type === 'doc' && (i.paperId || !repoBundleIds.has(i.bundleId)))
+              (i.type === 'doc' && i.paperId)
             );
 
             textResponse += `📋 Indexed Content (${items.length} total)\n\n`;
@@ -158,10 +158,10 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
                   }
                 }
               }
-              // Warning for items missing paperId
-              const missingPaperId = items.filter(i => !i.paperId);
+              // Warning for papers missing paperId (exclude repos and repo-related docs)
+              const missingPaperId = papers.filter(i => !i.paperId && i.type !== 'repo');
               if (missingPaperId.length > 0) {
-                textResponse += `\n⚠️ ${missingPaperId.length} item(s) missing paperId (marked with ⚠️)\n`;
+                textResponse += `\n⚠️ ${missingPaperId.length} paper(s) missing paperId (marked with ⚠️)\n`;
               }
             }
             break;
@@ -178,9 +178,10 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
             // Categorize by type (same logic as list)
             const repos = contentList.filter(i => i.type === 'repo');
             const repoBundleIds = new Set(repos.map(r => r.bundleId).filter(Boolean));
+            // Papers: pdf type, or doc type WITH paperId (exclude doc items without paperId even if not in repo)
             const papers = contentList.filter(i => 
               i.type === 'pdf' || 
-              (i.type === 'doc' && (i.paperId || !repoBundleIds.has(i.bundleId)))
+              (i.type === 'doc' && i.paperId)
             );
 
             textResponse += `📊 RAG Statistics (Hierarchical)\n\n`;
@@ -190,9 +191,11 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
               textResponse += `  • ${level}: ${count}\n`;
             }
             if (papers.length > 0) {
-              const withPaperId = papers.filter(p => p.paperId).length;
-              const missingPaperId = papers.length - withPaperId;
-              textResponse += `\n📄 Papers (${papers.length}${missingPaperId > 0 ? `, ${missingPaperId} missing paperId` : ''}):\n`;
+              // Only count actual papers (exclude QA reports and repo docs)
+              const actualPapers = papers.filter(p => p.type === 'pdf' || (p.type === 'doc' && p.paperId));
+              const withPaperId = actualPapers.filter(p => p.paperId).length;
+              const missingPaperId = actualPapers.length - withPaperId;
+              textResponse += `\n📄 Papers (${actualPapers.length}${missingPaperId > 0 ? `, ${missingPaperId} missing paperId` : ''}):\n`;
               for (const item of papers) {
                 let displayName = item.paperId;
                 if (!displayName && item.contentHash) {

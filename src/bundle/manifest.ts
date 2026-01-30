@@ -168,6 +168,15 @@ export type RepoInput =
       url?: string; // PDF URL to download (optional if path is provided)
       path?: string; // Local file path to PDF (optional if url is provided)
       name?: string; // optional display name for the document
+    }
+  | {
+      /**
+       * Import markdown documents from a local directory.
+       * All .md and .markdown files are recursively ingested.
+       */
+      kind: 'markdown';
+      path: string; // Local directory path containing markdown files
+      name?: string; // optional display name for the document collection
     };
 
 export type BundleIndexConfig = {
@@ -177,8 +186,8 @@ export type BundleIndexConfig = {
 };
 
 export type BundleRepo = {
-  kind: 'github' | 'local' | 'web' | 'pdf';
-  id: string; // owner/repo for github/local, 'web/{safeId}' for web, 'pdf/{safeId}' for pdf
+  kind: 'github' | 'local' | 'web' | 'pdf' | 'markdown';
+  id: string; // owner/repo for github/local, 'web/{safeId}' for web, 'pdf/{safeId}' for pdf, 'markdown/{safeId}' for markdown
   /**
    * Source of the snapshot for this repo.
    * - github: git shallow clone or GitHub archive (zipball) fallback

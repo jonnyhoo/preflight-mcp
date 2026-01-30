@@ -105,7 +105,7 @@ export type BundleSummary = {
   createdAt: string;
   updatedAt: string;
   repos: Array<{
-    kind: 'github' | 'local' | 'web' | 'pdf';
+    kind: 'github' | 'local' | 'web' | 'pdf' | 'markdown';
     id: string;
     source?: 'git' | 'archive' | 'local' | 'crawl' | 'download';
     headSha?: string;
@@ -307,17 +307,21 @@ async function createBundleInternal(
   options?: CreateBundleOptions
 ): Promise<BundleSummary> {
   const fingerprint = computeCreateInputFingerprint(input);
-  const isPdfOnly = input.repos.length > 0
-    && input.repos.every((r) => r.kind === 'pdf')
+  // Document-only bundles: PDF or markdown (no code analysis needed)
+  const isDocumentOnly = input.repos.length > 0
+    && input.repos.every((r) => r.kind === 'pdf' || r.kind === 'markdown')
     && (!input.libraries || input.libraries.length === 0)
     && (!input.topics || input.topics.length === 0);
-  // Extract IDs for display - for web/pdf sources, use the URL
+  // Extract IDs for display - for web/pdf/markdown sources, use the URL/path
   const repoIds = input.repos.map((r) => {
     if (r.kind === 'web') {
       return `web:${r.url}`;
     }
     if (r.kind === 'pdf') {
       return `pdf:${r.name ?? r.url ?? r.path ?? 'unknown'}`;
+    }
+    if (r.kind === 'markdown') {
+      return `markdown:${r.name ?? r.path}`;
     }
     return r.repo;
   });
@@ -384,7 +388,7 @@ async function createBundleInternal(
   const tmpPaths = getBundlePaths(tmpBundlesDir, bundleId);
   await ensureDir(tmpPaths.rootDir);
 
-  const docsDir = isPdfOnly ? undefined : path.join(tmpPaths.rootDir, 'docs');
+  const docsDir = isDocumentOnly ? undefined : path.join(tmpPaths.rootDir, 'docs');
   if (docsDir) {
     await ensureDir(docsDir);
   }
@@ -457,7 +461,7 @@ async function createBundleInternal(
         const nameSlug = (pdfInfo.name ?? '').trim().replace(/[^a-zA-Z0-9._-]/g, '_');
         const pdfSlug = nameSlug ? `${nameSlug}_${pathHash}` : pathHash;
         const pdfRepoId = `pdf/${pdfSlug}`;
-        const pdfDocsDir = isPdfOnly ? tmpPaths.rootDir : path.join(docsDir!, 'pdf', pdfSlug);
+        const pdfDocsDir = isDocumentOnly ? tmpPaths.rootDir : path.join(docsDir!, 'pdf', pdfSlug);
         await ensureDir(pdfDocsDir);
         
         const notes: string[] = ['Parser: mineru (batch)'];
@@ -481,7 +485,7 @@ async function createBundleInternal(
           // Write markdown file
           if (parseResult.fullText) {
             const mdBaseName = nameSlug || 'document';
-            const mdFilename = isPdfOnly ? `pdf_${pdfSlug}.md` : `${mdBaseName}.md`;
+            const mdFilename = isDocumentOnly ? `pdf_${pdfSlug}.md` : `${mdBaseName}.md`;
             const mdPath = path.join(pdfDocsDir, mdFilename);
             const mdContent = [
               `# ${pdfInfo.name ?? 'PDF Document'}`,
@@ -495,7 +499,7 @@ async function createBundleInternal(
             ].filter(Boolean).join('\n');
             await fs.writeFile(mdPath, mdContent, 'utf8');
             
-            const bundleRelPath = isPdfOnly ? mdFilename : `docs/pdf/${pdfSlug}/${mdFilename}`;
+            const bundleRelPath = isDocumentOnly ? mdFilename : `docs/pdf/${pdfSlug}/${mdFilename}`;
             const mdContentHash = sha256Text(mdContent);
             allIngestedFiles.push({
               repoId: pdfRepoId,
@@ -559,7 +563,7 @@ async function createBundleInternal(
         const nameSlug = (pdfInfo.name ?? '').trim().replace(/[^a-zA-Z0-9._-]/g, '_');
         const pdfSlug = nameSlug ? `${nameSlug}_${urlHash}` : urlHash;
         const pdfRepoId = `pdf/${pdfSlug}`;
-        const pdfDocsDir = isPdfOnly ? tmpPaths.rootDir : path.join(docsDir!, 'pdf', pdfSlug);
+        const pdfDocsDir = isDocumentOnly ? tmpPaths.rootDir : path.join(docsDir!, 'pdf', pdfSlug);
         await ensureDir(pdfDocsDir);
         
         const notes: string[] = ['Parser: mineru (batch)'];
@@ -573,7 +577,7 @@ async function createBundleInternal(
           // Write markdown file
           if (parseResult.fullText) {
             const mdBaseName = nameSlug || 'document';
-            const mdFilename = isPdfOnly ? `pdf_${pdfSlug}.md` : `${mdBaseName}.md`;
+            const mdFilename = isDocumentOnly ? `pdf_${pdfSlug}.md` : `${mdBaseName}.md`;
             const mdPath = path.join(pdfDocsDir, mdFilename);
             const mdContent = [
               `# ${pdfInfo.name ?? 'PDF Document'}`,
@@ -587,7 +591,7 @@ async function createBundleInternal(
             ].filter(Boolean).join('\n');
             await fs.writeFile(mdPath, mdContent, 'utf8');
             
-            const bundleRelPath = isPdfOnly ? mdFilename : `docs/pdf/${pdfSlug}/${mdFilename}`;
+            const bundleRelPath = isDocumentOnly ? mdFilename : `docs/pdf/${pdfSlug}/${mdFilename}`;
             const mdContentHash = sha256Text(mdContent);
             allIngestedFiles.push({
               repoId: pdfRepoId,
@@ -815,7 +819,7 @@ async function createBundleInternal(
         const nameSlug = (repoInput.name ?? '').trim().replace(/[^a-zA-Z0-9._-]/g, '_');
         const pdfSlug = nameSlug ? `${nameSlug}_${sourceHash}` : sourceHash;
         const pdfRepoId = `pdf/${pdfSlug}`;
-        const pdfDocsDir = isPdfOnly
+        const pdfDocsDir = isDocumentOnly
           ? tmpPaths.rootDir
           : path.join(docsDir!, 'pdf', pdfSlug);
         await ensureDir(pdfDocsDir);
@@ -874,7 +878,7 @@ async function createBundleInternal(
         if (parseResult.success && parseResult.fullText) {
           // Create a markdown file with the extracted text
           const mdBaseName = nameSlug || 'document';
-          const mdFilename = isPdfOnly
+          const mdFilename = isDocumentOnly
             ? `pdf_${pdfSlug}.md`
             : `${mdBaseName}.md`;
           const mdPath = path.join(pdfDocsDir, mdFilename);
@@ -909,8 +913,8 @@ async function createBundleInternal(
             notes.push(`Images saved: ${parseResult.assets.size}`);
           }
           
-          // Generate OVERVIEW.md for PDF bundles (for get_overview tool)
-          if (isPdfOnly) {
+          // Generate OVERVIEW.md for document bundles (for get_overview tool)
+          if (isDocumentOnly) {
             await generateDocumentOverview(pdfDocsDir, parseResult.fullText, {
               source: pdfUrl ?? localPdfPath ?? 'unknown',
               pageCount: parseResult.pageCount,
@@ -921,7 +925,7 @@ async function createBundleInternal(
           const mdContentHash = sha256Text(mdContent);
           
           // Add to ingested files (match IngestedFile type)
-          const bundleRelPath = isPdfOnly
+          const bundleRelPath = isDocumentOnly
             ? mdFilename
             : `docs/pdf/${pdfSlug}/${mdFilename}`;
           const ingestedFile: IngestedFile = {
@@ -946,6 +950,115 @@ async function createBundleInternal(
           localPath: localPdfPath,
           fileSize: fileSize,
         });
+      } else if (repoInput.kind === 'markdown') {
+        // Markdown document - can be a single file or a directory
+        reportProgress('ingesting', repoProgress, `[${repoIndex}/${totalRepos}] Ingesting markdown from ${repoInput.path}...`);
+        tracker.updateProgress(taskId, 'ingesting', repoProgress, `Ingesting markdown...`);
+
+        const mdSourcePath = path.resolve(repoInput.path);
+        const pathHash = crypto.createHash('sha256').update(mdSourcePath).digest('hex').slice(0, 12);
+        const nameSlug = (repoInput.name ?? '').trim().replace(/[^a-zA-Z0-9._-]/g, '_');
+        const mdSlug = nameSlug ? `${nameSlug}_${pathHash}` : pathHash;
+        const mdRepoId = `markdown/${mdSlug}`;
+
+        const notes: string[] = [`Source: ${mdSourcePath}`];
+        let totalBytes = 0;
+        let fileCount = 0;
+        let contentHashParts: string[] = [];
+
+        // Check if path is a file or directory
+        const sourceStat = await fs.stat(mdSourcePath);
+        const isFile = sourceStat.isFile();
+
+        // Recursively find all .md files (for directory) or return single file
+        const findMdFiles = async (sourcePath: string, isSourceFile: boolean): Promise<string[]> => {
+          if (isSourceFile) {
+            // Single file
+            return [sourcePath];
+          }
+          // Directory - recursively find all .md files
+          const entries = await fs.readdir(sourcePath, { withFileTypes: true });
+          const files: string[] = [];
+          for (const entry of entries) {
+            const fullPath = path.join(sourcePath, entry.name);
+            if (entry.isDirectory()) {
+              files.push(...await findMdFiles(fullPath, false));
+            } else if (entry.isFile() && (entry.name.endsWith('.md') || entry.name.endsWith('.markdown'))) {
+              files.push(fullPath);
+            }
+          }
+          return files;
+        };
+
+        try {
+          const mdFiles = await findMdFiles(mdSourcePath, isFile);
+          notes.push(isFile ? `Single file` : `Found ${mdFiles.length} markdown files`);
+
+          // Base path for relative path calculation
+          const basePath = isFile ? path.dirname(mdSourcePath) : mdSourcePath;
+
+          for (const mdFilePath of mdFiles) {
+            const content = await fs.readFile(mdFilePath, 'utf8');
+            const relPath = path.relative(basePath, mdFilePath);
+            const contentHash = sha256Text(content);
+            contentHashParts.push(contentHash);
+            const bytes = Buffer.byteLength(content, 'utf8');
+            totalBytes += bytes;
+            fileCount++;
+
+            // Copy file to bundle
+            const bundleRelPath = relPath;
+            const bundleAbsPath = path.join(tmpPaths.rootDir, relPath);
+            await ensureDir(path.dirname(bundleAbsPath));
+            await fs.writeFile(bundleAbsPath, content, 'utf8');
+
+            allIngestedFiles.push({
+              repoId: mdRepoId,
+              kind: 'doc',
+              repoRelativePath: relPath,
+              bundleNormRelativePath: bundleRelPath,
+              bundleNormAbsPath: bundleAbsPath,
+              sha256: contentHash,
+              bytes,
+            });
+          }
+
+          notes.push(`Total size: ${totalBytes} bytes`);
+
+          // Generate combined content hash
+          const combinedHash = sha256Text(contentHashParts.sort().join(''));
+
+          // Generate OVERVIEW.md for markdown bundles
+          if (isDocumentOnly && mdFiles.length > 0) {
+            // Read first file for overview generation
+            const firstFileContent = await fs.readFile(mdFiles[0]!, 'utf8');
+            await generateDocumentOverview(tmpPaths.rootDir, firstFileContent, {
+              source: mdSourcePath,
+              pageCount: fileCount,
+            });
+          }
+
+          reposSummary.push({
+            kind: 'markdown',
+            id: mdRepoId,
+            source: 'local',
+            headSha: combinedHash,
+            notes: notes.slice(0, 50),
+            localPath: mdSourcePath,
+          });
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          notes.push(`Error: ${errMsg}`);
+          allWarnings.push(`Markdown ingest failed for ${mdSourcePath}: ${errMsg}`);
+          
+          reposSummary.push({
+            kind: 'markdown',
+            id: mdRepoId,
+            source: 'local',
+            notes: notes.slice(0, 50),
+            localPath: mdSourcePath,
+          });
+        }
       }
     }
 
@@ -955,7 +1068,7 @@ async function createBundleInternal(
   
   const indexConfig = {
     includeDocs: true,
-    includeCode: !isPdfOnly,
+    includeCode: !isDocumentOnly,
   };
   await rebuildIndex(tmpPaths.searchDbPath, allIngestedFiles, indexConfig);
 
@@ -984,7 +1097,7 @@ async function createBundleInternal(
       description,
       tags,
       primaryLanguage,
-      type: isPdfOnly ? 'document' : undefined,
+      type: isDocumentOnly ? 'document' : undefined,
       inputs: {
         repos: input.repos,
         libraries: input.libraries,
@@ -1021,7 +1134,7 @@ async function createBundleInternal(
 
   await writeManifest(tmpPaths.manifestPath, manifest);
 
-  if (!isPdfOnly) {
+  if (!isDocumentOnly) {
     // Guides.
     await writeAgentsMd({
       targetPath: tmpPaths.agentsPath,

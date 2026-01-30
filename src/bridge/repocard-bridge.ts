@@ -167,6 +167,40 @@ export async function locateFilesToIndex(bundlePath: string): Promise<IndexableF
         }
       }
 
+      // Markdown document collection paths
+      // For markdown kind, all .md files are stored directly in bundle root
+      let markdownPaths: string[] | undefined;
+      if (kind === 'markdown') {
+        // Find all .md files in bundle root (recursively)
+        const findMdFiles = async (dir: string): Promise<string[]> => {
+          const files: string[] = [];
+          try {
+            const entries = await fs.readdir(dir, { withFileTypes: true });
+            for (const entry of entries) {
+              const fullPath = path.join(dir, entry.name);
+              if (entry.isDirectory()) {
+                // Skip special directories
+                if (!['cards', 'repos', 'analysis'].includes(entry.name)) {
+                  files.push(...await findMdFiles(fullPath));
+                }
+              } else if (entry.isFile() && (entry.name.endsWith('.md') || entry.name.endsWith('.markdown'))) {
+                // Skip special files
+                if (!['OVERVIEW.md', 'AGENTS.md', 'START_HERE.md'].includes(entry.name)) {
+                  files.push(fullPath);
+                }
+              }
+            }
+          } catch {
+            // Ignore read errors
+          }
+          return files;
+        };
+        markdownPaths = await findMdFiles(bundlePath);
+        if (markdownPaths.length > 0) {
+          logger.debug(`Found ${markdownPaths.length} markdown files for ${repoId}`);
+        }
+      }
+
       return {
         repoId,
         kind,
@@ -177,6 +211,7 @@ export async function locateFilesToIndex(bundlePath: string): Promise<IndexableF
             ? rootReadmePath 
             : null,
         pdfMarkdownPath,
+        markdownPaths,
       };
     })
   );

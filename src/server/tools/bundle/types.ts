@@ -83,6 +83,11 @@ export const CreateRepoInputSchema = z.union([
     (data) => data.url || data.path,
     { message: 'Either url or path must be provided for PDF input' }
   ),
+  z.object({
+    kind: z.literal('markdown'),
+    path: z.string().describe('Absolute path to local directory containing markdown files. Example: "C:\\\\docs\\\\iching" or "/home/user/docs"'),
+    name: z.string().optional().describe('Display name for the document collection. Example: "I Ching Wilhelm Translation"'),
+  }),
 ]);
 
 export const CreateBundleInputSchema = {

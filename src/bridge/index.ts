@@ -14,6 +14,8 @@ import {
   bridgeReadme, 
   bridgeOverview 
 } from './repocard-bridge.js';
+import { semanticChunk } from './semantic-chunker.js';
+import type { SemanticChunk } from './types.js';
 import { bridgePdfMarkdown } from './markdown-bridge.js';
 import { preprocessPdfMarkdown } from '../rag/pdf-preprocessor.js';
 import { extractArxivCategory, extractPaperTitle } from '../bundle/content-id.js';
@@ -212,7 +214,7 @@ export async function indexBundle(
         
         // Classify the repo to determine indexing strategy
         const classification = await classifyBundleRepo(bundlePath, repo.repoId);
-        logger.info(`Repo ${repo.repoId} classified as ${classification.type} (code ratio: ${classification.codeRatio.toFixed(2)})`);
+        logger.info(`Repo ${repo.repoId} classified as ${classification.type} (code ratio: ${classification.codeRatio.toFixed(2)}, data=${classification.isDataRepo})`);
         
         // Index code for code and hybrid repos
         if (classification.type === 'code' || classification.type === 'hybrid') {
@@ -232,8 +234,96 @@ export async function indexBundle(
           mergeResults(totalResult, result);
           logger.info(`Indexed ${repo.repoId} code: ${result.chunksWritten} chunks (${result.symbolsIndexed} symbols)`);
         }
+        
+        // Index all markdown files for documentation repos (including data repos)
+        if (classification.type === 'documentation') {
+          // Find all markdown files in the repo
+          const findMdFilesInRepo = async (dir: string): Promise<string[]> => {
+            const mdFiles: string[] = [];
+            const skipDirs = new Set(['node_modules', '.git', 'dist', 'build', '__pycache__', '.venv']);
+            try {
+              const entries = await fs.readdir(dir, { withFileTypes: true });
+              for (const entry of entries) {
+                const fullPath = path.join(dir, entry.name);
+                if (entry.isDirectory()) {
+                  if (!skipDirs.has(entry.name)) {
+                    mdFiles.push(...await findMdFilesInRepo(fullPath));
+                  }
+                } else if (entry.isFile() && 
+                    (entry.name.endsWith('.md') || entry.name.endsWith('.markdown')) &&
+                    entry.name.toLowerCase() !== 'readme.md') { // README already indexed
+                  mdFiles.push(fullPath);
+                }
+              }
+            } catch {
+              // Ignore read errors
+            }
+            return mdFiles;
+          };
+          
+          const markdownFiles = await findMdFilesInRepo(codePath);
+          logger.info(`Found ${markdownFiles.length} markdown files in documentation repo ${repo.repoId}`);
+          
+          for (const mdPath of markdownFiles) {
+            try {
+              const mdContent = await fs.readFile(mdPath, 'utf8');
+              const relPath = path.relative(codePath, mdPath);
+              
+              // Use semantic chunking for markdown content
+              const mdChunks = semanticChunk(mdContent, {
+                sourceType: 'pdf_text', // Reuse pdf_text for markdown documents
+                bundleId,
+                repoId: repo.repoId,
+                filePath: relPath,
+              });
+              
+              // Generate embeddings
+              const texts = mdChunks.map((c) => c.content);
+              const embeddings = await options.embedding.embedBatch(texts);
+              
+              // Convert to ChunkDocuments
+              const chunks: ChunkDocument[] = mdChunks.map((c, i) => ({
+                id: c.id,
+                content: c.content,
+                metadata: {
+                  sourceType: c.metadata.sourceType,
+                  bundleId: c.metadata.bundleId,
+                  repoId: c.metadata.repoId,
+                  filePath: relPath,
+                  chunkIndex: c.metadata.chunkIndex,
+                  chunkType: c.chunkType,
+                  sectionHeading: c.metadata.sectionHeading,
+                  headingLevel: c.metadata.headingLevel,
+                  headingPath: c.metadata.headingPath,
+                  granularity: c.metadata.granularity,
+                },
+                embedding: embeddings[i]?.vector,
+              }));
+              
+              allChunks.push(...chunks);
+              
+              // Update result stats
+              const chunksByType: Record<string, number> = {};
+              for (const c of chunks) {
+                const type = c.metadata.chunkType ?? 'text';
+                chunksByType[type] = (chunksByType[type] ?? 0) + 1;
+              }
+              mergeResults(totalResult, {
+                chunksWritten: chunks.length,
+                chunksByType: chunksByType as BridgeResult['chunksByType'],
+                errors: [],
+              });
+              
+              logger.info(`Indexed doc markdown ${relPath}: ${chunks.length} chunks`);
+            } catch (err) {
+              const msg = `Failed to index markdown file ${mdPath}: ${err}`;
+              logger.error(msg);
+              totalResult.errors.push(msg);
+            }
+          }
+        }
       } catch (err) {
-        const msg = `Failed to index ${repo.repoId} code: ${err}`;
+        const msg = `Failed to index ${repo.repoId}: ${err}`;
         logger.error(msg);
         totalResult.errors.push(msg);
       }
@@ -324,6 +414,68 @@ export async function indexBundle(
         logger.error(msg);
         totalResult.errors.push(msg);
       }
+    }
+
+    // Index markdown document files (for markdown kind repos)
+    if (repo.markdownPaths && repo.markdownPaths.length > 0) {
+      for (const mdPath of repo.markdownPaths) {
+        try {
+          const mdContent = await fs.readFile(mdPath, 'utf8');
+          const relPath = path.relative(bundlePath, mdPath);
+          
+          // Use semantic chunking for markdown content
+          const mdChunks = semanticChunk(mdContent, {
+            sourceType: 'pdf_text', // Reuse pdf_text for markdown documents
+            bundleId,
+            repoId: repo.repoId,
+            filePath: relPath,
+          });
+          
+          // Generate embeddings
+          const texts = mdChunks.map((c) => c.content);
+          const embeddings = await options.embedding.embedBatch(texts);
+          
+          // Convert to ChunkDocuments
+          const chunks: ChunkDocument[] = mdChunks.map((c, i) => ({
+            id: c.id,
+            content: c.content,
+            metadata: {
+              sourceType: c.metadata.sourceType,
+              bundleId: c.metadata.bundleId,
+              repoId: c.metadata.repoId,
+              filePath: relPath,
+              chunkIndex: c.metadata.chunkIndex,
+              chunkType: c.chunkType,
+              sectionHeading: c.metadata.sectionHeading,
+              headingLevel: c.metadata.headingLevel,
+              headingPath: c.metadata.headingPath,
+              granularity: c.metadata.granularity,
+            },
+            embedding: embeddings[i]?.vector,
+          }));
+          
+          allChunks.push(...chunks);
+          
+          // Update result stats
+          const chunksByType: Record<string, number> = {};
+          for (const c of chunks) {
+            const type = c.metadata.chunkType ?? 'text';
+            chunksByType[type] = (chunksByType[type] ?? 0) + 1;
+          }
+          mergeResults(totalResult, {
+            chunksWritten: chunks.length,
+            chunksByType: chunksByType as BridgeResult['chunksByType'],
+            errors: [],
+          });
+          
+          logger.info(`Indexed markdown file ${relPath}: ${chunks.length} chunks`);
+        } catch (err) {
+          const msg = `Failed to index markdown file ${mdPath}: ${err}`;
+          logger.error(msg);
+          totalResult.errors.push(msg);
+        }
+      }
+      logger.info(`Indexed ${repo.repoId} markdown docs: ${repo.markdownPaths.length} files`);
     }
   }
 

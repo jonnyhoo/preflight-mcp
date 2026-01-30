@@ -113,7 +113,7 @@ export interface BridgeResult {
 
 export interface IndexableRepo {
   repoId: string;
-  /** Repo kind: 'github' | 'pdf' | 'web' etc. */
+  /** Repo kind: 'github' | 'pdf' | 'web' | 'markdown' etc. */
   kind?: string;
   /** Path to cards/xxx/CARD.json */
   cardPath: string | null;
@@ -121,6 +121,8 @@ export interface IndexableRepo {
   readmePath: string | null;
   /** Path to pdf_{safeRepoId}.md for PDF repos */
   pdfMarkdownPath?: string;
+  /** Paths to markdown files for markdown document repos */
+  markdownPaths?: string[];
 }
 
 export interface IndexableFiles {

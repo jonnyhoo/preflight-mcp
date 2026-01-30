@@ -110,7 +110,8 @@ type CanonicalWebConfig = {
 type CanonicalRepoInput =
   | { kind: 'github'; repo: string; ref?: string }
   | { kind: 'web'; url: string; config?: CanonicalWebConfig }
-  | { kind: 'pdf'; url?: string; path?: string };
+  | { kind: 'pdf'; url?: string; path?: string }
+  | { kind: 'markdown'; path: string };
 
 /**
  * Normalize web URL for consistent fingerprinting.
@@ -194,6 +195,14 @@ function canonicalizeCreateInput(input: CreateBundleInput): {
           url: '',
         };
       }
+      if (r.kind === 'markdown') {
+        // Markdown document collection - use normalized path for fingerprinting
+        const normalizedPath = path.resolve(r.path).replace(/\\/g, '/').toLowerCase();
+        return {
+          kind: 'markdown' as const,
+          path: normalizedPath,
+        };
+      }
       // For de-duplication, treat local imports as equivalent to github imports of the same logical repo/ref.
       const { owner, repo } = parseOwnerRepo(r.repo);
       return {
@@ -205,9 +214,11 @@ function canonicalizeCreateInput(input: CreateBundleInput): {
     .sort((a, b) => {
       const ka = a.kind === 'web' ? `web:${a.url}:${JSON.stringify(a.config ?? {})}` :
                  a.kind === 'pdf' ? `pdf:${a.url ?? ''}:${a.path ?? ''}` :
+                 a.kind === 'markdown' ? `markdown:${a.path}` :
                  `github:${a.repo}:${a.ref ?? ''}`;
       const kb = b.kind === 'web' ? `web:${b.url}:${JSON.stringify(b.config ?? {})}` :
                  b.kind === 'pdf' ? `pdf:${b.url ?? ''}:${b.path ?? ''}` :
+                 b.kind === 'markdown' ? `markdown:${b.path}` :
                  `github:${b.repo}:${b.ref ?? ''}`;
       return ka.localeCompare(kb);
     });

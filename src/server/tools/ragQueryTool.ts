@@ -81,7 +81,14 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
           ragTotalCount: z.number().optional(),
           avgFaithfulness: z.number().optional(),
           issues: z.array(z.string()),
-        }).optional().describe('QA summary with parse/chunk/RAG results'),
+          // Code repo specific fields
+          isCodeRepo: z.boolean().optional(),
+          cardScore: z.number().optional(),
+          classCount: z.number().optional(),
+          functionCount: z.number().optional(),
+          hasReadme: z.boolean().optional(),
+          relatedPaperId: z.string().optional(),
+        }).optional().describe('QA summary with parse/chunk/RAG results (PDF) or CARD/Code/Docs (code repo)'),
         // Query result
         answer: z.string().optional(),
         sources: z
@@ -191,6 +198,13 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
             ragTotalCount?: number;
             avgFaithfulness?: number;
             issues: string[];
+            // Code repo specific fields
+            isCodeRepo?: boolean;
+            cardScore?: number;
+            classCount?: number;
+            functionCount?: number;
+            hasReadme?: boolean;
+            relatedPaperId?: string;
           };
           rejected?: boolean;
           rejectionReason?: string;
@@ -305,10 +319,19 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
             if (indexResult.qaSummary) {
               const qa = indexResult.qaSummary;
               textResponse += `   📊 QA: FAILED (score: ${indexResult.qualityScore})\n`;
-              textResponse += `      Parse: ${qa.parseOk ? 'OK' : 'FAIL'} (${qa.tablesDetected} tables, ${qa.figuresDetected} figures)\n`;
-              textResponse += `      Chunks: ${qa.totalChunks} total, ${qa.orphanChunks} orphan\n`;
-              if (qa.ragOk !== undefined) {
-                textResponse += `      RAG: ${qa.ragPassedCount}/${qa.ragTotalCount} passed (avg faith: ${qa.avgFaithfulness?.toFixed(2) ?? 'N/A'})\n`;
+              
+              if (qa.isCodeRepo) {
+                // Code repo specific display format
+                textResponse += `      CARD: ${qa.parseOk ? 'OK' : 'FAIL'} (completeness: ${qa.cardScore ?? 0}%)\n`;
+                textResponse += `      Code: ${qa.chunkOk ? 'OK' : 'FAIL'} (${qa.classCount ?? 0} classes, ${qa.functionCount ?? 0} functions)\n`;
+                textResponse += `      Docs: ${qa.hasReadme ? 'README ✓' : 'README ✗'}${qa.relatedPaperId ? `, linked: ${qa.relatedPaperId}` : ''}\n`;
+              } else {
+                // PDF display format
+                textResponse += `      Parse: ${qa.parseOk ? 'OK' : 'FAIL'} (${qa.tablesDetected} tables, ${qa.figuresDetected} figures)\n`;
+                textResponse += `      Chunks: ${qa.totalChunks} total, ${qa.orphanChunks} orphan\n`;
+                if (qa.ragOk !== undefined) {
+                  textResponse += `      RAG: ${qa.ragPassedCount}/${qa.ragTotalCount} passed (avg faith: ${qa.avgFaithfulness?.toFixed(2) ?? 'N/A'})\n`;
+                }
               }
               if (qa.issues.length > 0) {
                 textResponse += `      Issues: ${qa.issues.slice(0, 3).join('; ')}\n`;
@@ -335,10 +358,19 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
               const qa = indexResult.qaSummary;
               const statusEmoji = qa.passed ? 'PASSED' : 'WARNING';
               textResponse += `   📊 QA: ${statusEmoji} (score: ${indexResult.qualityScore})\n`;
-              textResponse += `      Parse: ${qa.parseOk ? 'OK' : 'FAIL'} (${qa.tablesDetected} tables, ${qa.figuresDetected} figures)\n`;
-              textResponse += `      Chunks: ${qa.totalChunks} total, ${qa.orphanChunks} orphan\n`;
-              if (qa.ragOk !== undefined) {
-                textResponse += `      RAG: ${qa.ragPassedCount}/${qa.ragTotalCount} passed (avg faith: ${qa.avgFaithfulness?.toFixed(2) ?? 'N/A'})\n`;
+              
+              if (qa.isCodeRepo) {
+                // Code repo specific display format
+                textResponse += `      CARD: ${qa.parseOk ? 'OK' : 'FAIL'} (completeness: ${qa.cardScore ?? 0}%)\n`;
+                textResponse += `      Code: ${qa.chunkOk ? 'OK' : 'FAIL'} (${qa.classCount ?? 0} classes, ${qa.functionCount ?? 0} functions)\n`;
+                textResponse += `      Docs: ${qa.hasReadme ? 'README ✓' : 'README ✗'}${qa.relatedPaperId ? `, linked: ${qa.relatedPaperId}` : ''}\n`;
+              } else {
+                // PDF display format
+                textResponse += `      Parse: ${qa.parseOk ? 'OK' : 'FAIL'} (${qa.tablesDetected} tables, ${qa.figuresDetected} figures)\n`;
+                textResponse += `      Chunks: ${qa.totalChunks} total, ${qa.orphanChunks} orphan\n`;
+                if (qa.ragOk !== undefined) {
+                  textResponse += `      RAG: ${qa.ragPassedCount}/${qa.ragTotalCount} passed (avg faith: ${qa.avgFaithfulness?.toFixed(2) ?? 'N/A'})\n`;
+                }
               }
             }
             if (indexResult.contentHash) {

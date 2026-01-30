@@ -15,6 +15,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { readManifest, type BundleManifestV1 } from '../bundle/manifest.js';
 import { extractPaperId, fetchArxivMetadata } from '../bundle/content-id.js';
+import { classifyBundleRepo } from '../bundle/repo-classifier.js';
 import type { 
   QueryOptions, 
   QueryResult, 
@@ -180,12 +181,30 @@ export class RAGEngine {
         }
       }
 
-      // Determine if this is PDF content (based on paperId or URL patterns)
+      // Determine if this is document content (PDF or markdown - no code analysis needed)
       const isPdfContent = !!(paperId || manifest?.repos?.[0]?.pdfUrl);
+      const isMarkdownContent = manifest?.repos?.[0]?.kind === 'markdown';
+      let isDocumentContent = isPdfContent || isMarkdownContent || manifest?.type === 'document';
       
-      // For code repos (non-PDF): require CARD.json to exist before indexing
+      // Use repo-classifier to detect documentation-focused repos (awesome-xxx, Claude Skills, etc.)
+      // These repos don't need CARD.json for indexing
+      if (!isDocumentContent && manifest?.repos?.[0]) {
+        const repoId = manifest.repos[0].id;
+        try {
+          const classification = await classifyBundleRepo(bundlePath, repoId);
+          if (classification.type === 'documentation') {
+            logger.info(`Repo classified as documentation (codeRatio=${classification.codeRatio.toFixed(2)}, ` +
+              `skills=${classification.isSkillsRepo}, awesome=${classification.isAwesomeRepo}), skipping CARD.json requirement`);
+            isDocumentContent = true;
+          }
+        } catch (err) {
+          logger.warn(`Failed to classify repo: ${err}`);
+        }
+      }
+      
+      // For code repos (non-document): require CARD.json to exist before indexing
       // This ensures repo is properly analyzed and documented before RAG indexing
-      if (!isPdfContent && manifest?.repos?.[0]) {
+      if (!isDocumentContent && manifest?.repos?.[0]) {
         const repoId = manifest.repos[0].id;
         const safeRepoId = repoId.replace(/\//g, '~');
         const cardPath = path.join(bundlePath, 'cards', safeRepoId, 'CARD.json');
@@ -680,20 +699,26 @@ function buildQaSummary(
 
   if (codeQa) {
     // Code repo QA summary (map to similar structure)
+    // Note: ragOk is left undefined for code repos since they don't do RAG Q&A testing
+    // This prevents the display from showing "undefined/undefined"
     return {
       passed: codeQa.passed,
       parseOk: codeQa.cardQA.isValid, // CARD = "parse" for code
       chunkOk: codeQa.codeQA.isValid, // Code symbols = "chunks" for code
-      ragOk: codeQa.docsQA.isValid,   // Docs = "RAG readiness" for code
-      tablesDetected: 0,
-      figuresDetected: 0,
+      // ragOk: undefined - code repos don't have RAG Q&A testing
+      tablesDetected: codeQa.cardQA.completenessScore, // Repurpose: CARD completeness %
+      figuresDetected: codeQa.codeQA.classCount + codeQa.codeQA.functionCount, // Repurpose: symbol count
       totalChunks: codeQa.codeQA.totalCodeChunks,
       orphanChunks: 0, // Not applicable for code
-      ragPassedCount: undefined,
-      ragTotalCount: undefined,
-      avgFaithfulness: undefined,
       issues: codeQa.allIssues,
-    };
+      // Code-specific metadata (for enhanced display)
+      isCodeRepo: true,
+      cardScore: codeQa.cardQA.completenessScore,
+      classCount: codeQa.codeQA.classCount,
+      functionCount: codeQa.codeQA.functionCount,
+      hasReadme: codeQa.docsQA.hasReadme,
+      relatedPaperId: codeQa.docsQA.relatedPaperId,
+    } as IndexResult['qaSummary'];
   }
 
   return undefined;

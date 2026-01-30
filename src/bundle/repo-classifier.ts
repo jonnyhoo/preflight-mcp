@@ -35,11 +35,14 @@ export interface RepoClassification {
   isSkillsRepo: boolean;
   /** Whether this appears to be an awesome-xxx style list */
   isAwesomeRepo: boolean;
+  /** Whether this appears to be a data repository (csv, json, xml, etc.) */
+  isDataRepo: boolean;
   /** File statistics */
   stats: {
     totalFiles: number;
     codeFiles: number;
     markdownFiles: number;
+    dataFiles: number;
     otherFiles: number;
   };
 }
@@ -127,6 +130,17 @@ const DOC_EXTENSIONS = new Set([
   '.adoc',
 ]);
 
+/** Data file extensions (datasets, configs, etc.) */
+const DATA_EXTENSIONS = new Set([
+  '.csv', '.tsv',
+  '.json', '.jsonl', '.ndjson',
+  '.xml',
+  '.yaml', '.yml',
+  '.parquet', '.arrow',
+  '.sql',
+  '.ipynb',  // Jupyter notebooks are typically data exploration
+]);
+
 // ============================================================================
 // File Analysis
 // ============================================================================
@@ -134,6 +148,7 @@ const DOC_EXTENSIONS = new Set([
 interface FileStats {
   codeFiles: string[];
   markdownFiles: string[];
+  dataFiles: string[];
   otherFiles: string[];
   hasEntryPoint: boolean;
   hasSkillsIndicator: boolean;
@@ -150,6 +165,7 @@ async function analyzeFiles(
   const stats: FileStats = {
     codeFiles: [],
     markdownFiles: [],
+    dataFiles: [],
     otherFiles: [],
     hasEntryPoint: false,
     hasSkillsIndicator: false,
@@ -204,6 +220,8 @@ async function analyzeFiles(
           }
         } else if (DOC_EXTENSIONS.has(ext)) {
           stats.markdownFiles.push(relativePath);
+        } else if (DATA_EXTENSIONS.has(ext)) {
+          stats.dataFiles.push(relativePath);
         } else {
           stats.otherFiles.push(relativePath);
         }
@@ -270,6 +288,7 @@ export async function classifyRepo(repoPath: string): Promise<RepoClassification
   const totalFiles = 
     fileStats.codeFiles.length + 
     fileStats.markdownFiles.length + 
+    fileStats.dataFiles.length +
     fileStats.otherFiles.length;
   
   if (totalFiles === 0) {
@@ -280,10 +299,12 @@ export async function classifyRepo(repoPath: string): Promise<RepoClassification
       hasEntryPoint: false,
       isSkillsRepo: false,
       isAwesomeRepo: false,
+      isDataRepo: false,
       stats: {
         totalFiles: 0,
         codeFiles: 0,
         markdownFiles: 0,
+        dataFiles: 0,
         otherFiles: 0,
       },
     };
@@ -292,6 +313,10 @@ export async function classifyRepo(repoPath: string): Promise<RepoClassification
   // Calculate code ratio
   const codeRatio = fileStats.codeFiles.length / totalFiles;
   
+  // Calculate data ratio - data files + markdown files as "content" files
+  const contentFiles = fileStats.dataFiles.length + fileStats.markdownFiles.length;
+  const dataRatio = fileStats.dataFiles.length / totalFiles;
+  
   // Determine primary language
   const primaryLanguage = getPrimaryLanguage(fileStats.languageCounts);
   
@@ -299,13 +324,19 @@ export async function classifyRepo(repoPath: string): Promise<RepoClassification
   const isSkillsRepo = fileStats.hasSkillsIndicator;
   const isAwesomeRepo = isAwesomeStyleRepo(repoPath);
   
+  // Data repo detection: more data/doc files than code, and no entry point
+  // This catches repos like iching-wilhelm-dataset where code is just for processing the data
+  const isDataRepo = !fileStats.hasEntryPoint && 
+    contentFiles > fileStats.codeFiles.length && 
+    dataRatio > 0;
+  
   // Classification logic
   let type: RepoType;
   
-  if (isSkillsRepo || isAwesomeRepo) {
+  if (isSkillsRepo || isAwesomeRepo || isDataRepo) {
     // Special repos are always treated as documentation
     type = 'documentation';
-    logger.info(`Classified as documentation (special: skills=${isSkillsRepo}, awesome=${isAwesomeRepo})`);
+    logger.info(`Classified as documentation (special: skills=${isSkillsRepo}, awesome=${isAwesomeRepo}, data=${isDataRepo})`);
   } else if (codeRatio >= CODE_REPO_THRESHOLD) {
     type = 'code';
     logger.info(`Classified as code (ratio=${codeRatio.toFixed(2)})`);
@@ -324,10 +355,12 @@ export async function classifyRepo(repoPath: string): Promise<RepoClassification
     hasEntryPoint: fileStats.hasEntryPoint,
     isSkillsRepo,
     isAwesomeRepo,
+    isDataRepo,
     stats: {
       totalFiles,
       codeFiles: fileStats.codeFiles.length,
       markdownFiles: fileStats.markdownFiles.length,
+      dataFiles: fileStats.dataFiles.length,
       otherFiles: fileStats.otherFiles.length,
     },
   };

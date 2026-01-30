@@ -242,6 +242,19 @@ export interface IndexResult {
     ragTotalCount?: number;
     avgFaithfulness?: number;
     issues: string[];
+    // Code repo specific fields
+    /** Whether this is a code repo (vs PDF) */
+    isCodeRepo?: boolean;
+    /** CARD.json completeness score (0-100) */
+    cardScore?: number;
+    /** Number of classes found */
+    classCount?: number;
+    /** Number of functions found */
+    functionCount?: number;
+    /** Whether README exists */
+    hasReadme?: boolean;
+    /** Related paper ID if linked */
+    relatedPaperId?: string;
   };
   /** Whether indexing was rejected due to low quality score */
   rejected?: boolean;
