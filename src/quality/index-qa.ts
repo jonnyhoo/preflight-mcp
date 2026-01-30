@@ -309,6 +309,58 @@ export async function runRAGQA(
 }
 
 // ============================================================================
+// Quality Score Calculation
+// ============================================================================
+
+/**
+ * Calculate quality score for PDF QA report (0-100).
+ * 
+ * Scoring breakdown:
+ * - Parse QA (30 points): 30 if valid, -10 per issue (min 0)
+ * - Chunk QA (40 points): 40 if valid, -5 per orphan chunk (max -20), -10 for invalid refs
+ * - RAG QA (30 points): (passedCount / totalCount) * 30, or 30 if no RAG QA
+ */
+export function calculatePdfQualityScore(report: QAReport): number {
+  let score = 0;
+
+  // Parse QA (30 points max)
+  if (report.parseQA.isValid) {
+    score += 30;
+  } else {
+    score += Math.max(0, 30 - report.parseQA.issues.length * 10);
+  }
+
+  // Chunk QA (40 points max)
+  if (report.chunkQA.isValid) {
+    score += 40;
+  } else {
+    let chunkScore = 40;
+    // Deduct for orphan chunks (max -20)
+    chunkScore -= Math.min(20, report.chunkQA.orphanChunks * 5);
+    // Deduct for invalid parent refs
+    if (report.chunkQA.invalidParentRefs > 0) {
+      chunkScore -= 10;
+    }
+    // Deduct for other issues
+    chunkScore -= report.chunkQA.issues.length * 5;
+    score += Math.max(0, chunkScore);
+  }
+
+  // RAG QA (30 points max)
+  if (report.ragQA) {
+    if (report.ragQA.testQuestionCount > 0) {
+      score += Math.round((report.ragQA.passedCount / report.ragQA.testQuestionCount) * 30);
+    } else {
+      score += 30; // No test questions = full score
+    }
+  } else {
+    score += 30; // No RAG QA = full score (LLM not configured)
+  }
+
+  return Math.min(100, Math.max(0, score));
+}
+
+// ============================================================================
 // Full QA Pipeline
 // ============================================================================
 

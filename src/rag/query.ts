@@ -23,8 +23,8 @@ import type {
 } from './types.js';
 import { IGPPruner, type IGPOptions } from './pruning/igp-pruner.js';
 import { createModuleLogger } from '../logging/logger.js';
-import { persistQAReport, runFullQA, type QAReport } from '../quality/index-qa.js';
-import { runCodeRepoQA, type CodeRepoQAReport } from '../quality/code-repo-qa.js';
+import { persistQAReport, runFullQA, type QAReport, calculatePdfQualityScore } from '../quality/index-qa.js';
+import { runCodeRepoQA, persistCodeRepoQAReport, type CodeRepoQAReport } from '../quality/code-repo-qa.js';
 import type { IndexResult, IndexOptions } from './types.js';
 
 const logger = createModuleLogger('rag');
@@ -321,6 +321,9 @@ export class RAGEngine {
           codeQaReport = runCodeRepoQA(chunks, bundleId, card, contentHash);
           logger.info(`Code QA: score=${codeQaReport.qualityScore}, passed=${codeQaReport.passed}`);
 
+          // Persist code repo QA report to ChromaDB
+          await persistCodeRepoQAReport(this.chromaDB, codeQaReport, this.embedding);
+
           if (!codeQaReport.passed) {
             const msg = `Code QA: issues found: ${codeQaReport.allIssues.join('; ')}`;
             logger.warn(msg);
@@ -336,8 +339,9 @@ export class RAGEngine {
 
       // 1.3 Quality Threshold Check: rollback if score < threshold
       const qualityThreshold = options?.qualityThreshold ?? 0;
+      // Use unified quality score calculation
       const qualityScore = qaReport 
-        ? (qaReport.passed ? 100 : Math.max(0, 100 - qaReport.allIssues.length * 20))
+        ? calculatePdfQualityScore(qaReport)
         : codeQaReport?.qualityScore ?? 100;
 
       if (qualityThreshold > 0 && qualityScore < qualityThreshold && chunksWritten > 0) {
@@ -368,9 +372,9 @@ export class RAGEngine {
       errors.push(msg);
     }
 
-    // Build QA summary for return
+    // Build QA summary for return (use unified quality score calculation)
     const qualityScore = qaReport
-      ? (qaReport.passed ? 100 : Math.max(0, 100 - qaReport.allIssues.length * 20))
+      ? calculatePdfQualityScore(qaReport)
       : codeQaReport?.qualityScore;
 
     return {

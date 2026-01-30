@@ -12,6 +12,7 @@
 
 import { createModuleLogger } from '../logging/logger.js';
 import type { ChunkDocument } from '../vectordb/types.js';
+import type { ChromaVectorDB } from '../vectordb/chroma-client.js';
 import type { RepoCard } from '../distill/types.js';
 
 const logger = createModuleLogger('code-repo-qa');
@@ -363,4 +364,56 @@ export function runCodeRepoQA(
     qualityScore,
     allIssues,
   };
+}
+
+// ============================================================================
+// Persist Code Repo QA Report to VectorDB
+// ============================================================================
+
+/**
+ * Persist code repo QA report to ChromaDB.
+ * Similar to PDF QA reports, stored in l1_repo collection.
+ */
+export async function persistCodeRepoQAReport(
+  chromaDB: ChromaVectorDB,
+  report: CodeRepoQAReport,
+  embedding: { embed: (text: string) => Promise<{ vector: number[] }> }
+): Promise<void> {
+  // Create a searchable summary
+  const summary = [
+    `Code Repo QA Report for ${report.repoId ?? report.bundleId.slice(0, 12)}`,
+    `Status: ${report.passed ? 'PASSED' : 'FAILED'} (score: ${report.qualityScore})`,
+    `Strategy: ${report.strategyVersion}`,
+    `CARD: ${report.cardQA.isValid ? 'OK' : 'FAIL'} (completeness: ${report.cardQA.completenessScore}%)`,
+    `Code: ${report.codeQA.isValid ? 'OK' : 'FAIL'} (${report.codeQA.totalCodeChunks} chunks, ${report.codeQA.classCount} classes, ${report.codeQA.functionCount} functions)`,
+    `Docs: ${report.docsQA.isValid ? 'OK' : 'FAIL'} (readme: ${report.docsQA.readmeChunks}, related: ${report.docsQA.relatedPaperId ?? 'none'})`,
+    report.allIssues.length > 0 ? `Issues: ${report.allIssues.slice(0, 3).join('; ')}` : 'No issues',
+  ].filter(Boolean).join('\n');
+
+  // Store full report JSON in content
+  const reportJson = JSON.stringify(report);
+  const content = `${summary}\n\n---\nQA_REPORT_JSON:\n${reportJson}`;
+
+  // Generate embedding for the summary
+  const embeddingResult = await embedding.embed(summary);
+
+  // Create chunk document for the QA report
+  const qaChunk: ChunkDocument = {
+    id: report.reportId,
+    content,
+    metadata: {
+      sourceType: 'overview',
+      bundleId: report.bundleId,
+      repoId: report.repoId,
+      chunkIndex: 0,
+      chunkType: 'summary',
+      contentHash: report.contentHash,
+      fieldName: 'quality_report_json',
+    },
+    embedding: embeddingResult.vector,
+  };
+
+  // Store QA report in L1_repo collection
+  await chromaDB.upsertHierarchicalChunks('l1_repo', [qaChunk]);
+  logger.info(`Persisted code repo QA report: ${report.reportId} (score: ${report.qualityScore})`);
 }
