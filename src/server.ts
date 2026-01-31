@@ -41,6 +41,7 @@ import {
   registerDistillTools,
   registerRagTools,
   registerArxivTools,
+  registerMemoryTools,
 } from './server/tools/index.js';
 
 // Read version from package.json at startup
@@ -220,6 +221,11 @@ export async function startServer(): Promise<void> {
 
   // arXiv search tools (1): preflight_arxiv_search
   registerArxivTools(deps);
+
+  // Memory tools (1): preflight_memory (requires PREFLIGHT_MEMORY_ENABLED=true)
+  if (cfg.memoryEnabled) {
+    registerMemoryTools(deps);
+  }
 
   // ==========================================================================
   // PROMPTS - Interactive guidance for users

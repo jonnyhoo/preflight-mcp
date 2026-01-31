@@ -311,6 +311,29 @@ export interface MemoryHealthMeta {
 }
 
 // ============================================================================
+// Reflect Types (for memory reflection/analysis)
+// ============================================================================
+
+export interface ReflectFact {
+  content: string;
+  type: 'fact' | 'relation' | 'preference' | 'pattern' | 'entity';
+  confidence: number;
+  evidenceEpisodeIds: string[];
+  shouldStore: boolean;
+  sensitive: boolean;
+  subject?: string;
+  predicate?: string;
+  object?: string;
+  category?: string;
+}
+
+export interface ReflectOutput {
+  facts: ReflectFact[];
+  source: 'llm' | 'fallback';
+  llmError?: string;
+}
+
+// ============================================================================
 // Access Count Buffer Types
 // ============================================================================
 

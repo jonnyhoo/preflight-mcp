@@ -22,11 +22,11 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
       description:
         'Manage ChromaDB: list/stats/inspect/delete indexed content, diagnose quality.\n' +
         'Example: `{"action": "stats"}`, `{"action": "delete", "bundleId": "xxx"}`\n' +
-        'Actions: collections, stats, list, sample, inspect, search_raw, delete, delete_all, drop_collection, diagnose.\n' +
+        'Actions: collections, stats, list, sample, delete, delete_all, drop_collection, inspect, search_raw, diagnose.\n' +
         'Delete supports: contentHash OR bundleId (use bundleId from list output).\n' +
         'Paper-Code linking: Code repos with CARD.json containing arxivId are linked via relatedPaperId metadata.\n' +
         'Use when: "检查索引", "debug RAG", "清空数据库", "删除索引", "查看论文代码关联".',
-      inputSchema: {
+      inputSchema: z.object({
         action: z.enum(['list', 'stats', 'collections', 'sample', 'delete', 'delete_all', 'drop_collection', 'inspect', 'search_raw', 'diagnose']).describe('Action to perform'),
         contentHash: z.string().optional().describe('Content hash to delete (for delete action)'),
         bundleId: z.string().optional().describe('Bundle ID - for delete/inspect/search_raw. Use bundleId from `list` output to delete specific content.'),
@@ -34,31 +34,10 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
         query: z.string().optional().describe('Search query text (required for search_raw)'),
         limit: z.number().optional().describe('Max number of results (default 5)'),
         paperId: z.string().optional().describe('Paper ID for diagnose action (e.g., "arxiv:2601.02553")'),
-      },
+      }),
       outputSchema: {
-        // List result (hierarchical)
-        items: z.array(z.object({
-          paperId: z.string(),
-          paperVersion: z.string().optional(),
-          contentHash: z.string().optional(),
-          bundleId: z.string().optional(),
-          l1Count: z.number(),
-          l2Count: z.number(),
-          l3Count: z.number(),
-          totalChunks: z.number(),
-        })).optional(),
-        // Stats result (hierarchical)
-        stats: z.object({
-          totalChunks: z.number(),
-          byLevel: z.record(z.string(), z.number()),
-          byPaperId: z.array(z.object({
-            paperId: z.string(),
-            chunkCount: z.number(),
-          })),
-        }).optional(),
-        // Delete result
-        deleted: z.boolean().optional(),
-        deletedChunks: z.number().optional(),
+        action: z.string().describe('Action performed'),
+        result: z.record(z.string(), z.unknown()).describe('Action result data'),
       },
       annotations: { openWorldHint: true },
     },
@@ -93,11 +72,13 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
               i.type === 'pdf' || 
               (i.type === 'doc' && i.paperId)
             );
-            // Code docs: doc type without paperId but related to code (has bundleId matching repo, or has relatedPaperId)
+            // Code docs: doc type without paperId, but NOT already shown in repos
+            // (exclude items whose bundleId is already in repos to avoid duplication)
             const codeDocs = items.filter(i => 
               i.type === 'doc' && 
               !i.paperId && 
-              (repoBundleIds.has(i.bundleId) || (i as any).relatedPaperId || i.id.startsWith('bundle:'))
+              !repoBundleIds.has(i.bundleId) &&  // Not already in repos
+              (i.id.startsWith('bundle:') || (i as any).relatedPaperId)
             );
 
             textResponse += `📋 Indexed Content (${items.length} total)\n\n`;
@@ -214,11 +195,12 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
               i.type === 'pdf' || 
               (i.type === 'doc' && i.paperId)
             );
-            // Code docs: doc type without paperId but related to code
+            // Code docs: doc type without paperId, but NOT already shown in repos
             const codeDocs = contentList.filter(i => 
               i.type === 'doc' && 
               !i.paperId && 
-              (repoBundleIds.has(i.bundleId) || (i as any).relatedPaperId || i.id.startsWith('bundle:'))
+              !repoBundleIds.has(i.bundleId) &&  // Not already in repos
+              (i.id.startsWith('bundle:') || (i as any).relatedPaperId)
             );
 
             textResponse += `📊 RAG Statistics (Hierarchical)\n\n`;
@@ -596,7 +578,7 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
 
             // Use hierarchical search (Phase 3) - searches L2+L3
             const results = await chromaDB.queryHierarchicalRaw(queryEmbedding.vector, maxResults, filter);
-            structuredContent.results = results.chunks;
+            structuredContent.rawResults = results.chunks;
 
             textResponse += `🔎 Raw Search Results (L2+L3) for: "${query}"\n`;
             textResponse += `Found ${results.chunks.length} chunks${bundleId ? ` (bundleId: ${bundleId})` : ''}\n\n`;
@@ -631,6 +613,7 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
             
             // Key sections to check for academic papers
             // Note: 'method' includes common variations like methodology, approach
+
             const KEY_SECTIONS = ['abstract', 'introduction', 'method', 'experiment', 'result', 'conclusion', 'related work'];
             const METHOD_VARIATIONS = ['method', 'methodology', 'approach', 'framework', 'architecture'];
             const basePath = `/api/v2/tenants/default_tenant/databases/default_database`;
@@ -909,12 +892,34 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
 
               textResponse += `🔬 Batch Index Quality Diagnosis (${items.length}/${allItems.length} papers)${hasMore ? ' [limited]' : ''}\n\n`;
               
-              const results: Array<{ id: string; paperId?: string; score: number; grade: string; issues: string[] }> = [];
+              const results: Array<{ id: string; paperId?: string; score: number; grade: string; issues: string[]; source: 'stored' | 'live' }> = [];
               let totalScore = 0;
               let issueCount = 0;
 
               for (const item of items) {
-                const result = await diagnosePaper(item.paperId, item.bundleId);
+                // First try to get stored QA report (preferred)
+                const storedQA = await tryGetStoredQAReport(item.paperId, item.contentHash);
+                
+                let score: number;
+                let grade: string;
+                let issues: string[];
+                let source: 'stored' | 'live';
+                
+                if (storedQA.found && storedQA.report) {
+                  // Use stored QA report
+                  score = storedQA.report.passed ? 100 : Math.max(0, 100 - storedQA.report.allIssues.length * 20);
+                  grade = score >= 80 ? 'A' : score >= 60 ? 'B' : score >= 40 ? 'C' : 'D';
+                  issues = storedQA.report.allIssues;
+                  source = 'stored';
+                } else {
+                  // Fallback to live analysis
+                  const result = await diagnosePaper(item.paperId, item.bundleId);
+                  score = result.score;
+                  grade = result.grade;
+                  issues = result.issues;
+                  source = 'live';
+                }
+                
                 // Use paperId if available, otherwise contentHash or id
                 let displayName = item.paperId;
                 if (!displayName && item.contentHash) {
@@ -926,19 +931,21 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
                 results.push({
                   id: item.id,
                   paperId: item.paperId,
-                  score: result.score,
-                  grade: result.grade,
-                  issues: result.issues,
+                  score,
+                  grade,
+                  issues,
+                  source,
                 });
-                totalScore += result.score;
-                issueCount += result.issues.length;
+                totalScore += score;
+                issueCount += issues.length;
 
                 // Compact output per paper
-                const issueText = result.issues.length > 0 
-                  ? ` - ${result.issues.slice(0, 2).join(', ')}${result.issues.length > 2 ? '...' : ''}`
+                const issueText = issues.length > 0 
+                  ? ` - ${issues.slice(0, 2).join(', ')}${issues.length > 2 ? '...' : ''}`
                   : '';
                 const missingPaperId = !item.paperId;
-                textResponse += `${result.grade === 'A' ? '✅' : result.grade === 'B' ? '🟡' : '🔴'} ${displayName}${missingPaperId ? ' ⚠️' : ''}: ${result.score}/100 (${result.grade})${issueText}\n`;
+                const sourceIndicator = source === 'live' ? ' 📊' : '';
+                textResponse += `${grade === 'A' ? '✅' : grade === 'B' ? '🟡' : '🔴'} ${displayName}${missingPaperId ? ' ⚠️' : ''}${sourceIndicator}: ${score}/100 (${grade})${issueText}\n`;
               }
 
               const avgScore = Math.round(totalScore / items.length);
@@ -959,7 +966,7 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
               structuredContent.totalPapers = allItems.length;
               structuredContent.avgScore = avgScore;
               structuredContent.avgGrade = avgGrade;
-              structuredContent.results = results;
+              structuredContent.diagnosisResults = results;
               structuredContent.hasMore = hasMore;
               break;
             }
@@ -1034,14 +1041,14 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
             // Fallback: live analysis (no stored QA report found)
             const result = await diagnosePaper(paperId, bundleId);
             if (result.score === 0 && result.issues.includes('❌ No chunks found')) {
-              textResponse += `⚠️ No chunks found for ${paperId ? `paperId: ${paperId}` : `bundleId: ${bundleId}`}\n`;
+              textResponse += '⚠️ No chunks found for ' + (paperId ? 'paperId: ' + paperId : 'bundleId: ' + bundleId) + '\n';
               structuredContent.found = false;
               break;
             }
 
             // Build detailed response for single paper (live analysis)
-            textResponse += `🔬 Index Quality Diagnosis (live analysis)\n`;
-            textResponse += `Paper: ${paperId ?? bundleId}\n\n`;
+            textResponse += '🔬 Index Quality Diagnosis (live analysis)\n';
+            textResponse += 'Paper: ' + (paperId ?? bundleId) + '\n\n';
             
             textResponse += `📊 **Quality Score: ${result.score}/100 (Grade: ${result.grade})**\n`;
             textResponse += `  • L1 Presence: ${result.details.hasAbstract && result.details.hasIntroduction ? 30 : (result.details.hasAbstract || result.details.hasIntroduction ? 15 : 0)}/30 ${result.details.hasAbstract ? '✓Abstract' : '✗Abstract'} ${result.details.hasIntroduction ? '✓Intro' : '✗Intro'}\n`;
@@ -1091,9 +1098,13 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
           }
         }
 
+        // 返回符合MCP标准格式的结果
         return {
           content: [{ type: 'text', text: textResponse }],
-          structuredContent,
+          structuredContent: {
+            action: args.action,
+            result: structuredContent,
+          },
         };
       } catch (err) {
         throw wrapPreflightError(err);

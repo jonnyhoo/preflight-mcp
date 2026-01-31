@@ -1311,6 +1311,102 @@ export class MemoryStore {
   // --------------------------------------------------------------------------
 
   /**
+   * Get a specific memory by ID.
+   */
+  async getById(memoryId: string): Promise<Memory | null> {
+    // Determine layer from ID prefix
+    const layer = this.getLayerFromId(memoryId);
+    if (!layer) {
+      logger.warn(`Invalid memory ID format: ${memoryId}`);
+      return null;
+    }
+
+    const collection = await this.ensureCollection(layer);
+    const basePath = this.getBasePath();
+
+    const response = await this.request<ChromaGetResponse>(
+      'POST',
+      `${basePath}/collections/${collection.id}/get`,
+      {
+        ids: [memoryId],
+        include: ['documents', 'metadatas'],
+      }
+    );
+
+    if (response.ids.length === 0) {
+      logger.debug(`Memory not found: ${memoryId}`);
+      return null;
+    }
+
+    const content = response.documents?.[0] ?? '';
+    const metadata = response.metadatas?.[0] ?? {};
+    
+    return this.reconstructMemory(memoryId, content, metadata, layer);
+  }
+
+  /**
+   * Update memory metadata by ID (only metadata, not content).
+   */
+  async update(memoryId: string, metadataUpdates: Partial<EpisodicMetadata | SemanticMetadata | ProceduralMetadata>, mergeMode: 'replace' | 'append' = 'replace'): Promise<boolean> {
+    // Determine layer from ID prefix
+    const layer = this.getLayerFromId(memoryId);
+    if (!layer) {
+      logger.warn(`Invalid memory ID format: ${memoryId}`);
+      return false;
+    }
+
+    const collection = await this.ensureCollection(layer);
+    const basePath = this.getBasePath();
+
+    // Get existing memory
+    const response = await this.request<ChromaGetResponse>(
+      'POST',
+      `${basePath}/collections/${collection.id}/get`,
+      {
+        ids: [memoryId],
+        include: ['documents', 'metadatas'],
+      }
+    );
+
+    if (response.ids.length === 0) {
+      logger.warn(`Memory not found for update: ${memoryId}`);
+      return false;
+    }
+
+    const existingContent = response.documents?.[0] ?? '';
+    const existingMetadata = response.metadatas?.[0] ?? {};
+    const newMetadata = { ...existingMetadata };
+
+    // Apply updates based on merge mode and metadata type
+    for (const [key, value] of Object.entries(metadataUpdates)) {
+      if (value !== undefined) {
+        if (mergeMode === 'append' && typeof value === 'string' && typeof newMetadata[key] === 'string') {
+          // For append mode with string values, concatenate
+          newMetadata[key] = `${newMetadata[key]} ${value}`.trim();
+        } else if (mergeMode === 'append' && Array.isArray(value)) {
+          // For append mode with array values, merge arrays
+          const existingValue = newMetadata[key];
+          const existingArray = typeof existingValue === 'string' ? existingValue.split(',').filter(Boolean) : [];
+          newMetadata[key] = [...new Set([...existingArray, ...value])].join(',');
+        } else {
+          // For replace mode or non-appendable types, replace directly
+          newMetadata[key] = value as string | number | boolean;
+        }
+      }
+    }
+
+    // Update the memory in ChromaDB
+    await this.request('POST', `${basePath}/collections/${collection.id}/update`, {
+      ids: [memoryId],
+      documents: [existingContent], // Keep original content
+      metadatas: [newMetadata],
+    });
+
+    logger.info(`Updated memory metadata: ${memoryId}`, { mergeMode });
+    return true;
+  }
+
+  /**
    * Close the memory store and flush buffers.
    */
   async close(): Promise<void> {

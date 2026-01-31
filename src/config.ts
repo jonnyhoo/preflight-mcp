@@ -39,6 +39,14 @@ interface ConfigFile {
   // PDF Chunking configuration
   pdfChunkingStrategy?: 'semantic' | 'token-based' | 'hybrid';
   pdfChunkLevel?: 1 | 2 | 3 | 4;
+  
+  // Memory system configuration
+  memory?: {
+    /** User ID override for memory system */
+    userId?: string;
+    /** Enable memory system (default: false) */
+    enabled?: boolean;
+  };
 }
 
 let cachedConfigFile: ConfigFile | null = null;
@@ -256,6 +264,13 @@ export type PreflightConfig = {
   pdfChunkingStrategy: 'semantic' | 'token-based' | 'hybrid';
   /** Heading level to chunk at: 1=章, 2=节, 3=小节, 4=段 (default: 2) */
   pdfChunkLevel: 1 | 2 | 3 | 4;
+  
+  // --- Memory System ---
+  
+  /** Memory system user ID (default: machine fingerprint) */
+  memoryUserId?: string;
+  /** Enable memory system (default: false) */
+  memoryEnabled: boolean;
 };
 
 function envNumber(name: string, fallback: number): number {
@@ -453,5 +468,10 @@ export function getConfig(): PreflightConfig {
     // Priority: config file > env > default
     pdfChunkingStrategy: loadConfigFile().pdfChunkingStrategy ?? (process.env.PREFLIGHT_PDF_CHUNK_STRATEGY as 'semantic' | 'token-based' | 'hybrid' | undefined) ?? 'semantic',
     pdfChunkLevel: loadConfigFile().pdfChunkLevel ?? (parseInt(process.env.PREFLIGHT_PDF_CHUNK_LEVEL ?? '2', 10) as 1 | 2 | 3 | 4),
+    
+    // Memory System
+    // Priority: config file > env > default
+    memoryUserId: loadConfigFile().memory?.userId ?? process.env.PREFLIGHT_USER_ID,
+    memoryEnabled: loadConfigFile().memory?.enabled ?? envBoolean('PREFLIGHT_MEMORY_ENABLED', false),
   };
 }
