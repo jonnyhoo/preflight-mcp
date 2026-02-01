@@ -13,7 +13,7 @@ import crypto from 'node:crypto';
 
 import { PdfParser } from '../parser/pdf-parser.js';
 import { VlmParser } from '../parser/vlm-parser.js';
-import { MineruParser, isMineruAvailable, type BatchParseResult } from '../parser/mineru-parser.js';
+import { MineruParser, isMineruAvailable, checkMineruEndpoint, type BatchParseResult } from '../parser/mineru-parser.js';
 import { OfficeParser } from '../parser/office-parser.js';
 import { HtmlParser, MarkdownParser } from '../parser/text-parser.js';
 import type { ParsedContent, IDocumentParser } from '../parser/types.js';
@@ -43,48 +43,40 @@ Preflight supports three PDF parsing modes:
    - Requires: vlmConfigs array in config.json
    - Best for: When MinerU is unavailable or you prefer local processing
 
-3. PdfParser (Fallback ONLY): Rule-based text extraction using unpdf
-   - Only used as automatic fallback when MinerU/VLM parsing fails
-   - NOT available as primary parser without explicit configuration
-   - Limitations: May miss complex layouts, formulas rendered as images`,
-
-  FALLBACK_TO_PDFPARSER: (primaryParser: string, reason: string) => `[PDF Parser Fallback Warning]
-Primary parser "${primaryParser}" failed, automatically falling back to PdfParser (rule-based).
-
-Reason: ${reason}
-
-Note: PdfParser uses rule-based extraction which may have limitations:
-  - Tables may not be perfectly formatted
-  - Formulas rendered as images won't be converted to LaTeX
-  - Complex layouts may have extraction issues
-
-For better quality, consider:
-  - If using MinerU: Check your mineruApiBase and mineruApiKey configuration
-  - If using VLM Parser: Verify vlmConfigs in config.json and API connectivity`,
+3. Rule-based Parser (ruleBasedParser=true): Basic text extraction using unpdf
+   - Must be explicitly requested via ruleBasedParser=true
+   - Limitations: May miss complex layouts, formulas rendered as images
+   - Use only when MinerU/VLM are not available`,
 
   PDF_NO_PARSER_AVAILABLE: `[PDF Parsing Error]
-Cannot parse PDF: No high-quality parser is configured.
+Cannot parse PDF: No parser is configured or available.
 
-PdfParser (rule-based) is only available as a fallback when MinerU or VLM parsing fails.
-To parse PDFs, you must configure at least one of:
+To parse PDFs, you must use one of:
 
-1. MinerU (Recommended):
+1. MinerU (Recommended for high quality):
    Add to ~/.preflight/config.json:
    {
+     "mineruEnabled": true,
      "mineruApiBase": "https://your-mineru-api.com",
      "mineruApiKey": "your-api-key"
    }
 
-2. VLM Parser:
-   Add to ~/.preflight/config.json:
-   {
-     "vlmApiBase": "https://your-vlm-api.com",
-     "vlmApiKey": "your-api-key",
-     "vlmEnabled": true
-   }
-   Then use vlmParser=true when ingesting.
+2. VLM Parser (for local processing):
+   Configure vlmConfigs in config.json and use vlmParser=true
 
-Note: PdfParser will still be used as automatic fallback if MinerU/VLM fails.`,
+3. Rule-based Parser (basic extraction, lower quality):
+   Use ruleBasedParser=true for basic text extraction
+   Note: This is the only option that doesn't require API configuration`,
+
+  RULE_BASED_PARSER_INFO: `[Using Rule-based Parser]
+Parsing PDF with rule-based extraction (PdfParser).
+
+Note: This parser has limitations:
+  - Tables may not be perfectly formatted
+  - Formulas rendered as images won't be converted to LaTeX
+  - Complex layouts may have extraction issues
+
+For better quality, consider configuring MinerU or VLM Parser.`,
 } as const;
 
 // ============================================================================
@@ -168,6 +160,8 @@ export interface DocumentIngestOptions {
   };
   /** Use VLM Parser (parallel Vision-Language Model) for PDF instead of MinerU */
   vlmParser?: boolean;
+  /** Use rule-based parser (PdfParser) for PDF - explicit opt-in for basic extraction */
+  ruleBasedParser?: boolean;
 }
 
 // ============================================================================
@@ -175,36 +169,56 @@ export interface DocumentIngestOptions {
 // ============================================================================
 
 /**
+ * PDF parser selection options.
+ */
+interface PdfParserOptions {
+  /** Use VLM Parser for parallel VLM processing */
+  useVlmParser?: boolean;
+  /** Use rule-based parser (explicit opt-in) */
+  useRuleBasedParser?: boolean;
+}
+
+/**
  * Get appropriate parser for a file extension.
  * 
- * PDF parsing has two primary modes:
- * 1. MinerU (default): Cloud API with highest quality extraction
- * 2. VLM Parser (vlmParser=true): Local parallel VLM processing, requires vlmConfigs in config.json
+ * PDF parsing modes (in order of priority):
+ * 1. ruleBasedParser=true: Explicit rule-based extraction (PdfParser)
+ * 2. vlmParser=true: Local parallel VLM processing (VlmParser)
+ * 3. MinerU (default): Cloud API with highest quality extraction
  * 
- * PdfParser (rule-based) is ONLY used as automatic fallback when primary parsing fails.
- * It is NOT returned as a primary parser when neither MinerU nor VLM is configured.
+ * NO automatic fallback - if the selected/default parser fails, return error.
+ * User must explicitly choose ruleBasedParser=true for basic extraction.
  * 
- * @param useVlmParser - If true, use VlmParser for parallel VLM processing
- * @returns Parser instance, or null if no parser available (PDF without MinerU/VLM)
+ * @param ext - File extension
+ * @param options - Parser selection options
+ * @returns Parser instance, or null if no parser available
  */
-function getParserForExtension(ext: string, useVlmParser = false): IDocumentParser | null {
+function getParserForExtension(ext: string, options?: PdfParserOptions): IDocumentParser | null {
   const lowerExt = ext.toLowerCase();
   
   switch (lowerExt) {
     case '.pdf':
-      // Use VlmParser for parallel VLM processing when explicitly requested
-      if (useVlmParser) {
+      // Warn if both ruleBasedParser and vlmParser are set
+      if (options?.useRuleBasedParser && options?.useVlmParser) {
+        logger.warn('[PDF] Both ruleBasedParser and vlmParser are set. Using ruleBasedParser (takes priority).');
+      }
+      // Explicit rule-based parser request (highest priority)
+      if (options?.useRuleBasedParser) {
+        logger.info('[PDF] Using rule-based Parser (PdfParser) - ruleBasedParser=true');
+        logger.warn(LLM_MESSAGES.RULE_BASED_PARSER_INFO);
+        return new PdfParser();
+      }
+      // VLM Parser when explicitly requested
+      if (options?.useVlmParser) {
         logger.info('[PDF] Using VLM Parser (parallel Vision-Language Model processing) - vlmParser=true');
         return new VlmParser();
       }
-      // Prefer MinerU for high-quality PDF parsing if available
+      // Default: MinerU if configured
       if (isMineruAvailable()) {
         logger.info('[PDF] Using MinerU Parser (cloud API) - default mode');
         return new MineruParser();
       }
-      // IMPORTANT: Do NOT fall back to PdfParser as primary parser
-      // PdfParser is only for automatic fallback when MinerU/VLM fails (see ingestDocument)
-      // Return null to signal that no high-quality parser is available
+      // No parser available
       logger.error(LLM_MESSAGES.PDF_NO_PARSER_AVAILABLE);
       return null;
     case '.doc':
@@ -263,12 +277,15 @@ export async function ingestDocument(
 ): Promise<DocumentIngestResult> {
   const startTime = Date.now();
   const ext = path.extname(filePath);
+  const isPdf = ext.toLowerCase() === '.pdf';
   
   // Get parser for this file type
-  const parser = getParserForExtension(ext, options?.vlmParser);
+  const parser = getParserForExtension(ext, {
+    useVlmParser: options?.vlmParser,
+    useRuleBasedParser: options?.ruleBasedParser,
+  });
   if (!parser) {
     // For PDF: provide LLM-friendly message about configuration requirements
-    const isPdf = ext.toLowerCase() === '.pdf';
     const errorMsg = isPdf
       ? LLM_MESSAGES.PDF_NO_PARSER_AVAILABLE
       : `No parser available for extension: ${ext}`;
@@ -283,6 +300,20 @@ export async function ingestDocument(
   }
   
   try {
+    // For PDF parsers (except rule-based), check endpoint connectivity BEFORE parsing
+    if (isPdf && !options?.ruleBasedParser) {
+      const connectivityCheck = await checkPdfParserConnectivity(parser, options);
+      if (!connectivityCheck.ok) {
+        return {
+          sourcePath: filePath,
+          success: false,
+          modalContents: [],
+          parseTimeMs: Date.now() - startTime,
+          error: connectivityCheck.error,
+        };
+      }
+    }
+    
     // Check if parser is available
     const isInstalled = await parser.checkInstallation();
     if (!isInstalled) {
@@ -312,47 +343,9 @@ export async function ingestDocument(
       },
     });
     
+    // NO automatic fallback - if parsing fails, return error directly
+    // User must explicitly use ruleBasedParser=true for basic extraction
     if (!parseResult.success) {
-      // For PDF files, try fallback to rule-based parser if primary parser failed
-      const isPdf = ext.toLowerCase() === '.pdf';
-      const canFallback = isPdf && parser.name !== 'unpdf'; // Don't fallback if already using PdfParser
-      
-      if (canFallback) {
-        const primaryError = parseResult.errors?.[0]?.message ?? 'Unknown error';
-        const fallbackMessage = LLM_MESSAGES.FALLBACK_TO_PDFPARSER(parser.name, primaryError);
-        logger.warn(fallbackMessage);
-        
-        const fallbackParser = new PdfParser();
-        try {
-          const fallbackResult = await fallbackParser.parse(filePath, {
-            extractImages: options?.extractImages ?? true,
-            extractTables: options?.extractTables ?? true,
-            maxPages: options?.maxPagesPerDocument,
-          });
-          
-          if (fallbackResult.success) {
-            const modalContents = convertToModalContents(fallbackResult.contents, filePath);
-            return {
-              sourcePath: filePath,
-              success: true,
-              fullText: fallbackResult.fullText,
-              modalContents,
-              rawContents: fallbackResult.contents,
-              pageCount: fallbackResult.metadata.pageCount,
-              parseTimeMs: Date.now() - startTime,
-              warnings: [
-                // Include detailed fallback explanation for LLM
-                fallbackMessage,
-                ...(fallbackResult.warnings || []),
-              ],
-              parserUsed: `${fallbackResult.metadata.parser} (fallback from ${parser.name})`,
-            };
-          }
-        } catch (fallbackErr) {
-          logger.error('Fallback parser also failed:', fallbackErr instanceof Error ? fallbackErr : undefined);
-        }
-      }
-      
       return {
         sourcePath: filePath,
         success: false,
@@ -409,9 +402,15 @@ export async function ingestDocuments(
   const pdfFiles: string[] = [];
   const otherFiles: string[] = [];
   
+  // Only use MinerU batch processing if:
+  // - Not using vlmParser
+  // - Not using ruleBasedParser
+  // - MinerU is available
+  const useMineruBatch = !options?.vlmParser && !options?.ruleBasedParser && isMineruAvailable();
+  
   for (const filePath of filePaths) {
     const ext = path.extname(filePath).toLowerCase();
-    if (ext === '.pdf' && !options?.vlmParser && isMineruAvailable()) {
+    if (ext === '.pdf' && useMineruBatch) {
       pdfFiles.push(filePath);
     } else {
       otherFiles.push(filePath);
@@ -421,16 +420,26 @@ export async function ingestDocuments(
   // Process PDFs in batch if there are multiple
   if (pdfFiles.length > 1) {
     logger.info(`Batch processing ${pdfFiles.length} PDF files with MinerU`);
-    const batchResult = await ingestPdfBatch(pdfFiles, options);
     
-    for (const result of batchResult.results) {
-      if (result.success) {
-        processed.push(result);
-        totalModalItems += result.modalContents.length;
-      } else {
-        failed.push({ path: result.sourcePath, error: result.error ?? 'Unknown error' });
+    // Check MinerU endpoint connectivity BEFORE batch processing
+    const connectivityCheck = await checkMineruEndpoint();
+    if (!connectivityCheck.ok) {
+      // All PDF files fail with the same connectivity error
+      for (const filePath of pdfFiles) {
+        failed.push({ path: filePath, error: connectivityCheck.error ?? 'MinerU endpoint check failed' });
       }
-      totalParseTimeMs += result.parseTimeMs;
+    } else {
+      const batchResult = await ingestPdfBatch(pdfFiles, options);
+    
+      for (const result of batchResult.results) {
+        if (result.success) {
+          processed.push(result);
+          totalModalItems += result.modalContents.length;
+        } else {
+          failed.push({ path: result.sourcePath, error: result.error ?? 'Unknown error' });
+        }
+        totalParseTimeMs += result.parseTimeMs;
+      }
     }
   } else if (pdfFiles.length === 1) {
     // Single PDF, use regular ingestion
@@ -501,19 +510,15 @@ async function ingestPdfBatch(
         assets: parseResult.assets,
       });
     } else {
-      // Try fallback to PdfParser for failed files
-      const fallbackResult = await tryPdfParserFallback(fileResult.source, options);
-      if (fallbackResult) {
-        results.push(fallbackResult);
-      } else {
-        results.push({
-          sourcePath: fileResult.source,
-          success: false,
-          modalContents: [],
-          parseTimeMs: Date.now() - startTime,
-          error: fileResult.error ?? 'Batch parsing failed',
-        });
-      }
+      // NO automatic fallback - return error directly
+      // User must explicitly use ruleBasedParser=true for basic extraction
+      results.push({
+        sourcePath: fileResult.source,
+        success: false,
+        modalContents: [],
+        parseTimeMs: Date.now() - startTime,
+        error: fileResult.error ?? 'Batch parsing failed',
+      });
     }
   }
   
@@ -521,44 +526,37 @@ async function ingestPdfBatch(
 }
 
 /**
- * Try to parse a PDF with the fallback PdfParser.
+ * Check PDF parser endpoint connectivity before parsing.
+ * Returns detailed LLM-friendly error if connectivity check fails.
  */
-async function tryPdfParserFallback(
-  filePath: string,
+async function checkPdfParserConnectivity(
+  parser: IDocumentParser,
   options?: DocumentIngestOptions
-): Promise<DocumentIngestResult | null> {
-  const startTime = Date.now();
-  
-  try {
-    const fallbackParser = new PdfParser();
-    const fallbackResult = await fallbackParser.parse(filePath, {
-      extractImages: options?.extractImages ?? true,
-      extractTables: options?.extractTables ?? true,
-      maxPages: options?.maxPagesPerDocument,
-    });
-    
-    if (fallbackResult.success) {
-      const modalContents = convertToModalContents(fallbackResult.contents, filePath);
-      return {
-        sourcePath: filePath,
-        success: true,
-        fullText: fallbackResult.fullText,
-        modalContents,
-        rawContents: fallbackResult.contents,
-        pageCount: fallbackResult.metadata.pageCount,
-        parseTimeMs: Date.now() - startTime,
-        warnings: [
-          LLM_MESSAGES.FALLBACK_TO_PDFPARSER('mineru-batch', 'Batch parsing failed'),
-          ...(fallbackResult.warnings || []),
-        ],
-        parserUsed: `${fallbackResult.metadata.parser} (fallback from mineru-batch)`,
-      };
+): Promise<{ ok: boolean; error?: string }> {
+  // MinerU parser connectivity check
+  if (parser.name === 'mineru') {
+    const mineruParser = parser as MineruParser;
+    const result = await mineruParser.checkEndpointConnectivity();
+    if (!result.ok) {
+      logger.error(`MinerU endpoint check failed: ${result.error}`);
+      return result;
     }
-  } catch (err) {
-    logger.error('Fallback parser also failed:', err instanceof Error ? err : undefined);
+    return { ok: true };
   }
   
-  return null;
+  // VLM parser connectivity check
+  if (parser.name === 'vlm-parallel') {
+    const vlmParser = parser as VlmParser;
+    const result = await vlmParser.checkEndpointConnectivity();
+    if (!result.ok) {
+      logger.error(`VLM endpoint check failed: ${result.error}`);
+      return result;
+    }
+    return { ok: true };
+  }
+  
+  // Other parsers don't need connectivity check
+  return { ok: true };
 }
 
 /**

@@ -30,6 +30,8 @@ export type {
   ModuleInfo,
   TechStackInfo,
   FeatureInfo,
+  DocCategoryInfo,
+  DocSummaryInfo,
 } from './facts-types.js';
 
 import type {
@@ -41,6 +43,8 @@ import type {
   ModuleInfo,
   TechStackInfo,
   FeatureInfo,
+  DocCategoryInfo,
+  DocSummaryInfo,
 } from './facts-types.js';
 import {
   analyzeModules,
@@ -806,6 +810,185 @@ async function extractFirstParagraph(filePath: string): Promise<string | undefin
   return undefined;
 }
 
+// ============================================================================
+// Documentation Repository Analysis
+// ============================================================================
+
+/** Limits for document summary extraction */
+const DOC_SUMMARY_LIMITS = {
+  /** Maximum number of document files to process */
+  maxFiles: 500,
+  /** Maximum characters per summary */
+  maxSummaryChars: 200,
+  /** Maximum files to keep per category */
+  maxFilesPerCategory: 50,
+  /** Maximum lines to read from each file for title/summary extraction */
+  maxLinesPerFile: 100,
+};
+
+/** Document file extensions to process */
+const DOC_EXTENSIONS = new Set(['.md', '.mdx', '.rst', '.adoc', '.txt']);
+
+/**
+ * Extract title from markdown content.
+ * Looks for H1 heading or uses filename as fallback.
+ */
+function extractDocTitle(content: string, filename: string): string {
+  const lines = content.split(/\r?\n/);
+  let inFrontmatter = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    // Skip frontmatter
+    if (trimmed === '---') {
+      inFrontmatter = !inFrontmatter;
+      continue;
+    }
+    if (inFrontmatter) continue;
+
+    // Look for H1 heading
+    const h1Match = trimmed.match(/^#\s+(.+)$/);
+    if (h1Match && h1Match[1]) {
+      return h1Match[1].trim().slice(0, 100);
+    }
+  }
+
+  // Fallback: use filename without extension
+  return filename.replace(/\.[^.]+$/, '').replace(/[-_]/g, ' ');
+}
+
+/**
+ * Extract first meaningful paragraph from content.
+ * Similar to extractFirstParagraph but works with content string directly.
+ */
+function extractDocSummary(content: string, maxChars: number): string | undefined {
+  const lines = content.split(/\r?\n/);
+  let inFrontmatter = false;
+  let passedHeading = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    // Skip frontmatter
+    if (trimmed === '---') {
+      inFrontmatter = !inFrontmatter;
+      continue;
+  }
+    if (inFrontmatter) continue;
+
+    // Skip empty lines
+    if (!trimmed) continue;
+
+    // Skip headings
+    if (trimmed.startsWith('#')) {
+      passedHeading = true;
+      continue;
+    }
+
+    // Skip badges/images/links-only lines
+    if (trimmed.startsWith('![') || trimmed.startsWith('[![')) continue;
+    if (trimmed.startsWith('[') && trimmed.endsWith(')')) continue;
+
+    // Skip HTML comments
+    if (trimmed.startsWith('<!--')) continue;
+
+    // Skip code blocks
+    if (trimmed.startsWith('```')) continue;
+
+    // Found content - extract first sentence or truncate
+    const firstSentence = trimmed.match(/^[^.!?]+[.!?]/);
+    if (firstSentence) {
+      return firstSentence[0].slice(0, maxChars);
+    }
+    return trimmed.slice(0, maxChars);
+  }
+
+  return undefined;
+}
+
+/**
+ * Extract document summaries for documentation-type repositories.
+ * Groups documents by top-level directory and extracts title + summary.
+ */
+async function extractDocumentSummaries(
+  files: IngestedFile[]
+): Promise<DocCategoryInfo[]> {
+  // Filter to document files only
+  const docFiles = files.filter((f) => {
+    if (f.kind !== 'doc') return false;
+    const ext = path.extname(f.repoRelativePath).toLowerCase();
+    return DOC_EXTENSIONS.has(ext);
+  });
+
+  // Limit total files to process
+  const filesToProcess = docFiles.slice(0, DOC_SUMMARY_LIMITS.maxFiles);
+
+  // Group by category (top-level directory)
+  const categoryMap = new Map<string, IngestedFile[]>();
+
+  for (const file of filesToProcess) {
+    const parts = file.repoRelativePath.split('/');
+    // Use first directory as category, or 'root' for top-level files
+    const category = parts.length > 1 ? parts[0]! : 'root';
+
+    if (!categoryMap.has(category)) {
+      categoryMap.set(category, []);
+    }
+    categoryMap.get(category)!.push(file);
+  }
+
+  // Process each category
+  const categories: DocCategoryInfo[] = [];
+
+  for (const [categoryName, categoryFiles] of categoryMap) {
+    const totalCount = categoryFiles.length;
+    const filesToExtract = categoryFiles.slice(0, DOC_SUMMARY_LIMITS.maxFilesPerCategory);
+
+    const summaries: DocSummaryInfo[] = [];
+
+    for (const file of filesToExtract) {
+      try {
+        // Read only first N lines for efficiency
+        const content = await fs.readFile(file.bundleNormAbsPath, 'utf8');
+        const lines = content.split(/\r?\n/);
+        const truncatedContent = lines.slice(0, DOC_SUMMARY_LIMITS.maxLinesPerFile).join('\n');
+
+        const filename = path.basename(file.repoRelativePath);
+        const title = extractDocTitle(truncatedContent, filename);
+        const summary = extractDocSummary(truncatedContent, DOC_SUMMARY_LIMITS.maxSummaryChars);
+
+        summaries.push({
+          path: file.repoRelativePath,
+          title,
+          summary,
+          category: categoryName,
+        });
+      } catch {
+        // Skip files that can't be read
+        continue;
+      }
+    }
+
+    // Sort by path for consistent ordering
+    summaries.sort((a, b) => a.path.localeCompare(b.path));
+
+    categories.push({
+      name: categoryName,
+      fileCount: totalCount,
+      files: summaries,
+    });
+  }
+
+  // Sort categories by file count (descending), then by name
+  categories.sort((a, b) => {
+    if (b.fileCount !== a.fileCount) return b.fileCount - a.fileCount;
+    return a.name.localeCompare(b.name);
+  });
+
+  return categories;
+}
+
 /**
  * Extract all facts from a bundle
  */
@@ -936,6 +1119,15 @@ export async function extractBundleFacts(params: {
     patterns = ['documentation'];
   }
 
+  // Extract document summaries for documentation-type projects
+  let docCategories: DocCategoryInfo[] | undefined;
+  if (projectType === 'documentation' || projectType === 'mixed') {
+    docCategories = await extractDocumentSummaries(allFiles);
+    if (docCategories.length === 0) {
+      docCategories = undefined;
+    }
+  }
+
   return {
     version: '1.0',
     timestamp: new Date().toISOString(),
@@ -954,6 +1146,7 @@ export async function extractBundleFacts(params: {
     typeSemantics,
     extensionSummary,
     architectureSummary,
+    docCategories,
   };
 }
 

@@ -329,5 +329,31 @@ export function generateQuickSummary(facts: BundleFacts): string {
     sections.push('');
   }
 
+  // Documentation Categories (for documentation-type projects)
+  if (facts.docCategories && facts.docCategories.length > 0) {
+    sections.push('## Documentation Structure\n');
+    
+    const totalDocs = facts.docCategories.reduce((sum, cat) => sum + cat.fileCount, 0);
+    sections.push(`Total documents: ${totalDocs} files in ${facts.docCategories.length} categories\n`);
+    
+    for (const category of facts.docCategories) {
+      sections.push(`### ${category.name} (${category.fileCount} files)`);
+      
+      // Show top 5 documents per category with summaries
+      const topDocs = category.files.slice(0, 5);
+      for (const doc of topDocs) {
+        const summary = doc.summary ? `: ${doc.summary}` : '';
+        sections.push(`- **${doc.title}**${summary}`);
+        sections.push(`  Path: ${doc.path}`);
+      }
+      
+      // Show remaining count if more files exist
+      if (category.fileCount > 5) {
+        sections.push(`- ... and ${category.fileCount - 5} more files`);
+      }
+      sections.push('');
+    }
+  }
+
   return sections.join('\n') + '\n';
 }

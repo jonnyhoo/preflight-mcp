@@ -43,10 +43,9 @@ Add to your MCP client config:
 ## Tools Reference
 
 **工具数量：**
-- 默认配置（未启用LSP和Memory）：**16个工具**
-- 完整配置（启用LSP和Memory）：**18个工具**
+- 默认配置：**14个工具** (包含 LSP)
 
-### Bundle Management (9)
+### Bundle Management (6)
 
 | Tool | Description |
 |------|-------------|
@@ -56,9 +55,6 @@ Add to your MCP client config:
 | `preflight_get_overview` | ⭐ Get project overview (START HERE) |
 | `preflight_read_file` | Read specific file from bundle |
 | `preflight_repo_tree` | View directory structure |
-| `preflight_update_bundle` | Update existing bundle from source |
-| `preflight_cleanup_orphans` | Clean up orphaned files from storage |
-| `preflight_get_task_status` | Get status of async bundle operations |
 
 ### Search (1)
 
@@ -70,8 +66,8 @@ Add to your MCP client config:
 
 | Tool | Description |
 |------|-------------|
-| `preflight_lsp` | Go-to-definition, find references, hover, symbols (requires `PREFLIGHT_LSP_ENABLED=true`) |
 | `preflight_check` | Code quality checks (duplicates, deadcode, circular, complexity, security) |
+| `preflight_lsp` | Go-to-definition, find references, hover, symbols (requires `PREFLIGHT_LSP_ENABLED=true`) |
 
 ### Knowledge Distillation (3)
 
@@ -81,18 +77,19 @@ Add to your MCP client config:
 | `preflight_rag` | Index to ChromaDB and RAG query, supports cross-validation (requires ChromaDB + embedding config) |
 | `preflight_rag_manage` | Manage ChromaDB: list indexed content, stats, delete by hash or delete all |
 
-### Memory System (1)
-
-| Tool | Description |
-|------|-------------|
-| `preflight_memory` | Manage 3-layer long-term memory system (episodic, semantic, procedural) (requires `PREFLIGHT_MEMORY_ENABLED=true`) |
-
 ### ArXiv (2)
 
 | Tool | Description |
 |------|-------------|
 | `preflight_arxiv_search` | Search arXiv papers by preset, query, or ID with translation support |
 | `preflight_arxiv_download` | Download arXiv papers as PDF files to local directory |
+
+### Memory System (Optional)
+
+| Tool | Description |
+|------|-------------|
+| `preflight_memory` | Manage 3-layer long-term memory system (episodic, semantic, procedural) (requires `PREFLIGHT_MEMORY_ENABLED=true`) |
+
 |------|-------------|
 | `preflight_create_bundle` | Create bundle from GitHub, local path, web docs, or PDF |
 | `preflight_list_bundles` | List all available bundles |

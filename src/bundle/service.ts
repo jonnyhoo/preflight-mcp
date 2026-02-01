@@ -12,7 +12,7 @@ import {
 } from './github.js';
 import { type IngestedFile } from './ingest.js';
 import { ingestDocument, isParseableDocument } from './document-ingest.js';
-import { MineruParser, isMineruAvailable, type BatchParseResult } from '../parser/mineru-parser.js';
+import { MineruParser, isMineruAvailable, checkMineruEndpoint, type BatchParseResult } from '../parser/mineru-parser.js';
 import { type RepoInput, type BundleManifestV1, type SkippedFileEntry, writeManifest, readManifest, invalidateManifestCache } from './manifest.js';
 import { getBundlePaths } from './paths.js';
 import { writeAgentsMd, writeStartHereMd } from './guides.js';
@@ -191,7 +191,7 @@ export type BatchPdfBundleResult = {
  */
 export async function createPdfBundlesBatch(
   cfg: PreflightConfig,
-  pdfInputs: Array<{ url?: string; path?: string; name?: string; vlmParser?: boolean }>,
+  pdfInputs: Array<{ url?: string; path?: string; name?: string; vlmParser?: boolean; ruleBasedParser?: boolean }>,
   options?: CreateBundleOptions
 ): Promise<BatchPdfBundleResult> {
   const startTime = Date.now();
@@ -202,10 +202,14 @@ export async function createPdfBundlesBatch(
   const mineruLocalPdfs: Array<{ index: number; path: string; name?: string }> = [];
   const mineruUrlPdfs: Array<{ index: number; url: string; name?: string }> = [];
   const vlmPdfs: Array<{ index: number; input: typeof pdfInputs[0] }> = [];
+  const ruleBasedPdfs: Array<{ index: number; input: typeof pdfInputs[0] }> = [];
   
   for (let i = 0; i < pdfInputs.length; i++) {
     const input = pdfInputs[i]!;
-    if (input.vlmParser) {
+    // ruleBasedParser takes highest priority
+    if (input.ruleBasedParser) {
+      ruleBasedPdfs.push({ index: i, input });
+    } else if (input.vlmParser) {
       vlmPdfs.push({ index: i, input });
     } else if (input.path) {
       mineruLocalPdfs.push({ index: i, path: input.path, name: input.name });
@@ -217,7 +221,29 @@ export async function createPdfBundlesBatch(
   // Batch parse with MinerU if available
   const parsedResults = new Map<number, { success: boolean; fullText?: string; pageCount?: number; error?: string }>();
   
+  // Check MinerU endpoint connectivity BEFORE batch processing
+  let mineruEndpointOk = false;
   if (isMineruAvailable() && (mineruLocalPdfs.length > 0 || mineruUrlPdfs.length > 0)) {
+    const connectivityCheck = await checkMineruEndpoint();
+    if (!connectivityCheck.ok) {
+      // All MinerU PDFs fail with the same connectivity error
+      for (const pdfInfo of mineruLocalPdfs) {
+        const source = pdfInfo.path;
+        failed.push({ source, error: connectivityCheck.error ?? 'MinerU endpoint check failed' });
+      }
+      for (const pdfInfo of mineruUrlPdfs) {
+        const source = pdfInfo.url;
+        failed.push({ source, error: connectivityCheck.error ?? 'MinerU endpoint check failed' });
+      }
+      // Clear arrays so we don't try to process them
+      mineruLocalPdfs.length = 0;
+      mineruUrlPdfs.length = 0;
+    } else {
+      mineruEndpointOk = true;
+    }
+  }
+  
+  if (mineruEndpointOk && (mineruLocalPdfs.length > 0 || mineruUrlPdfs.length > 0)) {
     const parser = new MineruParser();
     
     // Batch parse local PDFs
@@ -416,13 +442,16 @@ async function createBundleInternal(
     const processedPdfIndices = new Set<number>();
     
     // Identify PDFs that can be batch processed with MinerU
+    // Skip PDFs with vlmParser=true or ruleBasedParser=true
     const mineruPdfIndices: number[] = [];
     const mineruLocalPdfs: Array<{ index: number; path: string; name?: string }> = [];
     const mineruUrlPdfs: Array<{ index: number; url: string; name?: string }> = [];
     
     if (isMineruAvailable()) {
       input.repos.forEach((r, idx) => {
-        if (r.kind === 'pdf' && !('vlmParser' in r && r.vlmParser === true)) {
+        if (r.kind === 'pdf' 
+            && !('vlmParser' in r && r.vlmParser === true)
+            && !('ruleBasedParser' in r && r.ruleBasedParser === true)) {
           mineruPdfIndices.push(idx);
           if ('path' in r && r.path) {
             mineruLocalPdfs.push({ index: idx, path: r.path, name: r.name });
@@ -433,8 +462,24 @@ async function createBundleInternal(
       });
     }
     
+    // Check MinerU endpoint connectivity BEFORE batch processing
+    let mineruBatchOk = false;
+    if (mineruLocalPdfs.length > 1 || mineruUrlPdfs.length > 1) {
+      const connectivityCheck = await checkMineruEndpoint();
+      if (!connectivityCheck.ok) {
+        // Log the error but don't fail - PDFs will be processed individually
+        logger.error(`MinerU endpoint check failed: ${connectivityCheck.error}`);
+        allWarnings.push(`MinerU batch processing unavailable: ${connectivityCheck.error}`);
+        // Clear arrays so PDFs fall through to individual processing
+        mineruLocalPdfs.length = 0;
+        mineruUrlPdfs.length = 0;
+      } else {
+        mineruBatchOk = true;
+      }
+    }
+    
     // Batch process local PDFs if there are multiple
-    if (mineruLocalPdfs.length > 1) {
+    if (mineruBatchOk && mineruLocalPdfs.length > 1) {
       reportProgress('ingesting', 5, `Batch parsing ${mineruLocalPdfs.length} local PDFs with MinerU...`);
       tracker.updateProgress(taskId, 'ingesting', 5, `Batch parsing ${mineruLocalPdfs.length} local PDFs...`);
       
@@ -537,7 +582,7 @@ async function createBundleInternal(
     }
     
     // Batch process URL PDFs if there are multiple
-    if (mineruUrlPdfs.length > 1) {
+    if (mineruBatchOk && mineruUrlPdfs.length > 1) {
       reportProgress('downloading', 10, `Batch parsing ${mineruUrlPdfs.length} PDF URLs with MinerU...`);
       tracker.updateProgress(taskId, 'downloading', 10, `Batch parsing ${mineruUrlPdfs.length} PDF URLs...`);
       

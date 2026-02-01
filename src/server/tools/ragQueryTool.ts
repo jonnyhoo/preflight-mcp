@@ -112,7 +112,26 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
         stats: z
           .object({
             chunksRetrieved: z.number(),
+            entitiesFound: z.number().optional(),
             graphExpansion: z.number().optional(),
+            contextCompletionHops: z.number().optional(),
+            igpStats: z
+              .object({
+                originalCount: z.number(),
+                prunedCount: z.number(),
+                pruningRatio: z.number(),
+                iterations: z.number(),
+                durationMs: z.number(),
+              })
+              .optional(),
+            hierarchicalStats: z
+              .object({
+                l1ByType: z.record(z.string(), z.number()),
+                l1TotalFound: z.number(),
+                l2l3ChunksFound: z.number(),
+                durationMs: z.number(),
+              })
+              .optional(),
             durationMs: z.number(),
           })
           .optional(),

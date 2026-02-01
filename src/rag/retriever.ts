@@ -1,8 +1,10 @@
 /**
  * RAG Retriever - Vector similarity search for code and documents.
  * 
- * Note: KG graph expansion removed - code symbols are now directly vectorized.
- * All modes (naive/local/hybrid) now use pure vector similarity search.
+ * Supports three retrieval modes:
+ * - naive: Pure dense vector search
+ * - local: Same as naive (KG expansion removed)
+ * - hybrid: Dense search + N-gram reranking for exact term matching
  * 
  * @module rag/retriever
  */
@@ -10,6 +12,7 @@
 import type { ChromaVectorDB } from '../vectordb/chroma-client.js';
 import type { ChunkDocument, QueryFilter } from '../vectordb/types.js';
 import type { RetrieveResult, QueryMode, RAGConfig } from './types.js';
+import { HybridReranker, type HybridRerankOptions } from './hybrid-reranker.js';
 import { createModuleLogger } from '../logging/logger.js';
 
 const logger = createModuleLogger('rag-retriever');
@@ -18,9 +21,20 @@ const logger = createModuleLogger('rag-retriever');
 // RAG Retriever
 // ============================================================================
 
+/**
+ * Options for hybrid retrieval.
+ */
+export interface HybridRetrieveOptions {
+  /** Enable hybrid reranking (default: 'auto') */
+  enableHybridRerank?: boolean | 'auto';
+  /** Dense weight for hybrid scoring (default: 0.7) */
+  hybridDenseWeight?: number;
+}
+
 export class RAGRetriever {
   private chromaDB: ChromaVectorDB;
   private embedding: RAGConfig['embedding'];
+  private hybridReranker: HybridReranker;
 
   constructor(
     chromaDB: ChromaVectorDB,
@@ -28,6 +42,7 @@ export class RAGRetriever {
   ) {
     this.chromaDB = chromaDB;
     this.embedding = embedding;
+    this.hybridReranker = new HybridReranker();
   }
 
   /**
@@ -69,15 +84,50 @@ export class RAGRetriever {
   }
 
   /**
-   * Hybrid retrieval: Now same as naive (KG graph expansion removed).
-   * @deprecated Use naiveRetrieve directly
+   * Hybrid retrieval: Dense search + N-gram reranking.
+   * 
+   * Uses NUMEN N-gram hashing to boost exact term matches.
+   * Particularly effective for:
+   * - Technical terms (BERT, ResNet, GPT-4)
+   * - Formula keywords (softmax, attention)
+   * - Metric queries (highest accuracy)
+   * 
+   * @param query - User query
+   * @param topK - Number of results to return
+   * @param filter - Optional filters
+   * @param options - Hybrid reranking options
    */
   async hybridRetrieve(
     query: string,
     topK: number,
-    filter?: QueryFilter
-  ): Promise<RetrieveResult> {
-    return this.naiveRetrieve(query, topK, filter);
+    filter?: QueryFilter,
+    options?: HybridRetrieveOptions
+  ): Promise<RetrieveResult & { hybridStats?: { applied: boolean; queryHasTerms: boolean; durationMs: number } }> {
+    // Retrieve more candidates for reranking (2x topK)
+    const candidateCount = Math.min(topK * 2, 50);
+    const candidates = await this.naiveRetrieve(query, candidateCount, filter);
+    
+    // Apply hybrid reranking
+    const rerankOptions: HybridRerankOptions = {
+      enabled: options?.enableHybridRerank ?? 'auto',
+      denseWeight: options?.hybridDenseWeight ?? 0.7,
+    };
+    
+    const rerankResult = this.hybridReranker.rerank(query, candidates.chunks, rerankOptions);
+    
+    // Take top-K after reranking
+    const rerankedChunks = rerankResult.chunks.slice(0, topK);
+    
+    return {
+      chunks: rerankedChunks,
+      entities: candidates.entities,
+      expandedTypes: candidates.expandedTypes,
+      hybridStats: {
+        applied: rerankResult.hybridApplied,
+        queryHasTerms: rerankResult.stats.queryHasTerms,
+        durationMs: rerankResult.stats.durationMs,
+      },
+    };
   }
 
   /**
@@ -91,9 +141,16 @@ export class RAGRetriever {
     options?: {
       expandToParent?: boolean;
       expandToSiblings?: boolean;
+      enableHybridRerank?: boolean | 'auto';
+      hybridDenseWeight?: number;
     }
-  ): Promise<RetrieveResult> {
-    let result: RetrieveResult;
+  ): Promise<RetrieveResult & { hybridStats?: { applied: boolean; queryHasTerms: boolean; durationMs: number } }> {
+    let result: RetrieveResult & { hybridStats?: { applied: boolean; queryHasTerms: boolean; durationMs: number } };
+    
+    const hybridOptions: HybridRetrieveOptions = {
+      enableHybridRerank: options?.enableHybridRerank,
+      hybridDenseWeight: options?.hybridDenseWeight,
+    };
     
     switch (mode) {
       case 'naive':
@@ -103,10 +160,10 @@ export class RAGRetriever {
         result = await this.localRetrieve(query, topK, filter);
         break;
       case 'hybrid':
-        result = await this.hybridRetrieve(query, topK, filter);
+        result = await this.hybridRetrieve(query, topK, filter, hybridOptions);
         break;
       default:
-        result = await this.hybridRetrieve(query, topK, filter);
+        result = await this.hybridRetrieve(query, topK, filter, hybridOptions);
     }
     
     // Apply hierarchical expansion if requested

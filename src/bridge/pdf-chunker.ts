@@ -257,6 +257,41 @@ function isNoiseHeading(heading: string): boolean {
   return false;
 }
 
+function isInformativeAltText(text: string): boolean {
+  const cleaned = text.replace(/\s+/g, ' ').trim();
+  if (!cleaned) return false;
+  const lower = cleaned.toLowerCase();
+  if (/^(figure|fig\.?|image|diagram|chart|plot|photo|illustration)\b/.test(lower)) return false;
+  const wordCount = cleaned.split(/\s+/).filter(Boolean).length;
+  if (wordCount < 3) return false;
+  const alphaNumCount = cleaned.replace(/[^a-z0-9]/gi, '').length;
+  return alphaNumCount >= 12;
+}
+
+function normalizeFigureContent(content: string): string | null {
+  const trimmed = content.trim();
+  if (!trimmed) return null;
+  if (/^\[Figure:/i.test(trimmed)) return trimmed;
+
+  const lines = trimmed.split('\n').map(line => line.trim()).filter(Boolean);
+  const imageLine = /^!\[[^\]]*\]\([^)]+\)$/;
+  const nonImageLines = lines.filter(line => !imageLine.test(line));
+  if (nonImageLines.length > 0) return nonImageLines.join('\n');
+
+  const altTexts = lines
+    .map((line) => {
+      const match = line.match(/^!\[([^\]]*)\]\([^)]+\)$/);
+      return match ? match[1]!.trim() : '';
+    })
+    .filter(isInformativeAltText);
+
+  if (altTexts.length > 0) {
+    return `[Figure: ${altTexts.join('; ')}]`;
+  }
+
+  return null;
+}
+
 /**
  * Infer logical section level from heading text based on academic numbering.
  * Returns the inferred level or undefined if cannot be determined.
@@ -334,12 +369,22 @@ function detectContentBlocks(markdown: string, _headingPath: string[] = []): Con
   const flushBlock = () => {
     const content = currentContent.join('\n').trim();
     if (content) {
+      let finalContent = content;
+      if (currentType === 'figure') {
+        finalContent = normalizeFigureContent(content) ?? '';
+      }
+      if (!finalContent) {
+        currentContent = [];
+        currentType = 'text';
+        blockStartPage = currentPage;
+        return;
+      }
       const isSpecial = currentType === 'code' || currentType === 'table' || currentType === 'formula';
       const heading = getCurrentHeading();
       logger.debug(`[PageTrack] Flushing block: heading="${heading?.slice(0, 30) || 'none'}" page=${blockStartPage} type=${currentType}`);
       blocks.push({
         type: currentType,
-        content,
+        content: finalContent,
         heading,
         headingPath: getCurrentHeadingPath(),
         isSpecial,

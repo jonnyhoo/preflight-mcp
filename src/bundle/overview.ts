@@ -482,6 +482,42 @@ function formatDocumentationStructure(files: IngestedFile[]): string[] {
 }
 
 /**
+ * Format documentation structure using docCategories from FACTS.json
+ * Shows category summaries with document titles and descriptions
+ */
+function formatDocCategoriesStructure(facts: BundleFacts): string[] {
+  if (!facts.docCategories || facts.docCategories.length === 0) return [];
+
+  const lines: string[] = [];
+  const maxCategoriesInOverview = 10;
+  const maxFilesPerCategoryInOverview = 5;
+
+  for (const category of facts.docCategories.slice(0, maxCategoriesInOverview)) {
+    lines.push(`### ${category.name} (${category.fileCount} files)\n`);
+
+    // Show top documents with summaries
+    for (const doc of category.files.slice(0, maxFilesPerCategoryInOverview)) {
+      const summary = doc.summary ? `: ${doc.summary}` : '';
+      lines.push(`- **${doc.title}**${summary}`);
+      lines.push(`  - Path: \`${doc.path}\``);
+    }
+
+    // Show remaining count
+    if (category.fileCount > maxFilesPerCategoryInOverview) {
+      lines.push(`- *... and ${category.fileCount - maxFilesPerCategoryInOverview} more files*`);
+    }
+    lines.push('');
+  }
+
+  // Show remaining categories count
+  if (facts.docCategories.length > maxCategoriesInOverview) {
+    lines.push(`*... and ${facts.docCategories.length - maxCategoriesInOverview} more categories*\n`);
+  }
+
+  return lines;
+}
+
+/**
  * Phase 3: Format standalone modules for reuse guidance
  */
 function formatStandaloneModules(facts: BundleFacts): string[] {
@@ -546,12 +582,18 @@ export async function generateOverviewMarkdown(params: {
       sections.push(`**Documentation Framework**: ${facts.frameworks.join(', ')}\r\n\r\n`);
     }
 
-    // Documentation structure
-    const docStructure = formatDocumentationStructure(allFiles);
-    if (docStructure.length > 0) {
+    // Documentation structure - prefer docCategories if available
+    if (facts.docCategories && facts.docCategories.length > 0) {
       sections.push('## Documentation Structure\r\n');
-      sections.push(...docStructure.map((l) => l + '\r\n'));
-      sections.push('');
+      const docCatLines = formatDocCategoriesStructure(facts);
+      sections.push(...docCatLines.map((l) => l + '\r\n'));
+    } else {
+      const docStructure = formatDocumentationStructure(allFiles);
+      if (docStructure.length > 0) {
+        sections.push('## Documentation Structure\r\n');
+        sections.push(...docStructure.map((l) => l + '\r\n'));
+        sections.push('');
+      }
     }
 
     return sections.join('\n') + '\n';

@@ -66,6 +66,7 @@ export {
   MineruParser,
   createMineruParser,
   isMineruAvailable,
+  checkMineruEndpoint,
   type BatchFileResult,
   type BatchParseResult,
 } from './mineru-parser.js';

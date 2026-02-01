@@ -7,6 +7,9 @@
  * Supported providers:
  * - ollama: Local embedding via Ollama (default, zero cloud dependency)
  * - openai: Cloud embedding via OpenAI API
+ * 
+ * Additional features:
+ * - NgramHasher: NUMEN-based n-gram hashing for exact term matching
  */
 
 // Types
@@ -18,6 +21,12 @@ export type {
   OpenAIEmbeddingConfig,
   EmbeddingDocument,
   SemanticSearchHit,
+  // N-Gram types
+  NgramHashConfig,
+  NgramVector,
+  NgramWeights,
+  HybridEmbedding,
+  HybridScoringConfig,
 } from './types.js';
 
 // Base class
@@ -26,6 +35,15 @@ export { BaseEmbedding } from './base.js';
 // Providers
 export { OllamaEmbedding } from './ollama.js';
 export { OpenAIEmbedding } from './openai.js';
+
+// N-Gram Hasher (NUMEN)
+export {
+  NgramHasher,
+  hashNgrams,
+  ngramSimilarity,
+  computeHybridScore,
+  shouldUseNgramMatching,
+} from './ngram-hasher.js';
 
 // Factory function to create embedding provider
 import type { EmbeddingConfig } from './types.js';

@@ -46,54 +46,75 @@ const logger = createModuleLogger('mineru-parser');
  */
 const LLM_ERRORS = {
   NOT_CONFIGURED: `[MinerU Configuration Error]
-MinerU API is not configured. To use MinerU (default PDF parser):
+MinerU API is not configured. To parse PDFs, you need to configure a parser.
 
-1. Add to ~/.preflight/config.json:
-   {
-     "mineruEnabled": true,
-     "mineruApiBase": "https://mineru-api.example.com",
-     "mineruApiKey": "your-api-key"
-   }
+Option 1 - Configure MinerU (recommended for high quality):
+  Add to ~/.preflight/config.json:
+  {
+    "mineruEnabled": true,
+    "mineruApiBase": "https://mineru-api.example.com",
+    "mineruApiKey": "your-api-key"
+  }
 
-2. Or set environment variables:
-   MINERU_API_BASE, MINERU_API_KEY
+Option 2 - Use VLM Parser (local processing):
+  Configure vlmConfigs in config.json and use vlmParser=true
 
-Alternatively:
-  - Use vlmParser=true for local VLM processing (requires vlmConfigs)
-  - Will automatically fallback to PdfParser (rule-based) if unconfigured`,
+Option 3 - Use rule-based parser (basic extraction):
+  Use ruleBasedParser=true for basic text extraction
+  Note: Lower quality, may miss tables/formulas rendered as images`,
 
-  API_ERROR: (status: number, message: string) => `[MinerU API Error]
-MinerU API returned error (HTTP ${status}): ${message}
+  AUTH_FAILED: (apiBase: string, status: number) => `[MinerU Authentication Error]
+MinerU API authentication failed (HTTP ${status}): ${apiBase}
 
 Possible causes:
   - API key is invalid or expired
-  - API service is temporarily unavailable
-  - Rate limit exceeded
+  - API key doesn't have required permissions
 
-Please verify your mineruApiKey and try again.`,
+Options:
+  1. Fix your mineruApiKey in ~/.preflight/config.json
+  2. Use vlmParser=true for local VLM processing
+  3. Use ruleBasedParser=true for basic rule-based extraction (lower quality)`,
 
   ENDPOINT_UNREACHABLE: (apiBase: string, error: string) => `[MinerU Connection Error]
 Cannot connect to MinerU API: ${apiBase}
 
 Error: ${error}
 
-Please verify:
-  1. mineruApiBase URL is correct
-  2. Network connectivity is working
-  3. API service is available`,
+Options:
+  1. Verify mineruApiBase URL is correct
+  2. Check network connectivity
+  3. Use vlmParser=true for local VLM processing
+  4. Use ruleBasedParser=true for basic rule-based extraction (lower quality)`,
+
+  ENDPOINT_ERROR: (apiBase: string, status: number, message: string) => `[MinerU Endpoint Error]
+MinerU API returned error (HTTP ${status}): ${apiBase}
+
+Message: ${message}
+
+Options:
+  1. Check if MinerU service is available
+  2. Use vlmParser=true for local VLM processing
+  3. Use ruleBasedParser=true for basic rule-based extraction (lower quality)`,
 
   TASK_TIMEOUT: (taskId: string, timeoutMs: number) => `[MinerU Task Timeout]
 Task ${taskId} did not complete within ${Math.round(timeoutMs / 1000)}s.
 
-The PDF may be too large or complex. Consider:
-  - Using vlmParser=true for local processing
-  - Splitting the PDF into smaller parts`,
+The PDF may be too large or complex.
+
+Options:
+  1. Try again with a smaller PDF
+  2. Use vlmParser=true for local VLM processing
+  3. Use ruleBasedParser=true for basic rule-based extraction`,
 
   TASK_FAILED: (taskId: string, error: string) => `[MinerU Task Failed]
 Task ${taskId} failed: ${error}
 
 The PDF may be corrupted or in an unsupported format.
-Fallback to PdfParser will be attempted automatically.`,
+
+Options:
+  1. Verify the PDF file is valid
+  2. Use vlmParser=true for local VLM processing
+  3. Use ruleBasedParser=true for basic rule-based extraction`,
 } as const;
 
 // ============================================================================
@@ -237,6 +258,92 @@ export class MineruParser implements IDocumentParser {
    */
   async checkInstallation(): Promise<boolean> {
     return this.config.enabled && Boolean(this.config.apiKey);
+  }
+
+  /**
+   * Check endpoint connectivity before processing.
+   * Tests MinerU API endpoint and returns detailed error for LLM.
+   * 
+   * @returns Object with ok status and detailed error message if failed
+   */
+  async checkEndpointConnectivity(): Promise<{ ok: boolean; error?: string }> {
+    // Check configuration first
+    if (!this.config.enabled) {
+      return { ok: false, error: LLM_ERRORS.NOT_CONFIGURED };
+    }
+    if (!this.config.apiKey) {
+      return { ok: false, error: LLM_ERRORS.NOT_CONFIGURED };
+    }
+    if (!this.config.apiBase) {
+      return { ok: false, error: LLM_ERRORS.NOT_CONFIGURED };
+    }
+
+    // Test endpoint connectivity
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15_000); // 15s timeout
+
+      // Try to hit a lightweight endpoint to verify connectivity and auth
+      // MinerU API typically has a status or health endpoint
+      const testUrl = `${this.config.apiBase}/api/v4/user/info`;
+      
+      const response = await fetch(testUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${this.config.apiKey}`,
+        },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      // Check for auth errors
+      if (response.status === 401 || response.status === 403) {
+        logger.error(`MinerU authentication failed: HTTP ${response.status}`);
+        return { 
+          ok: false, 
+          error: LLM_ERRORS.AUTH_FAILED(this.config.apiBase, response.status) 
+        };
+      }
+
+      // Check for other errors
+      if (!response.ok && response.status !== 404 && response.status !== 405) {
+        const text = await response.text().catch(() => 'Unknown error');
+        logger.error(`MinerU endpoint error: HTTP ${response.status} - ${text}`);
+        return { 
+          ok: false, 
+          error: LLM_ERRORS.ENDPOINT_ERROR(this.config.apiBase, response.status, text) 
+        };
+      }
+
+      // Success (2xx) or acceptable status (404/405 means endpoint exists but route doesn't)
+      logger.info(`MinerU endpoint connectivity check passed: ${this.config.apiBase}`);
+      return { ok: true };
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const reason = errMsg.includes('abort') ? 'Connection timeout' : errMsg;
+      logger.error(`MinerU endpoint unreachable: ${reason}`);
+      return { 
+        ok: false, 
+        error: LLM_ERRORS.ENDPOINT_UNREACHABLE(this.config.apiBase, reason) 
+      };
+    }
+  }
+
+  /**
+   * Get detailed configuration status for LLM reporting.
+   */
+  getConfigStatus(): { configured: boolean; error?: string; apiBase?: string } {
+    if (!this.config.enabled || !this.config.apiKey || !this.config.apiBase) {
+      return {
+        configured: false,
+        error: LLM_ERRORS.NOT_CONFIGURED,
+      };
+    }
+    return {
+      configured: true,
+      apiBase: this.config.apiBase,
+    };
   }
 
   /**
@@ -1613,11 +1720,22 @@ export function createMineruParser(): MineruParser {
 }
 
 /**
- * Check if MinerU parsing is available.
+ * Check if MinerU parsing is available (configuration only, no network check).
  */
 export function isMineruAvailable(): boolean {
   const cfg = getConfig();
-  return cfg.mineruEnabled && Boolean(cfg.mineruApiKey);
+  return cfg.mineruEnabled && Boolean(cfg.mineruApiKey) && Boolean(cfg.mineruApiBase);
+}
+
+/**
+ * Check MinerU endpoint connectivity.
+ * Returns detailed LLM-friendly error message if check fails.
+ * 
+ * @returns Object with ok status and detailed error message if failed
+ */
+export async function checkMineruEndpoint(): Promise<{ ok: boolean; error?: string }> {
+  const parser = new MineruParser();
+  return parser.checkEndpointConnectivity();
 }
 
 // Default export

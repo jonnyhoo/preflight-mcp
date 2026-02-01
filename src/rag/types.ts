@@ -63,6 +63,12 @@ export interface QueryOptions {
   // IGP (Iterative Graph Pruning) options (Phase 2)
   /** IGP pruning options for cross-bundle queries */
   igpOptions?: IGPQueryOptions;
+  
+  // Hybrid retrieval options (Phase 2 - NUMEN N-gram)
+  /** Enable hybrid (dense + sparse N-gram) reranking (default: 'auto' - based on query) */
+  enableHybridRerank?: boolean | 'auto';
+  /** Weight for dense similarity in hybrid scoring (default: 0.7) */
+  hybridDenseWeight?: number;
 }
 
 /**
@@ -112,6 +118,9 @@ export const DEFAULT_QUERY_OPTIONS: Required<Omit<QueryOptions, 'bundleId' | 're
   hierarchicalL1TopK: 10,
   hierarchicalL2L3TopK: 15,
   igpOptions: { enabled: false }, // IGP disabled by default
+  // Phase 2: Hybrid reranking defaults
+  enableHybridRerank: 'auto', // Auto-detect based on query
+  hybridDenseWeight: 0.7, // 70% dense, 30% sparse
 };
 
 // ============================================================================
@@ -198,6 +207,15 @@ export interface QueryResult {
       /** Number of chunks found in L2/L3 fine filtering */
       l2l3ChunksFound: number;
       /** Hierarchical retrieval time in ms */
+      durationMs: number;
+    };
+    /** Hybrid reranking statistics (Phase 2 - NUMEN) */
+    hybridStats?: {
+      /** Whether hybrid reranking was applied */
+      applied: boolean;
+      /** Whether query contained technical terms */
+      queryHasTerms: boolean;
+      /** Hybrid reranking time in ms */
       durationMs: number;
     };
     durationMs: number;

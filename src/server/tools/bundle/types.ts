@@ -73,11 +73,12 @@ export const CreateRepoInputSchema = z.union([
     path: z.string().optional().describe('Local file path to PDF. Example: "C:\\\\docs\\\\paper.pdf" or "/home/user/paper.pdf"'),
     name: z.string().optional().describe('Display name for the document. Example: "Prompt Repetition Paper"'),
     vlmParser: z.boolean().optional().describe(
-      'If true, use VLM Parser (parallel Vision-Language Model) instead of default MinerU. ' +
-      'Requires vlmConfigs in config.json. Three PDF parsing modes:\n' +
-      '1. MinerU (default): Cloud API, highest quality\n' +
-      '2. VLM Parser (vlmParser=true): Local parallel VLM processing\n' +
-      '3. PdfParser: Rule-based fallback when others fail'
+      'Use VLM Parser (parallel Vision-Language Model) instead of default MinerU. ' +
+      'Requires vlmConfigs in config.json. Fails immediately if endpoint unavailable (no fallback).'
+    ),
+    ruleBasedParser: z.boolean().optional().describe(
+      'Use simple rule-based PDF extraction (no API required). ' +
+      'Lower quality but always available. Use as last resort when MinerU/VLM unavailable.'
     ),
   }).refine(
     (data) => data.url || data.path,

@@ -31,9 +31,11 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
       description:
         'Create a bundle from GitHub repos, local directories, PDFs, web docs, or markdown folders.\n' +
         'Supports: code repos, documentation-only repos (no CARD.json needed), data repos (csv/json/yaml).\n' +
+        '**Batch PDF**: Multiple PDFs in repos array → creates SEPARATE bundles (efficient batch parsing).\n' +
         'Example: `{"repos": [{"kind": "github", "repo": "owner/repo"}]}`\n' +
-        'Markdown: `{"repos": [{"kind": "markdown", "path": "C:\\\\docs", "name": "My Docs"}]}`\n' +
-        'Use when: "analyze repo", "index project", "分析项目", "爬取文档", "索引文档", "markdown folder".',
+        'Batch PDF: `{"repos": [{"kind": "pdf", "path": "a.pdf"}, {"kind": "pdf", "path": "b.pdf"}]}`\n' +
+        'PDF parsing: MinerU (default) | vlmParser=true (VLM) | ruleBasedParser=true (no API).\n' +
+        'Use when: "analyze repo", "index project", "分析项目", "批量解析PDF", "爬取文档", "索引文档".',
       inputSchema: CreateBundleInputSchema,
       outputSchema: {
         bundleId: z.string().optional(),
@@ -93,6 +95,7 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
             path: r.path,
             name: r.name,
             vlmParser: r.vlmParser,
+            ruleBasedParser: r.ruleBasedParser,
           }));
           
           const batchResult = await createPdfBundlesBatch(cfg, pdfInputs, {

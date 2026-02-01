@@ -130,9 +130,12 @@ export function runParseQA(markdown: string): ParseQAResult {
   }
   
   // Garbled text: look for unusual character sequences
-  const garbledPatterns = markdown.match(/[^\x00-\x7F]{3,}|[\x00-\x08\x0B\x0C\x0E-\x1F]/g) ?? [];
+  // Only detect actual garbled text (control chars, replacement chars), NOT valid Unicode like CJK
+  // \uFFFD = replacement character (indicates encoding issues)
+  // \x00-\x08, \x0B, \x0C, \x0E-\x1F = control characters (except tab, newline, carriage return)
+  const garbledPatterns = markdown.match(/[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFD]+/g) ?? [];
   const garbledRatio = markdown.length > 0 ? garbledPatterns.join('').length / markdown.length : 0;
-  if (garbledRatio > 0.02) {
+  if (garbledRatio > 0.01) {
     issues.push(`High garbled text ratio: ${(garbledRatio * 100).toFixed(1)}%`);
   }
   

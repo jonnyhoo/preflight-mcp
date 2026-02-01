@@ -37,6 +37,8 @@ export type BundleFacts = {
   extensionSummary?: UnifiedAnalysisResult['summary'];
   // Phase 4: Architecture overview (gives LLM bird's eye view)
   architectureSummary?: ArchitectureSummary;
+  // Documentation repository analysis (only for projectType === 'documentation')
+  docCategories?: DocCategoryInfo[];
 };
 
 export type LanguageStats = {
@@ -111,4 +113,36 @@ export type TechStackInfo = {
 export type FeatureInfo = {
   name: string; // Feature/skill name (directory name)
   desc?: string; // Short description extracted from SKILL.md, README.md, etc.
+};
+
+// ============================================================================
+// Documentation Repository Types
+// ============================================================================
+
+/**
+ * Summary information for a single document file.
+ * Used for documentation-type repositories to provide LLM-friendly overviews.
+ */
+export type DocSummaryInfo = {
+  /** File path relative to repository root */
+  path: string;
+  /** Document title (from H1 heading or filename) */
+  title: string;
+  /** First paragraph summary (max 200 chars) */
+  summary?: string;
+  /** Category (top-level directory name, or 'root' for top-level files) */
+  category: string;
+};
+
+/**
+ * Category grouping for documentation files.
+ * Groups documents by top-level directory for easier navigation.
+ */
+export type DocCategoryInfo = {
+  /** Category name (directory name) */
+  name: string;
+  /** Total file count in this category */
+  fileCount: number;
+  /** Document summaries (limited to maxFilesPerCategory) */
+  files: DocSummaryInfo[];
 };
