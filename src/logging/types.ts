@@ -54,6 +54,7 @@ export interface ILogger {
   updateConfig(config: Partial<LoggerConfig>): void;
   getConfig(): LoggerConfig;
   close(): Promise<void>;
+  isDebugEnabled?(): boolean;
 }
 
 /**
