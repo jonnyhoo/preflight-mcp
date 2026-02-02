@@ -228,14 +228,18 @@ export class MemoryStore {
       // Ignore - will create
     }
 
-    // Create new collection
+    // Create new collection with cosine distance (important for semantic similarity)
     logger.info(`Creating memory collection: ${name}`);
     const collection = await this.request<ChromaCollection>(
       'POST',
       `${basePath}/collections`,
       {
         name,
-        metadata: { layer, schemaVersion: SCHEMA_VERSION },
+        metadata: { 
+          layer, 
+          schemaVersion: SCHEMA_VERSION,
+          'hnsw:space': 'cosine',  // Use cosine distance for semantic similarity
+        },
       }
     );
     this.collections.set(name, collection);
@@ -1016,7 +1020,7 @@ export class MemoryStore {
           'POST',
           `${basePath}/collections/${collection.id}/get`,
           {
-            where: { userId: this.config.userId },
+            // Skip where clause - get all
             include: ['metadatas'],
           }
         );
