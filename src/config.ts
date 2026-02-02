@@ -470,8 +470,12 @@ export function getConfig(): PreflightConfig {
     pdfChunkLevel: loadConfigFile().pdfChunkLevel ?? (parseInt(process.env.PREFLIGHT_PDF_CHUNK_LEVEL ?? '2', 10) as 1 | 2 | 3 | 4),
     
     // Memory System
-    // Priority: config file > env > default
+    // Priority: config file > env > auto (enabled if RAG/embedding is configured)
     memoryUserId: loadConfigFile().memory?.userId ?? process.env.PREFLIGHT_USER_ID,
-    memoryEnabled: loadConfigFile().memory?.enabled ?? envBoolean('PREFLIGHT_MEMORY_ENABLED', false),
+    // Auto-enable memory if explicitly set, or if RAG infrastructure is available
+    memoryEnabled: loadConfigFile().memory?.enabled ?? envBoolean('PREFLIGHT_MEMORY_ENABLED', 
+      // Auto-enable if embedding is configured (same prereqs as RAG)
+      loadConfigFile().embeddingEnabled || Boolean(loadConfigFile().embeddingApiKey) || Boolean(process.env.PREFLIGHT_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY)
+    ),
   };
 }
