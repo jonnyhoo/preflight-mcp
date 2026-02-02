@@ -18,11 +18,11 @@ export const SCHEMA_VERSION = '1.0.0';
 /** Collection name prefix for memory system */
 export const MEMORY_COLLECTION_PREFIX = 'preflight_mem';
 
-/** Similarity thresholds per layer */
+/** Similarity thresholds per layer (lowered for better recall with short queries) */
 export const SIMILARITY_THRESHOLDS = {
-  episodic: 0.65,
-  semantic: 0.70,
-  procedural: 0.60,
+  episodic: 0.45,
+  semantic: 0.50,
+  procedural: 0.40,
 } as const;
 
 /** Confidence thresholds for write gates */

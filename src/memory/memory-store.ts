@@ -238,7 +238,11 @@ export class MemoryStore {
         metadata: { 
           layer, 
           schemaVersion: SCHEMA_VERSION,
-          'hnsw:space': 'cosine',  // Use cosine distance for semantic similarity
+        },
+        configuration: {
+          hnsw_configuration: {
+            space: 'cosine',  // Use cosine distance for semantic similarity
+          },
         },
       }
     );
@@ -589,6 +593,7 @@ export class MemoryStore {
     if (result.coldStart) {
       result.suggestion = 'No memories found. Consider adding some memories first.';
     }
+
 
     return result;
   }
