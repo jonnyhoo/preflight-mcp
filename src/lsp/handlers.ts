@@ -98,7 +98,8 @@ export async function getDiagnostics(request: LspRequest, manager?: LspManager):
   try {
     await client.waitForIndexing(30000);
     await client.openFile(filePath);
-    await new Promise((r) => setTimeout(r, 500)); // Extra wait for diagnostics to be published
+    await client.syncFile(filePath); // Trigger didChange to get diagnostics from tsserver
+    await new Promise((r) => setTimeout(r, 1000)); // Wait for diagnostics to be published
     const diagnostics = client.getDiagnostics(filePath).map((d) => ({
       severity: diagnosticSeverityToString(d.severity), message: d.message,
       location: { filePath, ...fromRange(d.range) }, source: d.source, code: d.code as string | number | undefined,

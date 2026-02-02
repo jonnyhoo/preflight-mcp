@@ -240,7 +240,7 @@ export class MemoryStore {
           schemaVersion: SCHEMA_VERSION,
         },
         configuration: {
-          hnsw_configuration: {
+          hnsw: {
             space: 'cosine',  // Use cosine distance for semantic similarity
           },
         },

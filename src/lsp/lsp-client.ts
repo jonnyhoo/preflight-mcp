@@ -175,8 +175,18 @@ export class LspClient {
 
   get serverCapabilities(): ServerCapabilities | null { return this.capabilities; }
   get isInitialized(): boolean { return this.initialized; }
-  get language(): SupportedLanguage { return this.config.language; }
-  getDiagnostics(filePath: string): Diagnostic[] { return this.diagnosticsCache.get(pathToUri(filePath)) ?? []; }
+get language(): SupportedLanguage { return this.config.language; }
+  getDiagnostics(filePath: string): Diagnostic[] {
+    const targetUri = pathToUri(filePath).toLowerCase();
+    // Find matching URI (case-insensitive, handle encoded colons)
+    for (const [uri, diags] of this.diagnosticsCache) {
+      const normalizedUri = decodeURIComponent(uri).toLowerCase();
+      if (normalizedUri === targetUri || decodeURIComponent(targetUri) === normalizedUri) {
+        return diags;
+      }
+    }
+    return [];
+  }
   getAllDiagnostics(): Map<string, Diagnostic[]> { return new Map(this.diagnosticsCache); }
 
   private getClientCapabilities() {

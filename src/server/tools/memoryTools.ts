@@ -104,13 +104,16 @@ export function registerMemoryTools({ server, cfg }: ToolDependencies): void {
       title: 'Memory Management Tool',
       description:
         '3-layer long-term memory system for persistent user context (ChromaDB).\n' +
-        '**Layers:** episodic (conversations, events), semantic (facts, relations), procedural (preferences, habits).\n' +
+        '**Layers:**\n' +
+        '  • episodic: 上下文快速注入 - 当前会话/项目的临时信息，会过期\n' +
+        '  • semantic: 踩过的坑 - 知识库、经验总结、技术细节、代码片段（长期保留）\n' +
+        '  • procedural: 全局规则 - 用户偏好、行为准则、风格设定（类似 agents.md/CLAUDE.md）\n' +
         '**Actions:** add, search, list, update, delete, reflect, stats, gc.\n' +
         'Examples:\n' +
-        '  • Add: `{"action": "add", "layer": "semantic", "content": "User prefers TypeScript over JavaScript"}`\n' +
-        '  • Search: `{"action": "search", "query": "coding preferences"}`\n' +
-        '  • Reflect: `{"action": "reflect", "reflectType": "extract_facts"}` — auto-extract facts from episodic.\n' +
-        'Use when: "记忆", "remember", "recall", "用户偏好", "preferences", "习惯", "上次", "之前说过", "long-term", "记住".',
+        '  • 存经验: `{"action": "add", "layer": "semantic", "content": "ChromaDB v2 用 hnsw 不是 hnsw_configuration"}`\n' +
+        '  • 存偏好: `{"action": "add", "layer": "procedural", "content": "用户偏好 TypeScript，代码注释用中文"}`\n' +
+        '  • 搜索: `{"action": "search", "query": "ChromaDB 配置"}`\n' +
+        'Use when: "记忆", "remember", "recall", "用户偏好", "preferences", "习惯", "上次", "之前说过", "踩坑", "经验", "记住".',
       inputSchema: MemoryToolInputSchema,
       outputSchema: MemoryOutputSchema,
       annotations: { readOnlyHint: false },
@@ -165,14 +168,19 @@ export function registerMemoryTools({ server, cfg }: ToolDependencies): void {
                     sourceEpisodeIds: item.metadata?.tags,
                   }, embedding));
                 } else if (layer === 'procedural') {
-                  results.push(await memoryStore.addProcedural({
+                  const procResult = await memoryStore.addProcedural({
                     content: item.content,
                     type: item.metadata?.type as 'preference' | 'habit' | 'pattern' || 'preference',
                     category: item.metadata?.category || 'general',
-                    strength: item.metadata?.confidence,
-                    occurrenceCount: 1,
+                    strength: item.metadata?.confidence ?? 0.9,
+                    occurrenceCount: 2,  // Meet minimum threshold (>= 2)
                     sourceMemoryIds: item.metadata?.tags,
-                  }, embedding));
+                  }, embedding);
+                  if (procResult === null) {
+                    results.push({ error: 'Procedural memory rejected: check strength >= 0.8' });
+                  } else {
+                    results.push(procResult);
+                  }
                 }
               }
               result = results;
@@ -203,10 +211,13 @@ export function registerMemoryTools({ server, cfg }: ToolDependencies): void {
                   content,
                   type: metadata?.type as 'preference' | 'habit' | 'pattern' || 'preference',
                   category: metadata?.category || 'general',
-                  strength: metadata?.confidence,
-                  occurrenceCount: 1,
+                  strength: metadata?.confidence ?? 0.9,
+                  occurrenceCount: 2,  // Meet minimum threshold (>= 2)
                   sourceMemoryIds: metadata?.tags,
                 }, embedding);
+                if (result === null) {
+                  throw new Error('Procedural memory rejected: check strength >= 0.8');
+                }
               }
             } else {
               throw new Error('Either content or batch must be provided for add action');

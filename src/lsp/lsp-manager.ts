@@ -27,7 +27,7 @@ const DEFAULT_SERVERS: Record<SupportedLanguage, LspServerConfig> = {
   python: { language: 'python', command: 'pyright-langserver', args: ['--stdio'], extensions: ['.py', '.pyi'], timeoutMs: 30000, idleTimeoutMs: 300000 },
   go: { language: 'go', command: 'gopls', args: ['serve'], extensions: ['.go'], timeoutMs: 30000, idleTimeoutMs: 300000 },
   rust: { language: 'rust', command: 'rust-analyzer', args: [], extensions: ['.rs'], timeoutMs: 30000, idleTimeoutMs: 300000 },
-  typescript: { language: 'typescript', command: 'node', args: ['node_modules/typescript-language-server/lib/cli.mjs', '--stdio'], extensions: ['.ts', '.tsx', '.js', '.jsx'], timeoutMs: 30000, idleTimeoutMs: 300000 },
+  typescript: { language: 'typescript', command: 'typescript-language-server', args: ['--stdio'], extensions: ['.ts', '.tsx', '.js', '.jsx'], timeoutMs: 30000, idleTimeoutMs: 300000 },
 };
 const DEFAULT_CONFIG: LspManagerConfig = { maxConcurrency: 6, defaultTimeoutMs: 30000, idleTimeoutMs: 300000, debug: false, servers: DEFAULT_SERVERS };
 
