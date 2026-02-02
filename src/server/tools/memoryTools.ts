@@ -88,6 +88,14 @@ const MemoryToolInputSchema = z.object({
   order: z.enum(['asc', 'desc']).optional(),
 });
 
+const MemoryOutputSchema = z.object({
+  action: z.string(),
+  result: z.unknown(),
+});
+
+type MemoryOutput = z.infer<typeof MemoryOutputSchema>;
+
+
 export function registerMemoryTools({ server, cfg }: ToolDependencies): void {
   server.registerTool(
     'preflight_memory',
@@ -103,9 +111,10 @@ export function registerMemoryTools({ server, cfg }: ToolDependencies): void {
         '  • Reflect: `{"action": "reflect", "reflectType": "extract_facts"}` — auto-extract facts from episodic.\n' +
         'Use when: "记忆", "remember", "recall", "用户偏好", "preferences", "习惯", "上次", "之前说过", "long-term", "记住".',
       inputSchema: MemoryToolInputSchema,
+      outputSchema: MemoryOutputSchema,
       annotations: { readOnlyHint: false },
     },
-    async (args) => {
+    async (args): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: MemoryOutput }> => {
       const { action, ...rest } = args;
       let memoryStore: MemoryStore | null = null;
 

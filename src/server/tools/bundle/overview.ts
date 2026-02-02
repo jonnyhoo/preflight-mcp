@@ -13,6 +13,17 @@ import { wrapPreflightError } from '../../../mcp/errorKinds.js';
 import { BundleNotFoundError } from '../../../errors.js';
 import { readManifest } from '../../../bundle/manifest.js';
 
+
+const GetOverviewOutputSchema = z.object({
+  bundleId: z.string(),
+  overview: z.string().nullable().describe('OVERVIEW.md content'),
+  startHere: z.string().nullable().describe('START_HERE.md content'),
+  agents: z.string().nullable().describe('AGENTS.md content'),
+  sections: z.array(z.string()).describe('List of available sections'),
+});
+
+type GetOverviewOutput = z.infer<typeof GetOverviewOutputSchema>;
+
 // ==========================================================================
 // preflight_get_overview
 // ==========================================================================
@@ -35,16 +46,10 @@ export function registerGetOverviewTool({ server, cfg }: ToolDependencies, coreO
       inputSchema: {
         bundleId: z.string().describe('Bundle ID to get overview for.'),
       },
-      outputSchema: {
-        bundleId: z.string(),
-        overview: z.string().nullable().describe('OVERVIEW.md content'),
-        startHere: z.string().nullable().describe('START_HERE.md content'),
-        agents: z.string().nullable().describe('AGENTS.md content'),
-        sections: z.array(z.string()).describe('List of available sections'),
-      },
+      outputSchema: GetOverviewOutputSchema,
       annotations: { readOnlyHint: true },
     },
-    async (args) => {
+    async (args): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: GetOverviewOutput }> => {
       try {
         const storageDir = await findBundleStorageDir(cfg.storageDirs, args.bundleId);
         if (!storageDir) {
@@ -118,7 +123,7 @@ export function registerGetOverviewTool({ server, cfg }: ToolDependencies, coreO
           textParts.push('- Use `preflight_read_file` to read specific files');
         }
 
-        const out = { bundleId: args.bundleId, overview, startHere, agents, sections };
+        const out: GetOverviewOutput = { bundleId: args.bundleId, overview, startHere, agents, sections };
         return {
           content: [{ type: 'text', text: textParts.join('\n') }],
           structuredContent: out,

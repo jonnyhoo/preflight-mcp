@@ -5,6 +5,18 @@ import * as z from 'zod';
 import type { ToolDependencies } from './types.js';
 import { CheckInputSchema, checkToolDescription, createCheckHandler } from '../../tools/check.js';
 
+
+const CheckOutputSchema = z.object({
+  success: z.boolean(),
+  result: z.string().optional(),
+  error: z.string().optional(),
+  totalIssues: z.number().optional(),
+  issuesByCheck: z.record(z.string(), z.number()).optional(),
+  issuesBySeverity: z.record(z.string(), z.number()).optional(),
+});
+
+type CheckOutput = z.infer<typeof CheckOutputSchema>;
+
 /**
  * Register unified code check tool.
  */
@@ -17,18 +29,10 @@ export function registerCheckTools({ server }: ToolDependencies): void {
       title: 'Code quality checks',
       description: checkToolDescription,
       inputSchema: CheckInputSchema,
-      outputSchema: {
-        success: z.boolean(),
-        result: z.string().optional(),
-        error: z.string().optional(),
-        // Statistics fields (added for LLM-friendly output)
-        totalIssues: z.number().optional(),
-        issuesByCheck: z.record(z.string(), z.number()).optional(),
-        issuesBySeverity: z.record(z.string(), z.number()).optional(),
-      },
+      outputSchema: CheckOutputSchema,
       annotations: { readOnlyHint: true },
     },
-    async (args) => {
+    async (args): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: CheckOutput }> => {
       const result = await checkHandler(args);
       const text = result.success ? result.result ?? 'OK' : `Error: ${result.error}`;
       return {

@@ -13,6 +13,26 @@ import {
 } from '../../../bundle/service.js';
 import { readManifest } from '../../../bundle/manifest.js';
 
+
+const ListBundlesOutputSchema = z.object({
+  bundles: z.array(
+    z.object({
+      bundleId: z.string(),
+      displayName: z.string(),
+      repos: z.array(z.string()),
+      tags: z.array(z.string()),
+    })
+  ),
+  truncation: z.object({
+    truncated: z.boolean(),
+    nextCursor: z.string().optional(),
+    totalCount: z.number().optional(),
+    returnedCount: z.number().optional(),
+  }).optional(),
+});
+
+type ListBundlesOutput = z.infer<typeof ListBundlesOutputSchema>;
+
 // ==========================================================================
 // preflight_list_bundles
 // ==========================================================================
@@ -31,25 +51,10 @@ export function registerListBundlesTool({ server, cfg }: ToolDependencies, coreO
         'List available bundles with IDs, repos, and tags.\n' +
         'Use when: "show bundles", "list repos", "查看bundle", "列出仓库".',
       inputSchema: ListBundlesInputSchema,
-      outputSchema: {
-        bundles: z.array(
-          z.object({
-            bundleId: z.string(),
-            displayName: z.string(),
-            repos: z.array(z.string()),
-            tags: z.array(z.string()),
-          })
-        ),
-        truncation: z.object({
-          truncated: z.boolean(),
-          nextCursor: z.string().optional(),
-          totalCount: z.number().optional(),
-          returnedCount: z.number().optional(),
-        }).optional(),
-      },
+      outputSchema: ListBundlesOutputSchema,
       annotations: { readOnlyHint: true },
     },
-    async (args) => {
+    async (args): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: ListBundlesOutput }> => {
       const effectiveDir = await getEffectiveStorageDir(cfg);
       const allIds = await listBundles(effectiveDir);
       
@@ -122,7 +127,7 @@ export function registerListBundlesTool({ server, cfg }: ToolDependencies, coreO
           }
         : { truncated: false, returnedCount: filtered.length, totalCount: allIds.length };
 
-      const out: Record<string, unknown> = { bundles: filtered, truncation };
+      const out: ListBundlesOutput = { bundles: filtered, truncation };
 
       const lines: string[] = [];
       lines.push(`## Bundles (${filtered.length}${hasMore ? '+' : ''})`);

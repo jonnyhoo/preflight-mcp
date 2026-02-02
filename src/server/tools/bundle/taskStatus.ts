@@ -10,6 +10,43 @@ import { checkInProgressLock, computeCreateInputFingerprint } from '../../../bun
 import { getProgressTracker, type TaskProgress } from '../../../jobs/progressTracker.js';
 import { wrapPreflightError } from '../../../mcp/errorKinds.js';
 
+
+const TaskStatusOutputSchema = z.object({
+  found: z.boolean(),
+  task: z.object({
+    taskId: z.string(),
+    fingerprint: z.string(),
+    phase: z.string(),
+    progress: z.number(),
+    total: z.number().optional(),
+    message: z.string(),
+    startedAt: z.string(),
+    updatedAt: z.string(),
+    repos: z.array(z.string()),
+    bundleId: z.string().optional(),
+    error: z.string().optional(),
+  }).optional(),
+  inProgressLock: z.object({
+    bundleId: z.string(),
+    status: z.string(),
+    startedAt: z.string().optional(),
+    taskId: z.string().optional(),
+    repos: z.array(z.string()).optional(),
+    elapsedSeconds: z.number().optional(),
+  }).optional(),
+  activeTasks: z.array(z.object({
+    taskId: z.string(),
+    fingerprint: z.string(),
+    phase: z.string(),
+    progress: z.number(),
+    message: z.string(),
+    repos: z.array(z.string()),
+    startedAt: z.string(),
+  })).optional(),
+});
+
+type TaskStatusOutput = z.infer<typeof TaskStatusOutputSchema>;
+
 // ==========================================================================
 // preflight_get_task_status
 // ==========================================================================
@@ -26,57 +63,13 @@ export function registerGetTaskStatusTool({ server, cfg }: ToolDependencies, cor
       title: 'Get task status',
       description: 'Check status of bundle creation tasks (especially in-progress ones). Use when: "check bundle creation progress", "what is the status", "查看任务状态", "下载进度". Can query by taskId (from error), fingerprint, or repos.',
       inputSchema: GetTaskStatusInputSchema,
-      outputSchema: {
-        found: z.boolean(),
-        task: z.object({
-          taskId: z.string(),
-          fingerprint: z.string(),
-          phase: z.string(),
-          progress: z.number(),
-          total: z.number().optional(),
-          message: z.string(),
-          startedAt: z.string(),
-          updatedAt: z.string(),
-          repos: z.array(z.string()),
-          bundleId: z.string().optional(),
-          error: z.string().optional(),
-        }).optional(),
-        inProgressLock: z.object({
-          bundleId: z.string(),
-          status: z.string(),
-          startedAt: z.string().optional(),
-          taskId: z.string().optional(),
-          repos: z.array(z.string()).optional(),
-          elapsedSeconds: z.number().optional(),
-        }).optional(),
-        activeTasks: z.array(z.object({
-          taskId: z.string(),
-          fingerprint: z.string(),
-          phase: z.string(),
-          progress: z.number(),
-          message: z.string(),
-          repos: z.array(z.string()),
-          startedAt: z.string(),
-        })).optional(),
-      },
+      outputSchema: TaskStatusOutputSchema,
       annotations: { readOnlyHint: true },
     },
-    async (args) => {
+    async (args): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: TaskStatusOutput }> => {
       try {
         const tracker = getProgressTracker();
-        let result: {
-          found: boolean;
-          task?: TaskProgress;
-          inProgressLock?: {
-            bundleId: string;
-            status: string;
-            startedAt?: string;
-            taskId?: string;
-            repos?: string[];
-            elapsedSeconds?: number;
-          };
-          activeTasks?: TaskProgress[];
-        } = { found: false };
+        let result: TaskStatusOutput = { found: false };
 
         let fingerprint = args.fingerprint;
         if (!fingerprint && args.repos?.length) {

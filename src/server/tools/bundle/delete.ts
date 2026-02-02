@@ -15,6 +15,23 @@ import { readManifest } from '../../../bundle/manifest.js';
 import { wrapPreflightError } from '../../../mcp/errorKinds.js';
 import { BundleNotFoundError } from '../../../errors.js';
 
+
+const DeleteBundleOutputSchema = z.object({
+  dryRun: z.boolean(),
+  deleted: z.boolean(),
+  bundleId: z.string(),
+  displayName: z.string().optional(),
+  repos: z.array(z.string()).optional(),
+  message: z.string().optional(),
+  nextAction: z.object({
+    toolName: z.string(),
+    paramsTemplate: z.record(z.string(), z.unknown()),
+    why: z.string(),
+  }).optional(),
+});
+
+type DeleteBundleOutput = z.infer<typeof DeleteBundleOutputSchema>;
+
 // ==========================================================================
 // preflight_delete_bundle
 // ==========================================================================
@@ -33,22 +50,10 @@ export function registerDeleteBundleTool({ server, cfg }: ToolDependencies, core
         'Delete a bundle. Default: dryRun=true (preview). To delete: dryRun=false, confirm=bundleId.\n' +
         'Use when: "delete bundle", "删除bundle".',
       inputSchema: DeleteBundleInputSchema,
-      outputSchema: {
-        dryRun: z.boolean(),
-        deleted: z.boolean(),
-        bundleId: z.string(),
-        displayName: z.string().optional(),
-        repos: z.array(z.string()).optional(),
-        message: z.string().optional(),
-        nextAction: z.object({
-          toolName: z.string(),
-          paramsTemplate: z.record(z.string(), z.unknown()),
-          why: z.string(),
-        }).optional(),
-      },
+      outputSchema: DeleteBundleOutputSchema,
       annotations: { destructiveHint: true },
     },
-    async (args) => {
+    async (args): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: DeleteBundleOutput }> => {
       try {
         const dryRun = args.dryRun ?? true;
         
@@ -69,7 +74,7 @@ export function registerDeleteBundleTool({ server, cfg }: ToolDependencies, core
         }
         
         if (dryRun) {
-          const out = {
+          const out: DeleteBundleOutput = {
             dryRun: true,
             deleted: false,
             bundleId: args.bundleId,
@@ -94,7 +99,7 @@ export function registerDeleteBundleTool({ server, cfg }: ToolDependencies, core
         }
         
         if (!args.confirm || args.confirm !== args.bundleId) {
-          const out = {
+          const out: DeleteBundleOutput = {
             dryRun: false,
             deleted: false,
             bundleId: args.bundleId,

@@ -14,6 +14,60 @@ import { toBundleFileUri } from '../../../mcp/uris.js';
 import { wrapPreflightError } from '../../../mcp/errorKinds.js';
 import { getConfigWarnings } from '../../../config.js';
 
+
+const CreateBundleOutputSchema = z.object({
+  bundleId: z.string().optional(),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+  resources: z.object({
+    startHere: z.string().optional(),
+    agents: z.string().optional(),
+    overview: z.string().optional(),
+    manifest: z.string().optional(),
+    documents: z.array(z.string()).optional(),
+  }).optional(),
+  repos: z.array(
+    z.object({
+      kind: z.enum(['github', 'local', 'web', 'pdf']),
+      id: z.string(),
+      source: z.enum(['git', 'archive', 'local', 'crawl', 'download']).optional(),
+      headSha: z.string().optional(),
+      notes: z.array(z.string()).optional(),
+      baseUrl: z.string().optional(),
+      pageCount: z.number().optional(),
+      usedLlmsTxt: z.boolean().optional(),
+      pdfUrl: z.string().optional(),
+      localPath: z.string().optional(),
+      fileSize: z.number().optional(),
+    })
+  ).optional(),
+  warnings: z.array(z.string()).optional(),
+  status: z.enum(['in-progress', 'complete']).optional(),
+  message: z.string().optional(),
+  taskId: z.string().optional(),
+  fingerprint: z.string().optional(),
+  requestedRepos: z.array(z.string()).optional(),
+  startedAt: z.string().optional(),
+  elapsedSeconds: z.number().optional(),
+  currentPhase: z.string().optional(),
+  currentProgress: z.number().optional(),
+  currentMessage: z.string().optional(),
+  batchResult: z.boolean().optional().describe('True when batch PDF mode was used'),
+  bundleCount: z.number().optional().describe('Number of bundles created in batch'),
+  failedCount: z.number().optional().describe('Number of failed PDFs in batch'),
+  bundles: z.array(z.object({
+    bundleId: z.string(),
+    source: z.string().optional(),
+  })).optional().describe('Created bundles in batch mode'),
+  failed: z.array(z.object({
+    source: z.string(),
+    error: z.string(),
+  })).optional().describe('Failed PDFs in batch mode'),
+  totalTimeMs: z.number().optional().describe('Total batch processing time'),
+});
+
+type CreateBundleOutput = z.infer<typeof CreateBundleOutputSchema>;
+
 // ==========================================================================
 // preflight_create_bundle
 // ==========================================================================
@@ -37,61 +91,10 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
         'PDF parsing: MinerU (default) | vlmParser=true (VLM) | ruleBasedParser=true (no API).\n' +
         'Use when: "analyze repo", "index project", "分析项目", "批量解析PDF", "爬取文档", "索引文档".',
       inputSchema: CreateBundleInputSchema,
-      outputSchema: {
-        // Single bundle creation fields
-        bundleId: z.string().optional(),
-        createdAt: z.string().optional(),
-        updatedAt: z.string().optional(),
-        resources: z.object({
-          startHere: z.string().optional(),
-          agents: z.string().optional(),
-          overview: z.string().optional(),
-          manifest: z.string().optional(),
-          documents: z.array(z.string()).optional(),
-        }).optional(),
-        repos: z.array(
-          z.object({
-            kind: z.enum(['github', 'local', 'web', 'pdf']),
-            id: z.string(),
-            source: z.enum(['git', 'archive', 'local', 'crawl', 'download']).optional(),
-            headSha: z.string().optional(),
-            notes: z.array(z.string()).optional(),
-            baseUrl: z.string().optional(),
-            pageCount: z.number().optional(),
-            usedLlmsTxt: z.boolean().optional(),
-            pdfUrl: z.string().optional(),
-            localPath: z.string().optional(),
-            fileSize: z.number().optional(),
-          })
-        ).optional(),
-        warnings: z.array(z.string()).optional(),
-        status: z.enum(['in-progress', 'complete']).optional(),
-        message: z.string().optional(),
-        taskId: z.string().optional(),
-        fingerprint: z.string().optional(),
-        requestedRepos: z.array(z.string()).optional(),
-        startedAt: z.string().optional(),
-        elapsedSeconds: z.number().optional(),
-        currentPhase: z.string().optional(),
-        currentProgress: z.number().optional(),
-        currentMessage: z.string().optional(),
-        // Batch PDF creation fields
-        batchResult: z.boolean().optional().describe('True when batch PDF mode was used'),
-        bundleCount: z.number().optional().describe('Number of bundles created in batch'),
-        failedCount: z.number().optional().describe('Number of failed PDFs in batch'),
-        bundles: z.array(z.object({
-          bundleId: z.string(),
-          source: z.string().optional(),
-        })).optional().describe('Created bundles in batch mode'),
-        failed: z.array(z.object({
-          source: z.string(),
-          error: z.string(),
-        })).optional().describe('Failed PDFs in batch mode'),
-        totalTimeMs: z.number().optional().describe('Total batch processing time'),
-      },
+      outputSchema: CreateBundleOutputSchema,
       annotations: { openWorldHint: true },
     },
-    async (args) => {
+    async (args): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: CreateBundleOutput }> => {
       try {
         // Check for config warnings that LLM should know about
         const configWarnings = getConfigWarnings();
@@ -241,16 +244,18 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
             }
           }
           
+          const out: CreateBundleOutput = {
+            bundleId: docResult.bundleId,
+            resources,
+            message: docResult.created
+              ? `Document bundle created: ${docResult.bundleId}`
+              : `Document bundle already exists: ${docResult.bundleId}`,
+            warnings: configWarnings.length > 0 ? configWarnings : undefined,
+          };
+
           return {
             content: [{ type: 'text', text: textResponse }],
-            structuredContent: {
-              bundleId: docResult.bundleId,
-              created: docResult.created,
-              parsed: docResult.parsed,
-              skipped: docResult.skipped,
-              errors: docResult.errors,
-              resources,
-            },
+            structuredContent: out,
           };
         }
         
@@ -282,8 +287,13 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
 
         server.sendResourceListChanged();
 
-        const out = {
+        const repos = summary.repos.filter(
+          (repo): repo is typeof summary.repos[number] & { kind: 'github' | 'local' | 'web' | 'pdf' } =>
+            repo.kind !== 'markdown'
+        );
+        const out: CreateBundleOutput = {
           ...summary,
+          repos,
           resources,
         };
 
@@ -359,7 +369,7 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
           const tracker = getProgressTracker();
           const task = err.taskId ? tracker.getTask(err.taskId) : undefined;
           
-          const out = {
+          const out: CreateBundleOutput = {
             status: 'in-progress' as const,
             message: `Bundle creation already in progress. Use preflight_get_task_status to check progress.`,
             taskId: err.taskId,

@@ -15,6 +15,104 @@ import { wrapPreflightError } from '../../../mcp/errorKinds.js';
 import { BundleNotFoundError } from '../../../errors.js';
 import { extractOutlineWasm, type SymbolOutline } from '../../../ast/index.js';
 
+
+const ReadFileOutputSchema = z.object({
+  bundleId: z.string(),
+  mode: z.enum(['light', 'full', 'core']).optional(),
+  file: z.string().optional(),
+  content: z.string().optional(),
+  files: z.record(z.string(), z.string().nullable()).optional(),
+  sections: z.array(z.string()).optional(),
+  lineInfo: z.object({
+    totalLines: z.number(),
+    ranges: z.array(z.object({ start: z.number(), end: z.number() })),
+  }).optional(),
+  outline: z.array(z.object({
+    kind: z.enum(['function', 'class', 'method', 'interface', 'type', 'enum', 'variable']),
+    name: z.string(),
+    signature: z.string().optional(),
+    range: z.object({ startLine: z.number(), endLine: z.number() }),
+    exported: z.boolean(),
+    children: z.array(z.any()).optional(),
+  })).optional(),
+  language: z.string().optional(),
+  coreFiles: z.array(z.object({
+    path: z.string(),
+    reason: z.string(),
+    outline: z.array(z.any()).optional(),
+    content: z.string().optional(),
+    language: z.string().optional(),
+    charCount: z.number(),
+  })).optional(),
+  coreStats: z.object({
+    totalFiles: z.number(),
+    totalChars: z.number(),
+    truncatedFiles: z.number(),
+  }).optional(),
+});
+
+type ReadFileOutput = z.infer<typeof ReadFileOutputSchema>;
+
+
+type OutlineKind = 'function' | 'class' | 'method' | 'interface' | 'type' | 'enum' | 'variable';
+
+const outlineKinds = new Set<OutlineKind>([
+  'function',
+  'class',
+  'method',
+  'interface',
+  'type',
+  'enum',
+  'variable',
+]);
+
+function normalizeOutline(symbols: SymbolOutline[]): Array<{
+  kind: OutlineKind;
+  name: string;
+  signature?: string;
+  range: { startLine: number; endLine: number };
+  exported: boolean;
+  children?: Array<{
+    kind: OutlineKind;
+    name: string;
+    signature?: string;
+    range: { startLine: number; endLine: number };
+    exported: boolean;
+    children?: any[];
+  }>;
+}> {
+  const normalized: Array<{
+    kind: OutlineKind;
+    name: string;
+    signature?: string;
+    range: { startLine: number; endLine: number };
+    exported: boolean;
+    children?: any[];
+  }> = [];
+
+  for (const symbol of symbols) {
+    if (!outlineKinds.has(symbol.kind as OutlineKind)) {
+      if (symbol.children && symbol.children.length > 0) {
+        normalized.push(...normalizeOutline(symbol.children));
+      }
+      continue;
+    }
+
+    const children = symbol.children ? normalizeOutline(symbol.children) : undefined;
+
+    normalized.push({
+      kind: symbol.kind as OutlineKind,
+      name: symbol.name,
+      signature: symbol.signature,
+      range: symbol.range,
+      exported: symbol.exported,
+      children: children && children.length > 0 ? children : undefined,
+    });
+  }
+
+  return normalized;
+}
+
 // ==========================================================================
 // preflight_read_file
 // ==========================================================================
@@ -66,43 +164,10 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
           'Requires outline-supported file types (.ts, .tsx, .js, .jsx, .py).'
         ),
       },
-      outputSchema: {
-        bundleId: z.string(),
-        mode: z.enum(['light', 'full', 'core']).optional(),
-        file: z.string().optional(),
-        content: z.string().optional(),
-        files: z.record(z.string(), z.string().nullable()).optional(),
-        sections: z.array(z.string()).optional(),
-        lineInfo: z.object({
-          totalLines: z.number(),
-          ranges: z.array(z.object({ start: z.number(), end: z.number() })),
-        }).optional(),
-        outline: z.array(z.object({
-          kind: z.enum(['function', 'class', 'method', 'interface', 'type', 'enum', 'variable']),
-          name: z.string(),
-          signature: z.string().optional(),
-          range: z.object({ startLine: z.number(), endLine: z.number() }),
-          exported: z.boolean(),
-          children: z.array(z.any()).optional(),
-        })).optional(),
-        language: z.string().optional(),
-        coreFiles: z.array(z.object({
-          path: z.string(),
-          reason: z.string(),
-          outline: z.array(z.any()).optional(),
-          content: z.string().optional(),
-          language: z.string().optional(),
-          charCount: z.number(),
-        })).optional(),
-        coreStats: z.object({
-          totalFiles: z.number(),
-          totalChars: z.number(),
-          truncatedFiles: z.number(),
-        }).optional(),
-      },
+      outputSchema: ReadFileOutputSchema,
       annotations: { readOnlyHint: true },
     },
-    async (args) => {
+    async (args): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: ReadFileOutput }> => {
       try {
         const storageDir = await findBundleStorageDir(cfg.storageDirs, args.bundleId);
         if (!storageDir) {
@@ -172,8 +237,6 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
                 structuredContent: {
                   bundleId: args.bundleId,
                   file: args.file,
-                  outline: null,
-                  language: null,
                 },
               };
             }
@@ -205,7 +268,7 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
               structuredContent: {
                 bundleId: args.bundleId,
                 file: args.file,
-                outline: outlineResult.outline,
+                outline: normalizeOutline(outlineResult.outline),
                 language: outlineResult.language,
               },
             };
@@ -218,7 +281,7 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
             if (!outlineResult) {
               return {
                 content: [{ type: 'text', text: `[${args.file}] Symbol lookup not supported for this file type. Supported: .ts, .tsx, .js, .jsx, .py` }],
-                structuredContent: { bundleId: args.bundleId, file: args.file, error: 'unsupported_file_type' },
+                structuredContent: { bundleId: args.bundleId, file: args.file },
               };
             }
             
@@ -253,7 +316,7 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
               
               return {
                 content: [{ type: 'text', text: `[${args.file}] Symbol "${args.symbol}" not found.\n\nAvailable symbols: ${available}` }],
-                structuredContent: { bundleId: args.bundleId, file: args.file, error: 'symbol_not_found', available: outlineResult.outline.map(s => s.name) },
+                structuredContent: { bundleId: args.bundleId, file: args.file },
               };
             }
             
@@ -270,7 +333,6 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
               structuredContent: {
                 bundleId: args.bundleId,
                 file: args.file,
-                symbol: foundSymbol,
                 content,
                 lineInfo,
               },
@@ -293,7 +355,7 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
 
           const { content, lineInfo } = formatContent(rawContent, args.withLineNumbers ?? false, parsedRanges);
 
-          const out = {
+          const out: ReadFileOutput = {
             bundleId: args.bundleId,
             file: args.file,
             content,
@@ -419,7 +481,7 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
             if (includeOutline) {
               const outlineResult = await extractOutlineWasm(actualPath, fileContent);
               if (outlineResult) {
-                result.outline = outlineResult.outline;
+                result.outline = normalizeOutline(outlineResult.outline);
                 result.language = outlineResult.language;
               }
             }
@@ -465,7 +527,7 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
             textParts.push('');
           }
           
-          const out = {
+          const out: ReadFileOutput = {
             bundleId: args.bundleId,
             mode: 'core' as const,
             coreFiles: coreFilesResult,
@@ -550,7 +612,7 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
             }
           }
           
-          const out = { bundleId: args.bundleId, mode, files, sections, isDocumentBundle: true };
+          const out: ReadFileOutput = { bundleId: args.bundleId, mode, files, sections };
           return {
             content: [{ type: 'text', text: textParts.join('\n') || '(no files found)' }],
             structuredContent: out,
@@ -622,7 +684,7 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
           textParts.push('💡 ⭐ For core source code: set mode="core"');
         }
 
-        const out = { bundleId: args.bundleId, mode, files, sections };
+        const out: ReadFileOutput = { bundleId: args.bundleId, mode, files, sections };
         return {
           content: [{ type: 'text', text: textParts.join('\n') || '(no files found)' }],
           structuredContent: out,

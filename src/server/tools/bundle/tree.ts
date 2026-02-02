@@ -13,6 +13,47 @@ import { wrapPreflightError } from '../../../mcp/errorKinds.js';
 import { BundleNotFoundError } from '../../../errors.js';
 import { generateRepoTree, formatTreeResult } from '../../../bundle/tree.js';
 
+
+const RepoTreeOutputSchema = z.object({
+  bundleId: z.string(),
+  tree: z.string(),
+  stats: z.object({
+    totalFiles: z.number(),
+    totalDirs: z.number(),
+    byExtension: z.record(z.string(), z.number()),
+    byTopDir: z.record(z.string(), z.number()),
+    byDir: z.record(z.string(), z.number()).optional(),
+  }),
+  entryPointCandidates: z.array(
+    z.object({
+      path: z.string(),
+      type: z.enum(['readme', 'main', 'index', 'cli', 'server', 'app', 'test', 'config']),
+      priority: z.number(),
+    })
+  ),
+  skippedFiles: z.array(
+    z.object({
+      path: z.string(),
+      reason: z.string(),
+      size: z.number().optional(),
+    })
+  ).optional(),
+  autoFocused: z.object({
+    enabled: z.boolean(),
+    path: z.string().optional(),
+  }).optional(),
+  evidence: z.array(
+    z.object({
+      path: z.string(),
+      range: z.object({ startLine: z.number(), endLine: z.number() }).optional(),
+      uri: z.string().optional(),
+      snippet: z.string().optional(),
+    })
+  ).optional(),
+});
+
+type RepoTreeOutput = z.infer<typeof RepoTreeOutputSchema>;
+
 // ==========================================================================
 // preflight_repo_tree
 // ==========================================================================
@@ -41,46 +82,10 @@ export function registerRepoTreeTool({ server, cfg }: ToolDependencies, coreOnly
         showFileCountPerDir: z.boolean().optional().describe('If true, include file count per directory in stats.byDir.'),
         showSkippedFiles: z.boolean().optional().describe('If true, include list of files that were skipped during indexing (too large, binary, etc.). Helps understand what content is NOT searchable.'),
       },
-      outputSchema: {
-        bundleId: z.string(),
-        tree: z.string(),
-        stats: z.object({
-          totalFiles: z.number(),
-          totalDirs: z.number(),
-          byExtension: z.record(z.string(), z.number()),
-          byTopDir: z.record(z.string(), z.number()),
-          byDir: z.record(z.string(), z.number()).optional(),
-        }),
-        entryPointCandidates: z.array(
-          z.object({
-            path: z.string(),
-            type: z.enum(['readme', 'main', 'index', 'cli', 'server', 'app', 'test', 'config']),
-            priority: z.number(),
-          })
-        ),
-        skippedFiles: z.array(
-          z.object({
-            path: z.string(),
-            reason: z.string(),
-            size: z.number().optional(),
-          })
-        ).optional(),
-        autoFocused: z.object({
-          enabled: z.boolean(),
-          path: z.string().optional(),
-        }).optional(),
-        evidence: z.array(
-          z.object({
-            path: z.string(),
-            range: z.object({ startLine: z.number(), endLine: z.number() }).optional(),
-            uri: z.string().optional(),
-            snippet: z.string().optional(),
-          })
-        ).optional(),
-      },
+      outputSchema: RepoTreeOutputSchema,
       annotations: { readOnlyHint: true },
     },
-    async (args) => {
+    async (args): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: RepoTreeOutput }> => {
       try {
         const storageDir = await findBundleStorageDir(cfg.storageDirs, args.bundleId);
         if (!storageDir) {
@@ -139,7 +144,7 @@ export function registerRepoTreeTool({ server, cfg }: ToolDependencies, coreOnly
           }
         }
 
-        const structuredResult = { ...result, skippedFiles, evidence };
+        const structuredResult: RepoTreeOutput = { ...result, skippedFiles, evidence };
         return {
           content: [{ type: 'text', text: fullTextOutput }],
           structuredContent: structuredResult,

@@ -16,6 +16,40 @@ import { toBundleFileUri } from '../../../mcp/uris.js';
 import { wrapPreflightError } from '../../../mcp/errorKinds.js';
 import { BundleNotFoundError } from '../../../errors.js';
 
+
+const UpdateBundleOutputSchema = z.object({
+  changed: z.boolean(),
+  checkOnly: z.boolean().optional(),
+  updateDetails: z.array(
+    z.object({
+      repoId: z.string(),
+      currentSha: z.string().optional(),
+      remoteSha: z.string().optional(),
+      changed: z.boolean(),
+    })
+  ).optional(),
+  bundleId: z.string(),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+  resources: z.object({
+    startHere: z.string(),
+    agents: z.string(),
+    overview: z.string(),
+    manifest: z.string(),
+  }).optional(),
+  repos: z.array(
+    z.object({
+      kind: z.enum(['github', 'local']),
+      id: z.string(),
+      source: z.enum(['git', 'archive', 'local']).optional(),
+      headSha: z.string().optional(),
+      notes: z.array(z.string()).optional(),
+    })
+  ).optional(),
+});
+
+type UpdateBundleOutput = z.infer<typeof UpdateBundleOutputSchema>;
+
 // ==========================================================================
 // preflight_update_bundle
 // ==========================================================================
@@ -32,39 +66,10 @@ export function registerUpdateBundleTool({ server, cfg }: ToolDependencies, core
       title: 'Update bundle',
       description: 'Refresh/sync a bundle with latest repo changes. Use when: "update bundle", "refresh bundle", "sync bundle", "check for updates", "更新bundle", "同步仓库", "刷新索引". Set checkOnly=true to only check without applying.',
       inputSchema: UpdateBundleInputSchema,
-      outputSchema: {
-        changed: z.boolean(),
-        checkOnly: z.boolean().optional(),
-        updateDetails: z.array(
-          z.object({
-            repoId: z.string(),
-            currentSha: z.string().optional(),
-            remoteSha: z.string().optional(),
-            changed: z.boolean(),
-          })
-        ).optional(),
-        bundleId: z.string(),
-        createdAt: z.string().optional(),
-        updatedAt: z.string().optional(),
-        resources: z.object({
-          startHere: z.string(),
-          agents: z.string(),
-          overview: z.string(),
-          manifest: z.string(),
-        }).optional(),
-        repos: z.array(
-          z.object({
-            kind: z.enum(['github', 'local']),
-            id: z.string(),
-            source: z.enum(['git', 'archive', 'local']).optional(),
-            headSha: z.string().optional(),
-            notes: z.array(z.string()).optional(),
-          })
-        ).optional(),
-      },
+      outputSchema: UpdateBundleOutputSchema,
       annotations: { openWorldHint: true },
     },
-    async (args) => {
+    async (args): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: UpdateBundleOutput }> => {
       try {
         const storageDir = await findBundleStorageDir(cfg.storageDirs, args.bundleId);
         if (!storageDir) {
@@ -73,7 +78,7 @@ export function registerUpdateBundleTool({ server, cfg }: ToolDependencies, core
 
         if (args.checkOnly) {
           const { hasUpdates, details } = await checkForUpdates(cfg, args.bundleId);
-          const out = {
+          const out: UpdateBundleOutput = {
             bundleId: args.bundleId,
             changed: hasUpdates,
             checkOnly: true,
@@ -106,9 +111,22 @@ export function registerUpdateBundleTool({ server, cfg }: ToolDependencies, core
             manifest: toBundleFileUri({ bundleId: summary.bundleId, relativePath: 'manifest.json' }),
           };
 
-          const out = {
+          const repos = summary.repos
+            .filter(
+              (repo): repo is typeof summary.repos[number] & { kind: 'github' | 'local' } =>
+                repo.kind === 'github' || repo.kind === 'local'
+            )
+            .map((repo) => ({
+              ...repo,
+              source: repo.source === 'git' || repo.source === 'archive' || repo.source === 'local'
+                ? repo.source
+                : undefined,
+            }));
+          const { warnings: _warnings, repos: _repos, ...summaryData } = summary;
+          const out: UpdateBundleOutput = {
             changed: args.force ? true : changed,
-            ...summary,
+            ...summaryData,
+            repos,
             resources,
           };
 

@@ -12,6 +12,92 @@ import { getBundlePaths } from '../../bundle/paths.js';
 import { wrapPreflightError } from '../../mcp/errorKinds.js';
 import { checkChromaAvailability, getOrCreateEngine, logger } from './ragCommon.js';
 
+
+const RagQueryOutputSchema = z.object({
+  chromaUrl: z.string().optional().describe('ChromaDB server URL used'),
+  embeddingEndpoint: z.string().optional().describe('Embedding API endpoint used'),
+  indexed: z.boolean().optional(),
+  skipped: z.boolean().optional().describe('Whether indexing was skipped due to duplicate content'),
+  chunksWritten: z.number().optional(),
+  entitiesCount: z.number().optional(),
+  relationsCount: z.number().optional(),
+  indexDurationMs: z.number().optional(),
+  indexErrors: z.array(z.string()).optional(),
+  contentHash: z.string().optional().describe('Source file SHA256 hash'),
+  paperId: z.string().optional().describe('Paper identifier (e.g., arxiv:2601.14287)'),
+  paperVersion: z.string().optional().describe('Paper version (e.g., v1)'),
+  existingChunks: z.number().optional().describe('Number of existing chunks (when skipped)'),
+  deletedChunks: z.number().optional().describe('Number of chunks deleted (when force=true)'),
+  qualityScore: z.number().optional().describe('QA quality score (0-100)'),
+  rejected: z.boolean().optional().describe('Whether indexing was rejected due to low quality'),
+  rejectionReason: z.string().optional().describe('Reason for rejection'),
+  qaSummary: z.object({
+    passed: z.boolean(),
+    parseOk: z.boolean(),
+    chunkOk: z.boolean(),
+    ragOk: z.boolean().optional(),
+    tablesDetected: z.number(),
+    figuresDetected: z.number(),
+    totalChunks: z.number(),
+    orphanChunks: z.number(),
+    ragPassedCount: z.number().optional(),
+    ragTotalCount: z.number().optional(),
+    avgFaithfulness: z.number().optional(),
+    issues: z.array(z.string()),
+    isCodeRepo: z.boolean().optional(),
+    cardScore: z.number().optional(),
+    classCount: z.number().optional(),
+    functionCount: z.number().optional(),
+    hasReadme: z.boolean().optional(),
+    relatedPaperId: z.string().optional(),
+  }).optional().describe('QA summary with parse/chunk/RAG results (PDF) or CARD/Code/Docs (code repo)'),
+  answer: z.string().optional(),
+  sources: z
+    .array(
+      z.object({
+        chunkId: z.string(),
+        content: z.string(),
+        sourceType: z.string(),
+        filePath: z.string().optional(),
+        repoId: z.string().optional(),
+        pageIndex: z.number().optional().describe('Page number (1-indexed) in PDF'),
+        sectionHeading: z.string().optional().describe('Section heading (e.g., "3.2 Method", "Abstract")'),
+        bundleId: z.string().optional().describe('Bundle ID this evidence came from'),
+        paperId: z.string().optional().describe('Paper identifier (e.g., arXiv:2601.02553)'),
+      })
+    )
+    .optional(),
+  relatedEntities: z.array(z.string()).optional(),
+  stats: z
+    .object({
+      chunksRetrieved: z.number(),
+      entitiesFound: z.number().optional(),
+      graphExpansion: z.number().optional(),
+      contextCompletionHops: z.number().optional(),
+      igpStats: z
+        .object({
+          originalCount: z.number(),
+          prunedCount: z.number(),
+          pruningRatio: z.number(),
+          iterations: z.number(),
+          durationMs: z.number(),
+        })
+        .optional(),
+      hierarchicalStats: z
+        .object({
+          l1ByType: z.record(z.string(), z.number()),
+          l1TotalFound: z.number(),
+          l2l3ChunksFound: z.number(),
+          durationMs: z.number(),
+        })
+        .optional(),
+      durationMs: z.number(),
+    })
+    .optional(),
+});
+
+type RagQueryOutput = z.infer<typeof RagQueryOutputSchema>;
+
 // ============================================================================
 // preflight_rag Tool
 // ============================================================================
@@ -48,97 +134,10 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
         useVerifierLlm: z.boolean().optional().describe('Use verifier LLM instead of default LLM for cross-validation. Configure verifierLlm* in config.json. Call twice (once without, once with this flag) and compare answers for reliability.'),
         confirmLargeDocIndex: z.boolean().optional().describe('Confirm indexing for documentation repos with 200+ markdown files. When large doc count detected, indexing pauses and returns file count. Set this to true to proceed.'),
       },
-      outputSchema: {
-        // Config info
-        chromaUrl: z.string().optional().describe('ChromaDB server URL used'),
-        embeddingEndpoint: z.string().optional().describe('Embedding API endpoint used'),
-        // Index result
-        indexed: z.boolean().optional(),
-        skipped: z.boolean().optional().describe('Whether indexing was skipped due to duplicate content'),
-        chunksWritten: z.number().optional(),
-        entitiesCount: z.number().optional(),
-        relationsCount: z.number().optional(),
-        indexDurationMs: z.number().optional(),
-        indexErrors: z.array(z.string()).optional(),
-        // Deduplication info
-        contentHash: z.string().optional().describe('Source file SHA256 hash'),
-        paperId: z.string().optional().describe('Paper identifier (e.g., arxiv:2601.14287)'),
-        paperVersion: z.string().optional().describe('Paper version (e.g., v1)'),
-        existingChunks: z.number().optional().describe('Number of existing chunks (when skipped)'),
-        deletedChunks: z.number().optional().describe('Number of chunks deleted (when force=true)'),
-        // QA info
-        qualityScore: z.number().optional().describe('QA quality score (0-100)'),
-        rejected: z.boolean().optional().describe('Whether indexing was rejected due to low quality'),
-        rejectionReason: z.string().optional().describe('Reason for rejection'),
-        qaSummary: z.object({
-          passed: z.boolean(),
-          parseOk: z.boolean(),
-          chunkOk: z.boolean(),
-          ragOk: z.boolean().optional(),
-          tablesDetected: z.number(),
-          figuresDetected: z.number(),
-          totalChunks: z.number(),
-          orphanChunks: z.number(),
-          ragPassedCount: z.number().optional(),
-          ragTotalCount: z.number().optional(),
-          avgFaithfulness: z.number().optional(),
-          issues: z.array(z.string()),
-          // Code repo specific fields
-          isCodeRepo: z.boolean().optional(),
-          cardScore: z.number().optional(),
-          classCount: z.number().optional(),
-          functionCount: z.number().optional(),
-          hasReadme: z.boolean().optional(),
-          relatedPaperId: z.string().optional(),
-        }).optional().describe('QA summary with parse/chunk/RAG results (PDF) or CARD/Code/Docs (code repo)'),
-        // Query result
-        answer: z.string().optional(),
-        sources: z
-          .array(
-            z.object({
-              chunkId: z.string(),
-              content: z.string(),
-              sourceType: z.string(),
-              filePath: z.string().optional(),
-              repoId: z.string().optional(),
-              pageIndex: z.number().optional().describe('Page number (1-indexed) in PDF'),
-              sectionHeading: z.string().optional().describe('Section heading (e.g., "3.2 Method", "Abstract")'),
-              bundleId: z.string().optional().describe('Bundle ID this evidence came from'),
-              paperId: z.string().optional().describe('Paper identifier (e.g., arXiv:2601.02553)'),
-            })
-          )
-          .optional(),
-        relatedEntities: z.array(z.string()).optional(),
-        stats: z
-          .object({
-            chunksRetrieved: z.number(),
-            entitiesFound: z.number().optional(),
-            graphExpansion: z.number().optional(),
-            contextCompletionHops: z.number().optional(),
-            igpStats: z
-              .object({
-                originalCount: z.number(),
-                prunedCount: z.number(),
-                pruningRatio: z.number(),
-                iterations: z.number(),
-                durationMs: z.number(),
-              })
-              .optional(),
-            hierarchicalStats: z
-              .object({
-                l1ByType: z.record(z.string(), z.number()),
-                l1TotalFound: z.number(),
-                l2l3ChunksFound: z.number(),
-                durationMs: z.number(),
-              })
-              .optional(),
-            durationMs: z.number(),
-          })
-          .optional(),
-      },
+      outputSchema: RagQueryOutputSchema,
       annotations: { openWorldHint: true },
     },
-    async (args) => {
+    async (args): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: RagQueryOutput }> => {
       try {
         const { bundleId, bundleIds, crossBundleMode, index, force, qualityThreshold, question, mode, topK, repoId, expandToParent, expandToSiblings, useVerifierLlm, confirmLargeDocIndex } = args;
 
@@ -346,8 +345,8 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
             return {
               content: [{ type: 'text', text: textResponse }],
               structuredContent: {
-                pendingConfirmation: pc,
-                bundleId,
+                chromaUrl: cfg.chromaUrl,
+                embeddingEndpoint,
               },
             };
           }
@@ -505,7 +504,7 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
         }
 
         // Build structured output
-        const structuredContent: Record<string, unknown> = {
+        const structuredContent: RagQueryOutput = {
           chromaUrl: cfg.chromaUrl,
           embeddingEndpoint,
         };

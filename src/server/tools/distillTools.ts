@@ -8,6 +8,29 @@ import type { ToolDependencies } from './types.js';
 import { generateRepoCard, exportCardForRAG } from '../../distill/repo-card.js';
 import { wrapPreflightError } from '../../mcp/errorKinds.js';
 
+
+const DistillOutputSchema = z.object({
+  card: z.object({
+    cardId: z.string(),
+    name: z.string(),
+    oneLiner: z.string(),
+    problemSolved: z.string(),
+    useCases: z.array(z.string()),
+    designHighlights: z.array(z.string()),
+    quickStart: z.string(),
+    keyAPIs: z.array(z.string()),
+    confidence: z.number(),
+    warnings: z.array(z.string()),
+  }).optional(),
+  llmUsed: z.boolean().optional(),
+  saved: z.boolean().optional(),
+  warnings: z.array(z.string()).optional(),
+  markdown: z.string().optional(),
+  text: z.string().optional(),
+});
+
+type DistillOutput = z.infer<typeof DistillOutputSchema>;
+
 // ============================================================================
 // preflight_generate_card
 // ============================================================================
@@ -27,28 +50,10 @@ export function registerDistillTools({ server }: ToolDependencies): void {
         regenerate: z.boolean().optional().describe('Force regenerate even if exists'),
         format: z.enum(['json', 'markdown', 'text']).optional().describe('Output format'),
       },
-      outputSchema: {
-        card: z.object({
-          cardId: z.string(),
-          name: z.string(),
-          oneLiner: z.string(),
-          problemSolved: z.string(),
-          useCases: z.array(z.string()),
-          designHighlights: z.array(z.string()),
-          quickStart: z.string(),
-          keyAPIs: z.array(z.string()),
-          confidence: z.number(),
-          warnings: z.array(z.string()),
-        }).optional(),
-        llmUsed: z.boolean().optional(),
-        saved: z.boolean().optional(),
-        warnings: z.array(z.string()).optional(),
-        markdown: z.string().optional(),
-        text: z.string().optional(),
-      },
+      outputSchema: DistillOutputSchema,
       annotations: { openWorldHint: true },
     },
-    async (args) => {
+    async (args): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: DistillOutput }> => {
       try {
         const result = await generateRepoCard(args.bundleId, args.repoId, {
           regenerate: args.regenerate,

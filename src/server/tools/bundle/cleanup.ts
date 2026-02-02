@@ -9,6 +9,22 @@ import { shouldRegisterTool } from './types.js';
 import { cleanupOrphanBundles } from '../../../bundle/cleanup.js';
 import { wrapPreflightError } from '../../../mcp/errorKinds.js';
 
+
+const CleanupOrphansOutputSchema = z.object({
+  totalFound: z.number(),
+  totalCleaned: z.number(),
+  details: z.array(
+    z.object({
+      storageDir: z.string(),
+      found: z.array(z.string()),
+      cleaned: z.array(z.string()),
+      skipped: z.array(z.object({ bundleId: z.string(), reason: z.string() })),
+    })
+  ),
+});
+
+type CleanupOrphansOutput = z.infer<typeof CleanupOrphansOutputSchema>;
+
 // ==========================================================================
 // preflight_cleanup_orphans
 // ==========================================================================
@@ -28,21 +44,10 @@ export function registerCleanupOrphansTool({ server, cfg }: ToolDependencies, co
         dryRun: z.boolean().default(true).describe('If true, only report orphans without deleting. Set to false to actually delete.'),
         minAgeHours: z.number().default(1).describe('Only clean bundles older than N hours (safety margin to avoid race conditions).'),
       },
-      outputSchema: {
-        totalFound: z.number(),
-        totalCleaned: z.number(),
-        details: z.array(
-          z.object({
-            storageDir: z.string(),
-            found: z.array(z.string()),
-            cleaned: z.array(z.string()),
-            skipped: z.array(z.object({ bundleId: z.string(), reason: z.string() })),
-          })
-        ),
-      },
+      outputSchema: CleanupOrphansOutputSchema,
       annotations: { destructiveHint: true },
     },
-    async (args) => {
+    async (args): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: CleanupOrphansOutput }> => {
       try {
         const result = await cleanupOrphanBundles(cfg, {
           minAgeHours: args.minAgeHours,
@@ -53,9 +58,11 @@ export function registerCleanupOrphansTool({ server, cfg }: ToolDependencies, co
           ? `Found ${result.totalFound} orphan bundle(s) (DRY RUN - not deleted)`
           : `Cleaned ${result.totalCleaned} of ${result.totalFound} orphan bundle(s)`;
 
+        const out: CleanupOrphansOutput = result;
+
         return {
           content: [{ type: 'text', text: summary }],
-          structuredContent: result,
+          structuredContent: out,
         };
       } catch (err) {
         throw wrapPreflightError(err);

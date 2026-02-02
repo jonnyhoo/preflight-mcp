@@ -10,6 +10,22 @@ import { ChromaVectorDB } from '../../vectordb/chroma-client.js';
 import { wrapPreflightError } from '../../mcp/errorKinds.js';
 import { checkChromaAvailability, getEmbeddingProvider } from './ragCommon.js';
 
+
+const RagManageOutputSchema = z.object({
+  action: z.string().optional().describe('Action performed'),
+  items: z.array(z.unknown()).optional().describe('List items (for list action)'),
+  stats: z.unknown().optional().describe('Statistics (for stats action)'),
+  contentList: z.array(z.unknown()).optional().describe('Content list (for stats action)'),
+  deleted: z.boolean().optional().describe('Whether deletion succeeded'),
+  deletedCount: z.number().optional().describe('Number of items deleted'),
+  collections: z.array(z.string()).optional().describe('Collection names'),
+  sample: z.array(z.unknown()).optional().describe('Sample items'),
+  results: z.array(z.unknown()).optional().describe('Search results'),
+  diagnosis: z.unknown().optional().describe('Diagnosis result'),
+});
+
+type RagManageOutput = z.infer<typeof RagManageOutputSchema>;
+
 // ============================================================================
 // preflight_rag_manage Tool
 // ============================================================================
@@ -35,22 +51,10 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
         limit: z.number().optional().describe('Max number of results (default 5)'),
         paperId: z.string().optional().describe('Paper ID for diagnose action (e.g., "arxiv:2601.02553")'),
       }),
-      outputSchema: {
-        // Dynamic fields based on action - all optional for flexibility
-        action: z.string().optional().describe('Action performed'),
-        items: z.array(z.unknown()).optional().describe('List items (for list action)'),
-        stats: z.unknown().optional().describe('Statistics (for stats action)'),
-        contentList: z.array(z.unknown()).optional().describe('Content list (for stats action)'),
-        deleted: z.boolean().optional().describe('Whether deletion succeeded'),
-        deletedCount: z.number().optional().describe('Number of items deleted'),
-        collections: z.array(z.string()).optional().describe('Collection names'),
-        sample: z.array(z.unknown()).optional().describe('Sample items'),
-        results: z.array(z.unknown()).optional().describe('Search results'),
-        diagnosis: z.unknown().optional().describe('Diagnosis result'),
-      },
+      outputSchema: RagManageOutputSchema,
       annotations: { openWorldHint: true },
     },
-    async (args) => {
+    async (args): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: RagManageOutput }> => {
       try {
         const { action, contentHash, bundleId, collection, query, limit, paperId } = args;
 
@@ -1108,12 +1112,61 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
         }
 
         // 返回符合MCP标准格式的结果
+        const items = Array.isArray(structuredContent.items)
+          ? structuredContent.items
+          : Array.isArray(structuredContent.collections)
+            ? structuredContent.collections
+            : undefined;
+        const contentList = Array.isArray(structuredContent.contentList)
+          ? structuredContent.contentList
+          : undefined;
+        const deleted = typeof structuredContent.deleted === 'boolean'
+          ? structuredContent.deleted
+          : undefined;
+        const deletedCount = typeof structuredContent.deletedCount === 'number'
+          ? structuredContent.deletedCount
+          : typeof structuredContent.deletedChunks === 'number'
+            ? structuredContent.deletedChunks
+            : undefined;
+        const collections = Array.isArray(structuredContent.collections)
+          ? structuredContent.collections
+              .map((c) => {
+                if (typeof c === 'string') return c;
+                if (c && typeof c === 'object' && 'name' in c) {
+                  const name = (c as { name?: unknown }).name;
+                  return typeof name === 'string' ? name : undefined;
+                }
+                return undefined;
+              })
+              .filter((c): c is string => typeof c === 'string')
+          : undefined;
+        const sample = Array.isArray(structuredContent.sample)
+          ? structuredContent.sample
+          : undefined;
+        const results = Array.isArray(structuredContent.results)
+          ? structuredContent.results
+          : Array.isArray(structuredContent.rawResults)
+            ? structuredContent.rawResults
+            : Array.isArray(structuredContent.chunks)
+              ? structuredContent.chunks
+              : undefined;
+
+        const output: RagManageOutput = {
+          action: args.action,
+          items,
+          stats: structuredContent.stats,
+          contentList,
+          deleted,
+          deletedCount,
+          collections: collections && collections.length > 0 ? collections : undefined,
+          sample,
+          results,
+          diagnosis: args.action === 'diagnose' ? structuredContent : undefined,
+        };
+
         return {
           content: [{ type: 'text', text: textResponse }],
-          structuredContent: {
-            action: args.action,
-            result: structuredContent,
-          },
+          structuredContent: output,
         };
       } catch (err) {
         throw wrapPreflightError(err);
