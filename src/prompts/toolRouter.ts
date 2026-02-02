@@ -36,7 +36,8 @@ export type ToolCategory =
   | 'quality'       // Code quality checks (duplicates, deadcode, complexity, etc.)
   | 'navigation'    // Navigation and discovery
   | 'distill'       // Knowledge distillation (card generation)
-  | 'rag';          // RAG (Retrieval Augmented Generation)
+  | 'rag'           // RAG (Retrieval Augmented Generation)
+  | 'memory';       // Long-term memory system
 
 // ============================================================================
 // Tool Registry
@@ -180,6 +181,23 @@ export const TOOL_REGISTRY: ToolInfo[] = [
     requires: 'none',
     mutating: false,
     whenToUse: 'Use for semantic QA over indexed content. Use crossBundleMode="all" to query all indexed bundles directly (no need to list bundles first).',
+  },
+
+  // === Memory Tools ===
+  {
+    name: 'preflight_memory',
+    category: 'memory',
+    description: '3-layer long-term memory: episodic (events), semantic (facts), procedural (preferences). Persists user context across sessions.',
+    keywords: ['memory', 'remember', 'recall', 'preferences', 'habits', 'facts', 'context', 'long-term', 'persist'],
+    chineseKeywords: ['记忆', '记住', '回忆', '偏好', '习惯', '事实', '上下文', '上次', '之前说过', '用户喜好'],
+    requires: 'none',
+    mutating: true,
+    whenToUse: 'Use to store/retrieve persistent user context: preferences, facts learned, conversation history. Use action="search" to recall, action="add" to store, action="reflect" to auto-extract facts.',
+    nextSteps: [
+      'After adding: memory persists for future sessions',
+      'Use reflect to auto-extract facts from episodic memories',
+      'Search across all layers with query parameter',
+    ],
   },
 ];
 
@@ -325,9 +343,10 @@ export function generateRoutingPrompt(categories?: ToolCategory[]): string {
     navigation: '📂 Navigation',
     distill: '💎 Knowledge Distillation',
     rag: '🔮 RAG (Semantic Search)',
+    memory: '🧠 Long-Term Memory',
   };
   
-  const categoryOrder: ToolCategory[] = ['bundle', 'search', 'navigation', 'quality', 'distill', 'rag'];
+  const categoryOrder: ToolCategory[] = ['bundle', 'search', 'navigation', 'quality', 'distill', 'rag', 'memory'];
   
   const filteredTools = categories
     ? TOOL_REGISTRY.filter(t => categories.includes(t.category))

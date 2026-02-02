@@ -93,7 +93,15 @@ export function registerMemoryTools({ server, cfg }: ToolDependencies): void {
     'preflight_memory',
     {
       title: 'Memory Management Tool',
-      description: 'Manage 3-layer long-term memory system (episodic, semantic, procedural)',
+      description:
+        '3-layer long-term memory system for persistent user context (ChromaDB).\n' +
+        '**Layers:** episodic (conversations, events), semantic (facts, relations), procedural (preferences, habits).\n' +
+        '**Actions:** add, search, list, update, delete, reflect, stats, gc.\n' +
+        'Examples:\n' +
+        '  • Add: `{"action": "add", "layer": "semantic", "content": "User prefers TypeScript over JavaScript"}`\n' +
+        '  • Search: `{"action": "search", "query": "coding preferences"}`\n' +
+        '  • Reflect: `{"action": "reflect", "reflectType": "extract_facts"}` — auto-extract facts from episodic.\n' +
+        'Use when: "记忆", "remember", "recall", "用户偏好", "preferences", "习惯", "上次", "之前说过", "long-term", "记住".',
       inputSchema: MemoryToolInputSchema,
       outputSchema: {
         ok: z.boolean(),
