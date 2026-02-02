@@ -145,12 +145,12 @@ export const TOOL_REGISTRY: ToolInfo[] = [
   {
     name: 'preflight_lsp',
     category: 'navigation',
-    description: 'Language Server Protocol actions: go to definition, find references, hover info. Precise code navigation.',
-    keywords: ['lsp', 'definition', 'references', 'hover', 'goto', 'navigate'],
-    chineseKeywords: ['定义', '引用', '跳转', '导航', 'LSP'],
+    description: 'Language Server Protocol actions: go to definition, find references, hover info, list symbols, diagnostics. Precise code navigation and analysis.',
+    keywords: ['lsp', 'definition', 'references', 'hover', 'goto', 'navigate', 'symbols', 'diagnostics', 'analyze'],
+    chineseKeywords: ['定义', '引用', '跳转', '导航', 'LSP', '符号', '诊断', '分析'],
     requires: 'bundleId',
     mutating: false,
-    whenToUse: 'Use for precise code navigation: find where a symbol is defined, find all references to a symbol.',
+    whenToUse: 'Use for precise code navigation: find where a symbol is defined, find all references, list all symbols in a file, or get diagnostics.',
   },
 
   // === Knowledge Distillation Tools ===
@@ -174,12 +174,12 @@ export const TOOL_REGISTRY: ToolInfo[] = [
   {
     name: 'preflight_rag',
     category: 'rag',
-    description: 'RAG operations: index bundle for semantic search, query indexed content.',
-    keywords: ['rag', 'semantic', 'vector', 'embedding', 'index', 'query'],
-    chineseKeywords: ['RAG', '语义搜索', '向量', '索引', '查询'],
-    requires: 'bundleId',
+    description: 'RAG operations: index bundle for semantic search, query indexed content via ChromaDB.',
+    keywords: ['rag', 'semantic', 'vector', 'embedding', 'index', 'query', 'ask', 'question', 'answer', 'chromadb'],
+    chineseKeywords: ['RAG', '语义搜索', '向量', '索引', '查询', '问问题', '回答', '向量数据库'],
+    requires: 'none',
     mutating: false,
-    whenToUse: 'Use for semantic search over bundle content. Requires embedding configuration.',
+    whenToUse: 'Use for semantic QA over indexed content. Use crossBundleMode="all" to query all indexed bundles directly (no need to list bundles first).',
   },
 ];
 

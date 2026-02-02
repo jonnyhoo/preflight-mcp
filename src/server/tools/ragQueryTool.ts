@@ -22,11 +22,11 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
     {
       title: 'RAG index and query',
       description:
-        'Index bundle to vector DB and/or answer questions via RAG retrieval.\n' +
+        'Index bundle to vector DB and/or answer questions via RAG retrieval (ChromaDB).\n' +
         'Supports: code repos (README + code), documentation repos (all .md files), PDFs, web docs.\n' +
         'Example: `{"bundleId": "<id>", "index": true}` or `{"bundleId": "<id>", "question": "..."}`.\n' +
-        'Cross-bundle: `{"crossBundleMode": "all", "question": "..."}`.\n' +
-        'Use when: "RAG", "向量检索", "index", "语义问答", "索引文档仓库".',
+        '**Direct query (no list_bundles needed):** `{"crossBundleMode": "all", "question": "..."}`.\n' +
+        'Use when: "RAG", "向量检索", "index", "语义问答", "索引文档仓库", "问问题", "ask question", "ChromaDB", "向量数据库".',
       inputSchema: {
         bundleId: z.string().optional().describe('Bundle ID to index or query (single mode, backward compatible)'),
         bundleIds: z.array(z.string()).optional().describe('Multiple bundle IDs to query (Phase 1: cross-bundle retrieval)'),

@@ -47,7 +47,7 @@ export const lspToolDescription =
   'Precise code navigation via LSP (definition, references, hover, symbols, diagnostics).\n' +
   'Example: `{"action": "definition", "file": "/path/to/file.py", "line": 10, "column": 5}`\n' +
   'Requires LOCAL file paths. Supports: .py, .go, .rs, .ts, .tsx, .js, .jsx.\n' +
-  'Use when: "跳转定义", "go to definition", "find references".';
+  'Use when: "跳转定义", "go to definition", "find references", "list symbols", "分析代码", "符号列表", "诊断".';
 const OVERALL_TIMEOUT_GRACE_MS = 4000;
 const MIN_OVERALL_TIMEOUT_MS = 12000;
 

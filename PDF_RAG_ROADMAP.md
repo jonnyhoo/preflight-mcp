@@ -349,6 +349,96 @@ answer = llm_answer(q0, D_all, G)
 - 图仅文本化，未使用 GNN
 - 实体对齐需工程补全
 
+### 3.1 详细执行计划
+
+**实现模块**:
+
+| 模块 | 文件 | 职责 |
+|------|------|------|
+| 类型定义 | `src/graph/types.ts` | Entity, Triple, KnowledgeGraph 接口 |
+| 实体抽取 | `src/graph/entity-extractor.ts` | LLM 抽取三元组 |
+| 图存储 | `src/graph/knowledge-graph.ts` | 实体/关系存储与查询 |
+| 图更新 | `src/graph/graph-updater.ts` | 增量更新逻辑 |
+| 迭代检索 | `src/graph/iterative-retriever.ts` | 子查询生成 + 检索循环 |
+| 图线性化 | `src/graph/graph-serializer.ts` | 图转文本供 LLM 使用 |
+
+**任务分解**:
+
+| ID | 任务 | 工时 | 依赖 | 状态 |
+|----|------|------|------|------|
+| 3.1.1 | 定义图数据结构 (Entity, Triple, KnowledgeGraph) | 2h | - | 🟡 待实施 |
+| 3.1.2 | 实现 LLM 三元组抽取 prompt + 解析 | 4h | 3.1.1 | 🟡 待实施 |
+| 3.1.3 | 实现实体链接 (名称归一化 + embedding 相似度) | 3h | 3.1.1 | 🟡 待实施 |
+| 3.1.4 | 实现图增量更新逻辑 | 3h | 3.1.2, 3.1.3 | 🟡 待实施 |
+| 3.1.5 | 实现图线性化 (topK 实体/关系截断) | 2h | 3.1.1 | 🟡 待实施 |
+| 3.1.6 | 实现迭代检索循环 (sufficiency 判断 + 子查询生成) | 4h | 3.1.4, 3.1.5 | 🟡 待实施 |
+| 3.1.7 | 集成到 RAGEngine.query | 2h | 3.1.6 | 🟡 待实施 |
+| 3.1.8 | 单元测试 + 集成测试 | 4h | 3.1.7 | 🟡 待实施 |
+
+**接口设计**:
+
+```typescript
+// src/graph/types.ts
+interface Entity {
+  id: string;
+  name: string;
+  normalizedName: string;  // 小写+去标点
+  attributes: string[];
+  embedding?: number[];
+  sourceChunkIds: string[];
+}
+
+interface Triple {
+  head: string;      // entity id
+  relation: string;
+  tail: string;      // entity id
+  sourceChunkId: string;
+}
+
+interface KnowledgeGraph {
+  entities: Map<string, Entity>;
+  triples: Triple[];
+  
+  addEntity(entity: Entity): string;
+  addTriple(triple: Triple): void;
+  linkEntity(name: string, embedding?: number[]): Entity;
+  getNeighbors(entityId: string): Entity[];
+  linearize(maxEntities?: number, maxTriples?: number): string;
+}
+
+// src/graph/iterative-retriever.ts
+interface IterativeRetrievalOptions {
+  maxIterations: number;       // 默认 3
+  sufficiencyThreshold: number; // 默认 0.8
+  enableGraph: boolean;        // 默认 true
+  maxEntitiesInPrompt: number; // 默认 50
+  maxTriplesInPrompt: number;  // 默认 80
+}
+
+interface IterativeRetrievalResult {
+  answer: string;
+  iterations: number;
+  graph: KnowledgeGraph;
+  allDocuments: ChunkWithScore[];
+  reasoning: string[];
+}
+```
+
+**核心算法** (基于论文 RAG 检索结果):
+
+```
+迭代检索循环:
+1. G_0 = 初始化空图
+2. D_0 = Retriever(q_0)  // 初始检索
+3. for t = 1 to T_max:
+   a. (entities, triples) = LLM_Extract(D_t, q_0, R_{t-1})
+   b. G_t = UpdateGraph(G_{t-1}, entities, triples)
+   c. (R_t, q_t, sufficient) = LLM_Reason(q_0, D_t, G_t)
+   d. if sufficient: break
+   e. D_{t+1} = Retriever(q_t)
+4. answer = LLM_Answer(q_0, D_all, G_T)
+```
+
 ---
 
 ## Phase 4: FastInsight 混合检索 [低优先级] (12-16h)
@@ -601,14 +691,15 @@ interface QueryResult {
 
 | 任务 | 工作量 | 依赖 | 状态 |
 |------|--------|------|------|
-| 1.1 跨Bundle基础支持 | 4-6h | 无 | 🟡 待实施 |
-| 1.2 IGP 剪枝 | 8-12h | 无 | 🟡 待实施 |
-| 2.1 NUMEN N-Gram | 10-14h | 无 | 🟡 待实施 |
+| 1.1 跨Bundle基础支持 | 4-6h | 无 | ✅ 已完成 |
+| 1.2 IGP 剪枝 | 8-12h | 无 | ✅ 已完成 |
+| 2.1 NUMEN N-Gram | 10-14h | 无 | ✅ 已完成 |
 | 3.1 GraphAnchor 图索引 | 16-24h | 1.1 | 🟡 待实施 |
 | 4.1 FastInsight 混合检索 | 12-16h | 3.1 | 🟡 待实施 |
 | 5.1 不确定性量化 | 8-12h | 1.1 | 🟡 待实施 |
 
-**总计**: 58-84 小时（全部实施）| 12-18 小时（Plan C）
+**已完成**: 22-32 小时 (Phase 1 + Phase 2)
+**剩余**: 36-52 小时 (Phase 3 + 4 + 5)
 
 ---
 
