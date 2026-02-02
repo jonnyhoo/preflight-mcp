@@ -38,6 +38,7 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
         'Use when: "analyze repo", "index project", "分析项目", "批量解析PDF", "爬取文档", "索引文档".',
       inputSchema: CreateBundleInputSchema,
       outputSchema: {
+        // Single bundle creation fields
         bundleId: z.string().optional(),
         createdAt: z.string().optional(),
         updatedAt: z.string().optional(),
@@ -55,11 +56,9 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
             source: z.enum(['git', 'archive', 'local', 'crawl', 'download']).optional(),
             headSha: z.string().optional(),
             notes: z.array(z.string()).optional(),
-            // Web-specific fields
             baseUrl: z.string().optional(),
             pageCount: z.number().optional(),
             usedLlmsTxt: z.boolean().optional(),
-            // PDF-specific fields
             pdfUrl: z.string().optional(),
             localPath: z.string().optional(),
             fileSize: z.number().optional(),
@@ -76,6 +75,19 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
         currentPhase: z.string().optional(),
         currentProgress: z.number().optional(),
         currentMessage: z.string().optional(),
+        // Batch PDF creation fields
+        batchResult: z.boolean().optional().describe('True when batch PDF mode was used'),
+        bundleCount: z.number().optional().describe('Number of bundles created in batch'),
+        failedCount: z.number().optional().describe('Number of failed PDFs in batch'),
+        bundles: z.array(z.object({
+          bundleId: z.string(),
+          source: z.string().optional(),
+        })).optional().describe('Created bundles in batch mode'),
+        failed: z.array(z.object({
+          source: z.string(),
+          error: z.string(),
+        })).optional().describe('Failed PDFs in batch mode'),
+        totalTimeMs: z.number().optional().describe('Total batch processing time'),
       },
       annotations: { openWorldHint: true },
     },

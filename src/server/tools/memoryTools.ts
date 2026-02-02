@@ -103,25 +103,7 @@ export function registerMemoryTools({ server, cfg }: ToolDependencies): void {
         '  • Reflect: `{"action": "reflect", "reflectType": "extract_facts"}` — auto-extract facts from episodic.\n' +
         'Use when: "记忆", "remember", "recall", "用户偏好", "preferences", "习惯", "上次", "之前说过", "long-term", "记住".',
       inputSchema: MemoryToolInputSchema,
-      outputSchema: {
-        ok: z.boolean(),
-        meta: z.object({
-          tool: z.string(),
-          schemaVersion: z.string(),
-          requestId: z.string(),
-          timeMs: z.number(),
-        }),
-        data: z.object({
-          action: z.string(),
-          result: z.record(z.string(), z.unknown()).optional(),
-        }).optional(),
-        error: z.object({
-          code: z.string(),
-          message: z.string(),
-          hint: z.string().optional(),
-        }).optional(),
-      },
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: false },
     },
     async (args) => {
       const { action, ...rest } = args;

@@ -68,7 +68,7 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
       },
       outputSchema: {
         bundleId: z.string(),
-        mode: z.enum(['light', 'full']).optional(),
+        mode: z.enum(['light', 'full', 'core']).optional(),
         file: z.string().optional(),
         content: z.string().optional(),
         files: z.record(z.string(), z.string().nullable()).optional(),

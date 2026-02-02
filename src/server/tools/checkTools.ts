@@ -21,6 +21,10 @@ export function registerCheckTools({ server }: ToolDependencies): void {
         success: z.boolean(),
         result: z.string().optional(),
         error: z.string().optional(),
+        // Statistics fields (added for LLM-friendly output)
+        totalIssues: z.number().optional(),
+        issuesByCheck: z.record(z.string(), z.number()).optional(),
+        issuesBySeverity: z.record(z.string(), z.number()).optional(),
       },
       annotations: { readOnlyHint: true },
     },

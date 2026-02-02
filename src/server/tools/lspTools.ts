@@ -19,9 +19,14 @@ export function registerLspTools({ server }: ToolDependencies): void {
       inputSchema: LspInputSchema,
       outputSchema: {
         success: z.boolean(),
-        action: z.enum(['definition', 'references', 'hover', 'symbols', 'diagnostics']),
+        action: z.enum(['definition', 'references', 'hover', 'symbols', 'diagnostics']).optional(),
         result: z.string().optional(),
         error: z.string().optional(),
+        // Additional fields from handler
+        file: z.string().optional(),
+        line: z.number().optional(),
+        column: z.number().optional(),
+        data: z.unknown().optional(),
       },
       annotations: { readOnlyHint: true },
     },
