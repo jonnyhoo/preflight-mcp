@@ -199,16 +199,16 @@ export async function startServer(): Promise<void> {
   // - Navigation: lsp (1, conditional on cfg.lsp.enabled)
   // - Quality check: preflight_check (1, unified: duplicates, doccheck, deadcode, circular, complexity)
 
+  // LSP for precise navigation (1) - FIRST for visibility
+  if (cfg.lsp.enabled) {
+    registerLspTools(deps);
+  }
+
   // Core bundle tools (6): create, list, delete, get_overview, read_file, repo_tree
   registerBundleTools(deps, { coreOnly: true });
 
   // Core search tools (1): search_and_read
   registerSearchTools(deps);
-
-  // LSP for precise navigation (1)
-  if (cfg.lsp.enabled) {
-    registerLspTools(deps);
-  }
 
   // Unified code quality check tool (1): duplicates, doccheck, deadcode, circular, complexity
   registerCheckTools(deps);

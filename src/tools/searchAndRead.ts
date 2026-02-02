@@ -511,7 +511,8 @@ export function createSearchAndReadHandler(deps: {
 export const searchAndReadToolDescription = {
   title: 'Search and read excerpts',
   description:
-    'Search bundle and return excerpts with context. Works for code, PDFs, and web docs.\n' +
+    '⚠️ NOT for local files. Requires bundleId. Use preflight_lsp for local code navigation.\n' +
+    'Search indexed bundle and return excerpts with context. Works for code, PDFs, and web docs.\n' +
     'Example: `{"bundleId": "xxx", "query": "handleRequest"}`\n' +
     'Returns citation-ready evidence with path + line range.\n' +
     'Use when: "search", "find", "搜索", "查找".',

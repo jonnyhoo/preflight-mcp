@@ -378,8 +378,28 @@ export function registerMemoryTools({ server, cfg }: ToolDependencies): void {
             throw new Error(`Unknown action: ${action}`);
         }
 
+        // Format result as readable text
+        let textOutput = `Memory ${action} operation completed successfully`;
+        if (result) {
+          if (action === 'list' && result.memories) {
+            textOutput += `\n\nFound ${result.total} memories (showing ${result.memories.length}):\n`;
+            for (const mem of result.memories) {
+              textOutput += `\n[${mem.layer}] ${mem.id}\n  ${mem.content.slice(0, 200)}${mem.content.length > 200 ? '...' : ''}\n`;
+            }
+          } else if (action === 'search' && result.memories) {
+            textOutput += `\n\nFound ${result.totalFound} results:\n`;
+            for (const mem of result.memories) {
+              textOutput += `\n[${mem.layer}] score=${mem.score.toFixed(3)}\n  ${mem.content.slice(0, 200)}${mem.content.length > 200 ? '...' : ''}\n`;
+            }
+          } else if (action === 'stats') {
+            textOutput += `\n\n${JSON.stringify(result, null, 2)}`;
+          } else if (action === 'add' && result.id) {
+            textOutput += `\n\nCreated: ${result.id}`;
+          }
+        }
+
         return {
-          content: [{ type: 'text', text: `Memory ${action} operation completed successfully` }],
+          content: [{ type: 'text', text: textOutput }],
           structuredContent: { action, result },
         };
       } catch (err) {

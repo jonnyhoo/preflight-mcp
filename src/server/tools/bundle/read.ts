@@ -128,7 +128,8 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
     {
       title: 'Read bundle file(s)',
       description:
-        'Read file(s) from bundle by path. Use when you know the exact path.\n' +
+        '⚠️ NOT for local files. Requires bundleId. Use client\'s read_files or preflight_lsp for local files.\n' +
+        'Read file(s) from indexed bundle by path. Use when you know the exact path.\n' +
         'Example: `{"bundleId": "xxx", "file": "repos/owner/repo/norm/src/main.ts"}`\n' +
         'Use search_and_read if you need to find content first.\n' +
         'Use when: "read file", "读取", "查看文件".',
