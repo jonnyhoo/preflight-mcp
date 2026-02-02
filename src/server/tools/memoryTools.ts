@@ -10,6 +10,7 @@ import type { ToolDependencies } from './types.js';
 import { extractFacts, type ExtractFactsOptions } from '../../memory/extractors/fact-extractor.js';
 import { extractPatterns } from '../../memory/extractors/pattern-extractor.js';
 import { compressMemories } from '../../memory/extractors/compress-extractor.js';
+import { getEmbeddingProvider } from './ragCommon.js';
 
 // Define Zod schemas based on the documentation
 const AddMetadataSchema = z.object({
@@ -119,11 +120,15 @@ export function registerMemoryTools({ server, cfg }: ToolDependencies): void {
       let memoryStore: MemoryStore | null = null;
 
       try {
+        // Initialize embedding provider
+        const embeddingProvider = getEmbeddingProvider(cfg);
+        const embeddingModelId = cfg.embeddingProvider ?? 'unknown';
+
         // Create memory store instance with configuration
         const memoryStoreConfig: MemoryStoreConfig = {
           chromaUrl: cfg.chromaUrl,
           userId: process.env.PREFLIGHT_USER_ID,
-          embeddingModelId: 'unknown', // Would be updated based on actual embedding model used
+          embeddingModelId,
         };
         memoryStore = new MemoryStore(memoryStoreConfig);
         await memoryStore.ensureCollections();
@@ -134,15 +139,21 @@ export function registerMemoryTools({ server, cfg }: ToolDependencies): void {
             const { layer = 'episodic', content, metadata, batch } = rest;
             if (batch && batch.length > 0) {
               // Handle batch add
+              const texts = batch.map(item => item.content);
+              const embeddings = await embeddingProvider.embedBatch(texts);
+
               const results: any[] = [];
-              for (const item of batch) {
+              for (let i = 0; i < batch.length; i++) {
+                const item = batch[i]!;
+                const embedding = embeddings[i]?.vector;
+
                 if (layer === 'episodic') {
                   results.push(await memoryStore.addEpisodic({
                     content: item.content,
                     type: item.metadata?.type as 'conversation' | 'event' | 'summary' || 'conversation',
                     participants: item.metadata?.tags,
                     tags: item.metadata?.tags,
-                  }));
+                  }, embedding));
                 } else if (layer === 'semantic') {
                   results.push(await memoryStore.addSemantic({
                     content: item.content,
@@ -152,7 +163,7 @@ export function registerMemoryTools({ server, cfg }: ToolDependencies): void {
                     object: item.metadata?.object,
                     confidence: item.metadata?.confidence || 0.7,
                     sourceEpisodeIds: item.metadata?.tags,
-                  }));
+                  }, embedding));
                 } else if (layer === 'procedural') {
                   results.push(await memoryStore.addProcedural({
                     content: item.content,
@@ -161,12 +172,15 @@ export function registerMemoryTools({ server, cfg }: ToolDependencies): void {
                     strength: item.metadata?.confidence,
                     occurrenceCount: 1,
                     sourceMemoryIds: item.metadata?.tags,
-                  }));
+                  }, embedding));
                 }
               }
               result = results;
             } else if (content) {
               // Handle single add
+              const embeddingResult = await embeddingProvider.embed(content);
+              const embedding = embeddingResult.vector;
+
               if (layer === 'episodic') {
                 result = await memoryStore.addEpisodic({
                   content,
@@ -174,7 +188,7 @@ export function registerMemoryTools({ server, cfg }: ToolDependencies): void {
                   participants: metadata?.tags,
                   tags: metadata?.tags,
                   sessionId: metadata?.category, // Using category as sessionId for episodic
-                });
+                }, embedding);
                               } else if (layer === 'semantic') {
                                 result = await memoryStore.addSemantic({
                                   content,
@@ -184,7 +198,7 @@ export function registerMemoryTools({ server, cfg }: ToolDependencies): void {
                                   object: metadata?.object,
                                   confidence: metadata?.confidence || 0.7,
                                   sourceEpisodeIds: metadata?.tags,
-                                });              } else if (layer === 'procedural') {
+                                }, embedding);              } else if (layer === 'procedural') {
                 result = await memoryStore.addProcedural({
                   content,
                   type: metadata?.type as 'preference' | 'habit' | 'pattern' || 'preference',
@@ -192,7 +206,7 @@ export function registerMemoryTools({ server, cfg }: ToolDependencies): void {
                   strength: metadata?.confidence,
                   occurrenceCount: 1,
                   sourceMemoryIds: metadata?.tags,
-                });
+                }, embedding);
               }
             } else {
               throw new Error('Either content or batch must be provided for add action');
@@ -202,6 +216,13 @@ export function registerMemoryTools({ server, cfg }: ToolDependencies): void {
 
           case 'search': {
             const { query, layers, topK, limit, offset, filters } = rest;
+            
+            let queryEmbedding: number[] | undefined;
+            if (query) {
+              const embeddingResult = await embeddingProvider.embed(query);
+              queryEmbedding = embeddingResult.vector;
+            }
+
             result = await memoryStore.search({
               query: query || '',
               layers,
@@ -209,7 +230,7 @@ export function registerMemoryTools({ server, cfg }: ToolDependencies): void {
               limit,
               offset,
               filters,
-            });
+            }, queryEmbedding);
             break;
           }
 

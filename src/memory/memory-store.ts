@@ -856,11 +856,14 @@ export class MemoryStore {
       const collection = await this.ensureCollection(layer);
       const basePath = this.getBasePath();
 
+      const where = { userId: this.config.userId };
+      // logger.debug(`List ${layer} with where:`, where);
+
       const response = await this.request<ChromaGetResponse>(
         'POST',
         `${basePath}/collections/${collection.id}/get`,
         {
-          where: { userId: this.config.userId },
+          where,
           include: ['documents', 'metadatas'],
         }
       );
