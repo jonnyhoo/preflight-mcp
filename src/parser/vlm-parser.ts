@@ -140,10 +140,21 @@ interface VLMWorkerConfig {
 }
 
 /**
+ * VLM processing strategy.
+ * - parallel: All VLMs process different pages in parallel (default)
+ * - fallback: Primary VLM first, fallback VLM on failure
+ * - verify: Primary VLM processes, fallback VLM verifies key content
+ * - dual: Both VLM groups process all pages, select best result
+ */
+type VLMStrategy = 'parallel' | 'fallback' | 'verify' | 'dual';
+
+/**
  * Extended config file interface with vlmConfigs array.
  */
 interface ExtendedConfigFile {
   vlmConfigs?: VLMWorkerConfig[];
+  vlmFallbackConfigs?: VLMWorkerConfig[];  // Fallback/verifier VLMs
+  vlmStrategy?: VLMStrategy;               // Processing strategy
   vlmApiBase?: string;
   vlmApiKey?: string;
   vlmModel?: string;
@@ -208,6 +219,8 @@ export class VlmParser implements IDocumentParser {
   readonly supportedFormats: readonly SupportedFormat[] = ['.pdf'] as const;
 
   private vlmConfigs: VLMWorkerConfig[] = [];
+  private fallbackConfigs: VLMWorkerConfig[] = [];
+  private strategy: VLMStrategy = 'parallel';
 
   constructor() {
     this.loadVLMConfigs();
@@ -281,8 +294,32 @@ export class VlmParser implements IDocumentParser {
             
             if (validConfigs.length > 0) {
               this.vlmConfigs = validConfigs;
-              logger.info(`[VLM Parser] Loaded ${this.vlmConfigs.length} VLM configs from ${configPath}`);
+              logger.info(`[VLM Parser] Loaded ${this.vlmConfigs.length} primary VLM configs from ${configPath}`);
               this.configLoadError = null; // Clear any previous error
+              
+              // Load fallback configs if present
+              if (config.vlmFallbackConfigs && Array.isArray(config.vlmFallbackConfigs)) {
+                const validFallback: VLMWorkerConfig[] = [];
+                for (const c of config.vlmFallbackConfigs) {
+                  if (c?.apiBase && c?.apiKey && c?.model) {
+                    validFallback.push(c as VLMWorkerConfig);
+                  }
+                }
+                if (validFallback.length > 0) {
+                  this.fallbackConfigs = validFallback;
+                  logger.info(`[VLM Parser] Loaded ${this.fallbackConfigs.length} fallback VLM configs`);
+                }
+              }
+              
+              // Load strategy - default to 'dual' when fallback configs are present
+              if (config.vlmStrategy && ['parallel', 'fallback', 'verify', 'dual'].includes(config.vlmStrategy)) {
+                this.strategy = config.vlmStrategy;
+              } else if (this.fallbackConfigs.length > 0) {
+                // Auto-select dual strategy when fallback VLMs are configured
+                this.strategy = 'dual';
+              }
+              logger.info(`[VLM Parser] Using strategy: ${this.strategy}`);
+              
               return;
             }
           }
@@ -599,7 +636,7 @@ export class VlmParser implements IDocumentParser {
   // ============================================================================
 
   /**
-   * Process pages in parallel batches using multiple VLM workers.
+   * Process pages using the configured strategy.
    */
   private async processPagesBatch(
     pageImages: Map<number, string>,
@@ -608,20 +645,44 @@ export class VlmParser implements IDocumentParser {
     errors: ParseError[],
     warnings: string[]
   ): Promise<PageProcessResult[]> {
+    logger.info(`[VLM Parser] Using strategy: ${this.strategy}`);
+    
+    switch (this.strategy) {
+      case 'fallback':
+        return this.processWithFallback(pageImages, errors, warnings);
+      case 'verify':
+        return this.processWithVerify(pageImages, errors, warnings);
+      case 'dual':
+        return this.processWithDual(pageImages, errors, warnings);
+      case 'parallel':
+      default:
+        return this.processParallel(pageImages, this.vlmConfigs, errors, warnings);
+    }
+  }
+
+  /**
+   * Process pages in parallel batches using specified VLM workers.
+   */
+  private async processParallel(
+    pageImages: Map<number, string>,
+    configs: VLMWorkerConfig[],
+    errors: ParseError[],
+    warnings: string[]
+  ): Promise<PageProcessResult[]> {
     const results: PageProcessResult[] = [];
     const pageIndices = Array.from(pageImages.keys()).sort((a, b) => a - b);
 
     // Calculate batch size based on VLM worker count
-    const batchSize = Math.min(this.vlmConfigs.length, MAX_CONCURRENT_REQUESTS);
+    const batchSize = Math.min(configs.length, MAX_CONCURRENT_REQUESTS);
 
-    logger.info(`Processing with batch size ${batchSize} (${this.vlmConfigs.length} VLM workers)`);
+    logger.info(`Processing with batch size ${batchSize} (${configs.length} VLM workers)`);
 
     for (let batchStart = 0; batchStart < pageIndices.length; batchStart += batchSize) {
       const batchIndices = pageIndices.slice(batchStart, batchStart + batchSize);
 
       // Create parallel promises for this batch
       const batchPromises = batchIndices.map(async (pageIndex, idx) => {
-        const vlmConfig = this.vlmConfigs[idx % this.vlmConfigs.length]!;
+        const vlmConfig = configs[idx % configs.length]!;
         const imageBase64 = pageImages.get(pageIndex);
 
         if (!imageBase64) {
@@ -675,6 +736,261 @@ export class VlmParser implements IDocumentParser {
     }
 
     return results;
+  }
+
+  /**
+   * Fallback strategy: Primary VLM first, fallback VLM on failure.
+   */
+  private async processWithFallback(
+    pageImages: Map<number, string>,
+    errors: ParseError[],
+    warnings: string[]
+  ): Promise<PageProcessResult[]> {
+    if (this.fallbackConfigs.length === 0) {
+      logger.warn('[VLM Parser] No fallback configs, using parallel strategy');
+      return this.processParallel(pageImages, this.vlmConfigs, errors, warnings);
+    }
+
+    // First pass: use primary VLMs
+    logger.info('[VLM Parser] Fallback strategy - Phase 1: Primary VLMs');
+    const primaryResults = await this.processParallel(pageImages, this.vlmConfigs, [], []);
+    
+    // Find failed pages
+    const failedPages = primaryResults.filter(r => !r.success || !r.content || r.content.length < 50);
+    
+    if (failedPages.length === 0) {
+      logger.info('[VLM Parser] All pages succeeded with primary VLMs');
+      warnings.push(`Fallback strategy: All ${primaryResults.length} pages succeeded with primary VLMs`);
+      return primaryResults;
+    }
+
+    logger.info(`[VLM Parser] Fallback strategy - Phase 2: Retrying ${failedPages.length} failed pages with fallback VLMs`);
+    warnings.push(`Fallback strategy: ${failedPages.length}/${primaryResults.length} pages need retry`);
+    
+    // Create map of failed page images
+    const failedPageImages = new Map<number, string>();
+    for (const failed of failedPages) {
+      const img = pageImages.get(failed.pageIndex);
+      if (img) failedPageImages.set(failed.pageIndex, img);
+    }
+    
+    // Retry with fallback VLMs
+    const fallbackResults = await this.processParallel(failedPageImages, this.fallbackConfigs, errors, []);
+    
+    // Merge results: use fallback result if it succeeded, otherwise keep primary
+    const finalResults: PageProcessResult[] = [];
+    const fallbackMap = new Map(fallbackResults.map(r => [r.pageIndex, r]));
+    
+    for (const primary of primaryResults) {
+      const fallback = fallbackMap.get(primary.pageIndex);
+      if (fallback && fallback.success && fallback.content && fallback.content.length > 50) {
+        finalResults.push(fallback);
+        logger.info(`[VLM Parser] Page ${primary.pageIndex + 1}: Used fallback result (${fallback.charCount} chars)`);
+      } else {
+        finalResults.push(primary);
+      }
+    }
+    
+    const recoveredCount = fallbackResults.filter(r => r.success && r.content && r.content.length > 50).length;
+    warnings.push(`Fallback strategy: Recovered ${recoveredCount}/${failedPages.length} pages`);
+    
+    return finalResults;
+  }
+
+  /**
+   * Verify strategy: Primary VLM processes, fallback VLM verifies key content.
+   */
+  private async processWithVerify(
+    pageImages: Map<number, string>,
+    errors: ParseError[],
+    warnings: string[]
+  ): Promise<PageProcessResult[]> {
+    if (this.fallbackConfigs.length === 0) {
+      logger.warn('[VLM Parser] No fallback configs for verification, using parallel strategy');
+      return this.processParallel(pageImages, this.vlmConfigs, errors, warnings);
+    }
+
+    // First pass: use primary VLMs
+    logger.info('[VLM Parser] Verify strategy - Phase 1: Primary VLMs');
+    const primaryResults = await this.processParallel(pageImages, this.vlmConfigs, [], []);
+    
+    // Identify pages with potential OCR errors (containing common misreads)
+    const suspectPages = primaryResults.filter(r => {
+      if (!r.success || !r.content) return false;
+      // Check for common OCR error patterns in Chinese
+      return /[背水楼|背夹楼|图书馆楼]/.test(r.content) || 
+             r.content.includes('or "') ||  // Prompt leakage
+             r.content.includes('Output blank');
+    });
+    
+    if (suspectPages.length === 0) {
+      logger.info('[VLM Parser] No suspect pages found, skipping verification');
+      warnings.push(`Verify strategy: No suspect pages, used primary results`);
+      return primaryResults;
+    }
+
+    logger.info(`[VLM Parser] Verify strategy - Phase 2: Verifying ${suspectPages.length} suspect pages`);
+    warnings.push(`Verify strategy: ${suspectPages.length} pages flagged for verification`);
+    
+    // Create map of suspect page images
+    const suspectPageImages = new Map<number, string>();
+    for (const suspect of suspectPages) {
+      const img = pageImages.get(suspect.pageIndex);
+      if (img) suspectPageImages.set(suspect.pageIndex, img);
+    }
+    
+    // Verify with fallback VLMs
+    const verifyResults = await this.processParallel(suspectPageImages, this.fallbackConfigs, [], []);
+    
+    // Compare and select better result
+    const finalResults: PageProcessResult[] = [];
+    const verifyMap = new Map(verifyResults.map(r => [r.pageIndex, r]));
+    
+    for (const primary of primaryResults) {
+      const verify = verifyMap.get(primary.pageIndex);
+      if (verify && verify.success && verify.content) {
+        // Choose result with fewer error patterns and no prompt leakage
+        const primaryHasIssues = this.hasContentIssues(primary.content || '');
+        const verifyHasIssues = this.hasContentIssues(verify.content);
+        
+        if (primaryHasIssues && !verifyHasIssues) {
+          finalResults.push(verify);
+          logger.info(`[VLM Parser] Page ${primary.pageIndex + 1}: Used verified result`);
+        } else {
+          finalResults.push(primary);
+        }
+      } else {
+        finalResults.push(primary);
+      }
+    }
+    
+    return finalResults;
+  }
+
+  /**
+   * Dual strategy: Both VLM groups process all pages, select best result.
+   */
+  private async processWithDual(
+    pageImages: Map<number, string>,
+    errors: ParseError[],
+    warnings: string[]
+  ): Promise<PageProcessResult[]> {
+    if (this.fallbackConfigs.length === 0) {
+      logger.warn('[VLM Parser] No fallback configs for dual processing, using parallel strategy');
+      return this.processParallel(pageImages, this.vlmConfigs, errors, warnings);
+    }
+
+    logger.info('[VLM Parser] Dual strategy - Processing with both VLM groups in parallel');
+    warnings.push(`Dual strategy: Running both primary and fallback VLMs`);
+    
+    // Run both in parallel
+    const [primaryResults, fallbackResults] = await Promise.all([
+      this.processParallel(pageImages, this.vlmConfigs, [], []),
+      this.processParallel(pageImages, this.fallbackConfigs, [], []),
+    ]);
+    
+    // Select best result for each page
+    const finalResults: PageProcessResult[] = [];
+    const fallbackMap = new Map(fallbackResults.map(r => [r.pageIndex, r]));
+    
+    let primaryWins = 0, fallbackWins = 0;
+    
+    for (const primary of primaryResults) {
+      const fallback = fallbackMap.get(primary.pageIndex);
+      
+      if (!fallback || !fallback.success) {
+        finalResults.push(primary);
+        if (primary.success) primaryWins++;
+        continue;
+      }
+      
+      if (!primary.success) {
+        finalResults.push(fallback);
+        fallbackWins++;
+        continue;
+      }
+      
+      // Both succeeded - compare quality
+      const primaryScore = this.scoreContent(primary.content || '');
+      const fallbackScore = this.scoreContent(fallback.content || '');
+      
+      if (fallbackScore > primaryScore) {
+        finalResults.push(fallback);
+        fallbackWins++;
+        logger.debug(`Page ${primary.pageIndex + 1}: Fallback wins (${fallbackScore} vs ${primaryScore})`);
+      } else {
+        finalResults.push(primary);
+        primaryWins++;
+      }
+    }
+    
+    warnings.push(`Dual strategy: Primary won ${primaryWins}, Fallback won ${fallbackWins}`);
+    logger.info(`[VLM Parser] Dual results: Primary=${primaryWins}, Fallback=${fallbackWins}`);
+    
+    return finalResults;
+  }
+
+  /**
+   * Check if content has prompt leakage (most severe issue).
+   */
+  private hasPromptLeakage(content: string): boolean {
+    if (content.includes('or "')) return true;
+    if (content.includes('Output blank')) return true;
+    if (content.includes('Page not found')) return true;
+    if (content.includes('No content')) return true;
+    if (content.includes('No output')) return true;
+    if (content.includes('Do NOT use markdown')) return true;
+    if (content.includes('Do NOT add any meta')) return true;
+    return false;
+  }
+
+  /**
+   * Check if content has OCR errors (less severe).
+   */
+  private hasOcrErrors(content: string): boolean {
+    // Common OCR error patterns for this document
+    if (/背水楼|背夹楼|背灰楼/.test(content)) return true;
+    if (/图书馆楼|校园.*楼/.test(content)) return true;
+    if (/绵阳园|格盟.*光储|铭恩居首次/.test(content)) return true;
+    if (/帮帮农/.test(content)) return true;
+    return false;
+  }
+
+  /**
+   * Check if content has common issues (OCR errors, prompt leakage).
+   */
+  private hasContentIssues(content: string): boolean {
+    return this.hasPromptLeakage(content) || this.hasOcrErrors(content);
+  }
+
+  /**
+   * Score content quality (higher is better).
+   * Priority: No prompt leakage > No OCR errors > Structure quality
+   */
+  private scoreContent(content: string): number {
+    let score = 0;
+    
+    // Base score from length (useful content)
+    score += Math.min(content.length / 100, 50);  // Max 50 points for length
+    
+    // Bonus for table structure
+    const tableMatches = content.match(/\|.*\|/g);
+    if (tableMatches) score += Math.min(tableMatches.length, 20);  // Max 20 points
+    
+    // Bonus for headings
+    const headingMatches = content.match(/^#{1,3}\s+.+$/gm);
+    if (headingMatches) score += Math.min(headingMatches.length * 2, 10);  // Max 10 points
+    
+    // SEVERE penalty for prompt leakage - this is unacceptable
+    if (this.hasPromptLeakage(content)) score -= 100;
+    
+    // Moderate penalty for OCR errors - annoying but tolerable
+    if (this.hasOcrErrors(content)) score -= 15;
+    
+    // Penalty for empty/very short content
+    if (content.length < 50) score -= 20;
+    
+    return score;
   }
 
   /**
