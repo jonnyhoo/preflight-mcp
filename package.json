@@ -67,7 +67,6 @@
     "officeparser": "^5.2.2",
     "p-limit": "^7.2.0",
     "pdf-parse": "^2.4.5",
-    "preflight-mcp": "file:",
     "puppeteer": "^24.35.0",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
