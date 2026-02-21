@@ -12,8 +12,8 @@ const LspOutputSchema = z.object({
   result: z.string().optional(),
   error: z.string().optional(),
   file: z.string().optional(),
-  line: z.number().optional(),
-  column: z.number().optional(),
+  line: z.coerce.number().optional(),
+  column: z.coerce.number().optional(),
   data: z.unknown().optional(),
 });
 

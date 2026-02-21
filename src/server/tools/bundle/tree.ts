@@ -9,6 +9,7 @@ import { shouldRegisterTool } from './types.js';
 import { findBundleStorageDir, getBundlePathsForId } from '../../../bundle/service.js';
 import { readManifest } from '../../../bundle/manifest.js';
 import { toBundleFileUri } from '../../../mcp/uris.js';
+import { coerceJson } from '../coerce.js';
 import { wrapPreflightError } from '../../../mcp/errorKinds.js';
 import { BundleNotFoundError } from '../../../errors.js';
 import { generateRepoTree, formatTreeResult } from '../../../bundle/tree.js';
@@ -18,24 +19,24 @@ const RepoTreeOutputSchema = z.object({
   bundleId: z.string(),
   tree: z.string(),
   stats: z.object({
-    totalFiles: z.number(),
-    totalDirs: z.number(),
-    byExtension: z.record(z.string(), z.number()),
-    byTopDir: z.record(z.string(), z.number()),
-    byDir: z.record(z.string(), z.number()).optional(),
+    totalFiles: z.coerce.number(),
+    totalDirs: z.coerce.number(),
+    byExtension: z.record(z.string(), z.coerce.number()),
+    byTopDir: z.record(z.string(), z.coerce.number()),
+    byDir: z.record(z.string(), z.coerce.number()).optional(),
   }),
   entryPointCandidates: z.array(
     z.object({
       path: z.string(),
       type: z.enum(['readme', 'main', 'index', 'cli', 'server', 'app', 'test', 'config']),
-      priority: z.number(),
+      priority: z.coerce.number(),
     })
   ),
   skippedFiles: z.array(
     z.object({
       path: z.string(),
       reason: z.string(),
-      size: z.number().optional(),
+      size: z.coerce.number().optional(),
     })
   ).optional(),
   autoFocused: z.object({
@@ -45,7 +46,7 @@ const RepoTreeOutputSchema = z.object({
   evidence: z.array(
     z.object({
       path: z.string(),
-      range: z.object({ startLine: z.number(), endLine: z.number() }).optional(),
+      range: z.object({ startLine: z.coerce.number(), endLine: z.coerce.number() }).optional(),
       uri: z.string().optional(),
       snippet: z.string().optional(),
     })
@@ -74,11 +75,11 @@ export function registerRepoTreeTool({ server, cfg }: ToolDependencies, coreOnly
         'Use when: "show tree", "structure", "项目结构", "文件分布".',
       inputSchema: {
         bundleId: z.string().describe('Bundle ID to analyze.'),
-        depth: z.number().int().min(1).max(10).default(4).describe('Maximum directory depth to traverse. Default 4.'),
-        include: z.array(z.string()).optional().describe('Glob patterns to include (e.g., ["*.ts", "*.py"]). If omitted, includes all files.'),
-        exclude: z.array(z.string()).optional().describe('Patterns to exclude (e.g., ["node_modules", "*.pyc"]). Defaults include common excludes.'),
+        depth: z.coerce.number().int().min(1).max(10).default(4).describe('Maximum directory depth to traverse. Default 4.'),
+        include: coerceJson(z.array(z.string()).optional()).describe('Glob patterns to include (e.g., ["*.ts", "*.py"]). If omitted, includes all files.'),
+        exclude: coerceJson(z.array(z.string()).optional()).describe('Patterns to exclude (e.g., ["node_modules", "*.pyc"]). Defaults include common excludes.'),
         focusDir: z.string().optional().describe('Focus directory path - expand deeper within this path (e.g., "owner/repo/norm/src"). Gets +3 extra depth levels.'),
-        focusDepthBonus: z.number().int().min(1).max(6).optional().describe('Extra depth levels for focusDir. Default 3.'),
+        focusDepthBonus: z.coerce.number().int().min(1).max(6).optional().describe('Extra depth levels for focusDir. Default 3.'),
         showFileCountPerDir: z.boolean().optional().describe('If true, include file count per directory in stats.byDir.'),
         showSkippedFiles: z.boolean().optional().describe('If true, include list of files that were skipped during indexing (too large, binary, etc.). Helps understand what content is NOT searchable.'),
       },

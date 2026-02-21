@@ -17,7 +17,7 @@ const RagManageOutputSchema = z.object({
   stats: z.unknown().optional().describe('Statistics (for stats action)'),
   contentList: z.array(z.unknown()).optional().describe('Content list (for stats action)'),
   deleted: z.boolean().optional().describe('Whether deletion succeeded'),
-  deletedCount: z.number().optional().describe('Number of items deleted'),
+  deletedCount: z.coerce.number().optional().describe('Number of items deleted'),
   collections: z.array(z.string()).optional().describe('Collection names'),
   sample: z.array(z.unknown()).optional().describe('Sample items'),
   results: z.array(z.unknown()).optional().describe('Search results'),
@@ -48,7 +48,7 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
         bundleId: z.string().optional().describe('Bundle ID - for delete/inspect/search_raw. Use bundleId from `list` output to delete specific content.'),
         collection: z.string().optional().describe('Collection name (for sample or drop_collection, e.g., "preflight_rag_l1_pdf")'),
         query: z.string().optional().describe('Search query text (required for search_raw)'),
-        limit: z.number().optional().describe('Max number of results (default 5)'),
+        limit: z.coerce.number().optional().describe('Max number of results (default 5)'),
         paperId: z.string().optional().describe('Paper ID for diagnose action (e.g., "arxiv:2601.02553")'),
       }),
       outputSchema: RagManageOutputSchema,
@@ -81,15 +81,15 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
             const repos = items.filter(i => i.type === 'repo');
             const repoBundleIds = new Set(repos.map(r => r.bundleId).filter(Boolean));
             // Papers: pdf type, or doc type WITH paperId
-            const papers = items.filter(i => 
-              i.type === 'pdf' || 
+            const papers = items.filter(i =>
+              i.type === 'pdf' ||
               (i.type === 'doc' && i.paperId)
             );
             // Code docs: doc type without paperId, but NOT already shown in repos
             // (exclude items whose bundleId is already in repos to avoid duplication)
-            const codeDocs = items.filter(i => 
-              i.type === 'doc' && 
-              !i.paperId && 
+            const codeDocs = items.filter(i =>
+              i.type === 'doc' &&
+              !i.paperId &&
               !repoBundleIds.has(i.bundleId) &&  // Not already in repos
               (i.id.startsWith('bundle:') || (i as any).relatedPaperId)
             );
@@ -119,8 +119,8 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
                   // Show paper title if available
                   if (item.paperTitle) {
                     // Truncate long titles
-                    const title = item.paperTitle.length > 70 
-                      ? item.paperTitle.slice(0, 67) + '...' 
+                    const title = item.paperTitle.length > 70
+                      ? item.paperTitle.slice(0, 67) + '...'
                       : item.paperTitle;
                     textResponse += `  📝 ${title}\n`;
                   }
@@ -204,14 +204,14 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
             const repos = contentList.filter(i => i.type === 'repo');
             const repoBundleIds = new Set(repos.map(r => r.bundleId).filter(Boolean));
             // Papers: pdf type, or doc type WITH paperId
-            const papers = contentList.filter(i => 
-              i.type === 'pdf' || 
+            const papers = contentList.filter(i =>
+              i.type === 'pdf' ||
               (i.type === 'doc' && i.paperId)
             );
             // Code docs: doc type without paperId, but NOT already shown in repos
-            const codeDocs = contentList.filter(i => 
-              i.type === 'doc' && 
-              !i.paperId && 
+            const codeDocs = contentList.filter(i =>
+              i.type === 'doc' &&
+              !i.paperId &&
               !repoBundleIds.has(i.bundleId) &&  // Not already in repos
               (i.id.startsWith('bundle:') || (i as any).relatedPaperId)
             );
@@ -275,23 +275,23 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
             // List all collections with document counts
             const collections = await chromaDB.listAllCollections();
             const collectionStats: Array<{ name: string; count: number; metadata?: Record<string, unknown> }> = [];
-            
+
             for (const col of collections) {
               const count = await chromaDB.getCollectionCount(col.name);
               collectionStats.push({ name: col.name, count, metadata: col.metadata });
             }
-            
+
             // Sort by name for better display
             collectionStats.sort((a, b) => a.name.localeCompare(b.name));
-            
+
             structuredContent.collections = collectionStats;
 
             textResponse += `📦 ChromaDB Collections (${collections.length} total)\n\n`;
-            
+
             // Group by type for display
             const hierarchical = collectionStats.filter(c => c.name.includes('_rag_l'));
             const legacy = collectionStats.filter(c => !c.name.includes('_rag_l'));
-            
+
             if (hierarchical.length > 0) {
               textResponse += `**Hierarchical (Phase 3):**\n`;
               for (const col of hierarchical) {
@@ -300,14 +300,14 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
               }
               textResponse += `\n`;
             }
-            
+
             if (legacy.length > 0) {
               textResponse += `**Legacy/Other:**\n`;
               for (const col of legacy) {
                 textResponse += `  • ${col.name}: ${col.count} docs\n`;
               }
             }
-            
+
             // Summary
             const totalDocs = collectionStats.reduce((sum, c) => sum + c.count, 0);
             textResponse += `\n**Total:** ${totalDocs} documents across ${collections.length} collections\n`;
@@ -321,7 +321,7 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
             }
 
             const maxSamples = limit ?? 5;
-            
+
             // Get collection count first
             const count = await chromaDB.getCollectionCount(collection);
             if (count === 0) {
@@ -338,7 +338,7 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
             const embedding = await getEmbeddingProvider(cfg);
             // Use a generic query to get diverse samples
             const sampleEmbedding = await embedding.embed('document content text');
-            
+
             // Query the specific collection directly
             const basePath = `/api/v2/tenants/default_tenant/databases/default_database`;
             const collectionsResponse = await fetch(
@@ -346,7 +346,7 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
             );
             const allCollections = await collectionsResponse.json() as Array<{ name: string; id: string }>;
             const targetCol = allCollections.find((c: { name: string }) => c.name === collection);
-            
+
             if (!targetCol) {
               textResponse += `⚠️ Collection "${collection}" not found.\n`;
               break;
@@ -371,13 +371,13 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
             };
 
             textResponse += `📋 Sample from "${collection}" (${count} total, showing ${maxSamples})\n\n`;
-            
+
             if (queryResult.ids[0]) {
               for (let i = 0; i < queryResult.ids[0].length; i++) {
                 const id = queryResult.ids[0][i];
                 const doc = queryResult.documents?.[0]?.[i] ?? '';
                 const meta = queryResult.metadatas?.[0]?.[i] ?? {};
-                
+
                 textResponse += `--- Sample ${i + 1} ---\n`;
                 textResponse += `ID: ${id}\n`;
                 if (meta.paperId) textResponse += `Paper: ${meta.paperId}\n`;
@@ -388,12 +388,12 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
                 if (meta.pageIndex) textResponse += `Page: ${meta.pageIndex}\n`;
                 if (meta.collectionLevel) textResponse += `Level: ${meta.collectionLevel}\n`;
                 if (meta.fieldName) textResponse += `FieldName: ${meta.fieldName}\n`;
-                
+
                 const preview = doc.length > 200 ? doc.slice(0, 200) + '...' : doc;
                 textResponse += `Content: ${preview}\n\n`;
               }
             }
-            
+
             structuredContent.collection = collection;
             structuredContent.totalCount = count;
             structuredContent.sampleCount = queryResult.ids[0]?.length ?? 0;
@@ -443,29 +443,29 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
             // Drop all hierarchical collections to truly delete everything
             const collectionsToDelete = [
               'preflight_rag_l1_pdf',
-              'preflight_rag_l1_doc', 
+              'preflight_rag_l1_doc',
               'preflight_rag_l1_repo',
               'preflight_rag_l1_web',
               'preflight_rag_l1_memory',
               'preflight_rag_l2_section',
               'preflight_rag_l3_chunk',
             ];
-            
+
             const basePath = `/api/v2/tenants/default_tenant/databases/default_database`;
             let totalDeleted = 0;
             let collectionsDeleted = 0;
-            
+
             for (const colName of collectionsToDelete) {
               try {
                 // Get count before dropping
                 const countBefore = await chromaDB.getCollectionCount(colName);
                 if (countBefore === 0) continue;
-                
+
                 // Drop the collection
                 const deleteResponse = await fetch(`${cfg.chromaUrl}${basePath}/collections/${colName}`, {
                   method: 'DELETE',
                 });
-                
+
                 if (deleteResponse.ok) {
                   totalDeleted += countBefore;
                   collectionsDeleted++;
@@ -474,7 +474,7 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
                 // Collection doesn't exist, skip
               }
             }
-            
+
             if (totalDeleted === 0) {
               textResponse += '⚠️ No content to delete.\n';
               structuredContent.deleted = false;
@@ -498,7 +498,7 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
             const collectionsResponse = await fetch(`${cfg.chromaUrl}${basePath}/collections`);
             const allCollections = await collectionsResponse.json() as Array<{ name: string; id: string }>;
             const targetCol = allCollections.find((c: { name: string }) => c.name === collection);
-            
+
             if (!targetCol) {
               textResponse += `⚠️ Collection "${collection}" not found.\n`;
               structuredContent.dropped = false;
@@ -530,7 +530,7 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
           case 'inspect': {
             // Use hierarchical index (Phase 3)
             const maxChunks = limit ?? 5;
-            
+
             // Check embedding configuration
             if (!cfg.semanticSearchEnabled && !cfg.openaiApiKey && cfg.embeddingProvider !== 'ollama') {
               throw new Error('Embedding not configured. Cannot inspect.');
@@ -539,13 +539,13 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
             // Use a generic query to get diverse samples from L2+L3
             const embedding = await getEmbeddingProvider(cfg);
             const sampleEmbedding = await embedding.embed('document content section text');
-            
+
             const filter = bundleId ? { bundleId } : undefined;
             const results = await chromaDB.queryHierarchicalRaw(sampleEmbedding.vector, maxChunks, filter);
             structuredContent.chunks = results.chunks;
 
             textResponse += `🔍 Inspecting ${results.chunks.length} chunks (L2+L3)${bundleId ? ` (bundleId: ${bundleId})` : ''}\n\n`;
-            
+
             for (let i = 0; i < results.chunks.length; i++) {
               const chunk = results.chunks[i]!;
               textResponse += `--- Chunk ${i + 1} ---\n`;
@@ -564,8 +564,8 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
                 textResponse += `Level: ${chunk.metadata.collectionLevel}\n`;
               }
               // Truncate content for display
-              const contentPreview = chunk.content.length > 300 
-                ? chunk.content.slice(0, 300) + '...' 
+              const contentPreview = chunk.content.length > 300
+                ? chunk.content.slice(0, 300) + '...'
                 : chunk.content;
               textResponse += `Content: ${contentPreview}\n\n`;
             }
@@ -611,8 +611,8 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
                 textResponse += `Level: ${chunk.metadata.collectionLevel}\n`;
               }
               // Truncate content for display
-              const contentPreview = chunk.content.length > 300 
-                ? chunk.content.slice(0, 300) + '...' 
+              const contentPreview = chunk.content.length > 300
+                ? chunk.content.slice(0, 300) + '...'
                 : chunk.content;
               textResponse += `Content: ${contentPreview}\n\n`;
             }
@@ -623,7 +623,7 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
             // Index Quality Diagnosis
             // First tries to read stored QA reports from indexing (produced by index-qa.ts)
             // Falls back to live analysis if no stored report found
-            
+
             // Key sections to check for academic papers
             // Note: 'method' includes common variations like methodology, approach
 
@@ -685,7 +685,7 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
 
                   const meta = data.metadatas?.[i];
                   const content = data.documents?.[i] ?? '';
-                  
+
                   // Match by paperId
                   if (targetPaperId && meta?.paperId === targetPaperId) {
                     const jsonMatch = content.match(/QA_REPORT_JSON:\n(.+)$/s);
@@ -693,13 +693,13 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
                       return { found: true, report: JSON.parse(jsonMatch[1]!) };
                     }
                   }
-                  
+
                   // Match by contentHash (stored in bundleId or contentHash field, or in id prefix)
                   if (targetContentHash) {
                     const matchesBundleId = meta?.bundleId === targetContentHash;
                     const matchesContentHash = meta?.contentHash === targetContentHash;
                     const matchesIdPrefix = id.startsWith(`qa_${targetContentHash.slice(0, 12)}`);
-                    
+
                     if (matchesBundleId || matchesContentHash || matchesIdPrefix) {
                       const jsonMatch = content.match(/QA_REPORT_JSON:\n(.+)$/s);
                       if (jsonMatch) {
@@ -729,7 +729,7 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
             }> => {
               // Collect all chunks for this paper from all collections
               const paperChunks: Array<{ id: string; content: string; metadata: Record<string, unknown>; level: string }> = [];
-              
+
               const collectionsToCheck = [
                 { name: 'preflight_rag_l1_pdf', level: 'L1' },
                 { name: 'preflight_rag_l2_section', level: 'L2' },
@@ -738,8 +738,8 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
 
               for (const col of collectionsToCheck) {
                 try {
-                  const whereClause = targetPaperId 
-                    ? { paperId: targetPaperId } 
+                  const whereClause = targetPaperId
+                    ? { paperId: targetPaperId }
                     : { bundleId: targetBundleId };
 
                   const colsResponse = await fetch(`${cfg.chromaUrl}${basePath}/collections`);
@@ -798,26 +798,26 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
 
               // Check L1 content
               const l1Content = l1Chunks.map(c => c.content.toLowerCase()).join(' ');
-              const hasAbstract = l1Content.includes('abstract') || l1Chunks.some(c => 
+              const hasAbstract = l1Content.includes('abstract') || l1Chunks.some(c =>
                 (c.metadata.sectionHeading as string)?.toLowerCase().includes('abstract')
               );
-              const hasIntroduction = l1Content.includes('introduction') || l1Chunks.some(c => 
+              const hasIntroduction = l1Content.includes('introduction') || l1Chunks.some(c =>
                 (c.metadata.sectionHeading as string)?.toLowerCase().includes('introduction')
               );
 
               // Check section coverage
-              const l2Headings = l2Chunks.map(c => 
+              const l2Headings = l2Chunks.map(c =>
                 ((c.metadata.sectionHeading as string) ?? '').toLowerCase()
               );
-              const l1Headings = l1Chunks.map(c => 
+              const l1Headings = l1Chunks.map(c =>
                 ((c.metadata.sectionHeading as string) ?? '').toLowerCase()
               );
               const allHeadings = [...l1Headings, ...l2Headings];
-              
+
               const coverage: Record<string, boolean> = {};
               for (const section of KEY_SECTIONS) {
                 if (section === 'method') {
-                  coverage[section] = allHeadings.some(h => 
+                  coverage[section] = allHeadings.some(h =>
                     METHOD_VARIATIONS.some(v => h.includes(v))
                   );
                 } else {
@@ -827,17 +827,17 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
               const coveredSections = Object.values(coverage).filter(Boolean).length;
 
               // Calculate stats
-              const avgL2Length = l2Chunks.length > 0 
-                ? l2Chunks.reduce((sum, c) => sum + c.content.length, 0) / l2Chunks.length 
+              const avgL2Length = l2Chunks.length > 0
+                ? l2Chunks.reduce((sum, c) => sum + c.content.length, 0) / l2Chunks.length
                 : 0;
-              const avgL3Length = l3Chunks.length > 0 
-                ? l3Chunks.reduce((sum, c) => sum + c.content.length, 0) / l3Chunks.length 
+              const avgL3Length = l3Chunks.length > 0
+                ? l3Chunks.reduce((sum, c) => sum + c.content.length, 0) / l3Chunks.length
                 : 0;
 
               // Calculate scores
               const l1Score = (hasAbstract ? 15 : 0) + (hasIntroduction ? 15 : 0);
               const sectionScore = Math.round((coveredSections / KEY_SECTIONS.length) * 30);
-              const depthScore = Math.min(20, 
+              const depthScore = Math.min(20,
                 (l2Chunks.length >= 3 ? 10 : l2Chunks.length * 3) +
                 (l3Chunks.length >= 10 ? 10 : l3Chunks.length)
               );
@@ -904,7 +904,7 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
               const hasMore = allItems.length > batchLimit;
 
               textResponse += `🔬 Batch Index Quality Diagnosis (${items.length}/${allItems.length} papers)${hasMore ? ' [limited]' : ''}\n\n`;
-              
+
               const results: Array<{ id: string; paperId?: string; score: number; grade: string; issues: string[]; source: 'stored' | 'live' }> = [];
               let totalScore = 0;
               let issueCount = 0;
@@ -912,12 +912,12 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
               for (const item of items) {
                 // First try to get stored QA report (preferred)
                 const storedQA = await tryGetStoredQAReport(item.paperId, item.contentHash);
-                
+
                 let score: number;
                 let grade: string;
                 let issues: string[];
                 let source: 'stored' | 'live';
-                
+
                 if (storedQA.found && storedQA.report) {
                   // Use stored QA report
                   score = storedQA.report.passed ? 100 : Math.max(0, 100 - storedQA.report.allIssues.length * 20);
@@ -932,7 +932,7 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
                   issues = result.issues;
                   source = 'live';
                 }
-                
+
                 // Use paperId if available, otherwise contentHash or id
                 let displayName = item.paperId;
                 if (!displayName && item.contentHash) {
@@ -953,7 +953,7 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
                 issueCount += issues.length;
 
                 // Compact output per paper
-                const issueText = issues.length > 0 
+                const issueText = issues.length > 0
                   ? ` - ${issues.slice(0, 2).join(', ')}${issues.length > 2 ? '...' : ''}`
                   : '';
                 const missingPaperId = !item.paperId;
@@ -987,10 +987,10 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
             // Single paper mode
             // First try to get stored QA report (from index-time QA)
             const contentList = await chromaDB.listHierarchicalContent();
-            const targetItem = paperId 
+            const targetItem = paperId
               ? contentList.find(i => i.paperId === paperId)
               : contentList.find(i => i.bundleId === bundleId);
-            
+
             const storedQA = await tryGetStoredQAReport(paperId, targetItem?.contentHash);
 
             if (storedQA.found && storedQA.report) {
@@ -1062,7 +1062,7 @@ export function registerRagManageTool({ server, cfg }: ToolDependencies): void {
             // Build detailed response for single paper (live analysis)
             textResponse += '🔬 Index Quality Diagnosis (live analysis)\n';
             textResponse += 'Paper: ' + (paperId ?? bundleId) + '\n\n';
-            
+
             textResponse += `📊 **Quality Score: ${result.score}/100 (Grade: ${result.grade})**\n`;
             textResponse += `  • L1 Presence: ${result.details.hasAbstract && result.details.hasIntroduction ? 30 : (result.details.hasAbstract || result.details.hasIntroduction ? 15 : 0)}/30 ${result.details.hasAbstract ? '✓Abstract' : '✗Abstract'} ${result.details.hasIntroduction ? '✓Intro' : '✗Intro'}\n`;
             const coveredCount = Object.values(result.sectionCoverage).filter(Boolean).length;

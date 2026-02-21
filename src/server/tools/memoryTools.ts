@@ -20,7 +20,7 @@ const AddMetadataSchema = z.object({
   object: z.string().optional(),
   category: z.string().optional(),
   tags: z.array(z.string()).optional(),
-  confidence: z.number().optional(),
+  confidence: z.coerce.number().optional(),
 }).optional();
 
 const FiltersSchema = z.object({
@@ -29,21 +29,21 @@ const FiltersSchema = z.object({
   subject: z.string().optional(),
   status: z.enum(['active', 'deprecated', 'disputed']).optional(),
   timeRangeMs: z.object({
-    startMs: z.number().optional(),
-    endMs: z.number().optional(),
+    startMs: z.coerce.number().optional(),
+    endMs: z.coerce.number().optional(),
   }).optional(),
 }).optional();
 
 const CompressStrategySchema = z.object({
   layer: z.enum(['episodic', 'semantic']),
-  minSimilarity: z.number().optional(),
-  maxCount: z.number().optional(),
+  minSimilarity: z.coerce.number().optional(),
+  maxCount: z.coerce.number().optional(),
 }).optional();
 
 const GcOptionsSchema = z.object({
   layers: z.array(z.enum(['episodic', 'semantic', 'procedural'])).optional(),
-  maxAgeDays: z.number().optional(),
-  minAccessCount: z.number().optional(),
+  maxAgeDays: z.coerce.number().optional(),
+  minAccessCount: z.coerce.number().optional(),
   dryRun: z.boolean().optional(),
 }).optional();
 
@@ -71,9 +71,9 @@ const MemoryToolInputSchema = z.object({
   // Search parameters
   query: z.string().optional(),
   layers: z.array(z.enum(['episodic', 'semantic', 'procedural'])).optional(),
-  topK: z.number().optional(),
-  limit: z.number().optional(),
-  offset: z.number().optional(),
+  topK: z.coerce.number().optional(),
+  limit: z.coerce.number().optional(),
+  offset: z.coerce.number().optional(),
   filters: FiltersSchema,
   // Reflect parameters
   reflectType: z.enum(['extract_facts', 'extract_patterns', 'compress']).optional(),
@@ -227,7 +227,7 @@ export function registerMemoryTools({ server, cfg }: ToolDependencies): void {
 
           case 'search': {
             const { query, layers, topK, limit, offset, filters } = rest;
-            
+
             let queryEmbedding: number[] | undefined;
             if (query) {
               const embeddingResult = await embeddingProvider.embed(query);
@@ -291,7 +291,7 @@ export function registerMemoryTools({ server, cfg }: ToolDependencies): void {
 
           case 'reflect': {
             const { reflectType, sourceIds, compressStrategy, patternSourceStrategy, topicQuery } = args;
-            
+
             switch (reflectType) {
               case 'extract_facts': {
                 // Extract facts from specified source IDs or all memories if none specified
@@ -346,9 +346,9 @@ export function registerMemoryTools({ server, cfg }: ToolDependencies): void {
                   }
                 } else if (compressStrategy) {
                   // Get memories based on strategy
-                  const layerMemories = await memoryStore.list({ 
-                    layer: compressStrategy.layer, 
-                    limit: compressStrategy.maxCount || 10 
+                  const layerMemories = await memoryStore.list({
+                    layer: compressStrategy.layer,
+                    limit: compressStrategy.maxCount || 10
                   });
                   memoriesToCompress = layerMemories.memories;
                 } else {
@@ -361,7 +361,7 @@ export function registerMemoryTools({ server, cfg }: ToolDependencies): void {
                   memoriesToCompress,
                 };
                 const compressResult = await compressMemories(compressOptions);
-                
+
                 // Convert CompressResult to ReflectOutput format
                 result = {
                   facts: compressResult.compressed.map(comp => ({

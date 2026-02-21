@@ -4,6 +4,7 @@
  */
 
 import * as z from 'zod';
+import { coerceJson } from './coerce.js';
 
 import type { ToolDependencies } from './types.js';
 import type { QueryMode } from '../../rag/types.js';
@@ -18,17 +19,17 @@ const RagQueryOutputSchema = z.object({
   embeddingEndpoint: z.string().optional().describe('Embedding API endpoint used'),
   indexed: z.boolean().optional(),
   skipped: z.boolean().optional().describe('Whether indexing was skipped due to duplicate content'),
-  chunksWritten: z.number().optional(),
-  entitiesCount: z.number().optional(),
-  relationsCount: z.number().optional(),
-  indexDurationMs: z.number().optional(),
+  chunksWritten: z.coerce.number().optional(),
+  entitiesCount: z.coerce.number().optional(),
+  relationsCount: z.coerce.number().optional(),
+  indexDurationMs: z.coerce.number().optional(),
   indexErrors: z.array(z.string()).optional(),
   contentHash: z.string().optional().describe('Source file SHA256 hash'),
   paperId: z.string().optional().describe('Paper identifier (e.g., arxiv:2601.14287)'),
   paperVersion: z.string().optional().describe('Paper version (e.g., v1)'),
-  existingChunks: z.number().optional().describe('Number of existing chunks (when skipped)'),
-  deletedChunks: z.number().optional().describe('Number of chunks deleted (when force=true)'),
-  qualityScore: z.number().optional().describe('QA quality score (0-100)'),
+  existingChunks: z.coerce.number().optional().describe('Number of existing chunks (when skipped)'),
+  deletedChunks: z.coerce.number().optional().describe('Number of chunks deleted (when force=true)'),
+  qualityScore: z.coerce.number().optional().describe('QA quality score (0-100)'),
   rejected: z.boolean().optional().describe('Whether indexing was rejected due to low quality'),
   rejectionReason: z.string().optional().describe('Reason for rejection'),
   qaSummary: z.object({
@@ -36,18 +37,18 @@ const RagQueryOutputSchema = z.object({
     parseOk: z.boolean(),
     chunkOk: z.boolean(),
     ragOk: z.boolean().optional(),
-    tablesDetected: z.number(),
-    figuresDetected: z.number(),
-    totalChunks: z.number(),
-    orphanChunks: z.number(),
-    ragPassedCount: z.number().optional(),
-    ragTotalCount: z.number().optional(),
-    avgFaithfulness: z.number().optional(),
+    tablesDetected: z.coerce.number(),
+    figuresDetected: z.coerce.number(),
+    totalChunks: z.coerce.number(),
+    orphanChunks: z.coerce.number(),
+    ragPassedCount: z.coerce.number().optional(),
+    ragTotalCount: z.coerce.number().optional(),
+    avgFaithfulness: z.coerce.number().optional(),
     issues: z.array(z.string()),
     isCodeRepo: z.boolean().optional(),
-    cardScore: z.number().optional(),
-    classCount: z.number().optional(),
-    functionCount: z.number().optional(),
+    cardScore: z.coerce.number().optional(),
+    classCount: z.coerce.number().optional(),
+    functionCount: z.coerce.number().optional(),
     hasReadme: z.boolean().optional(),
     relatedPaperId: z.string().optional(),
   }).optional().describe('QA summary with parse/chunk/RAG results (PDF) or CARD/Code/Docs (code repo)'),
@@ -60,7 +61,7 @@ const RagQueryOutputSchema = z.object({
         sourceType: z.string(),
         filePath: z.string().optional(),
         repoId: z.string().optional(),
-        pageIndex: z.number().optional().describe('Page number (1-indexed) in PDF'),
+        pageIndex: z.coerce.number().optional().describe('Page number (1-indexed) in PDF'),
         sectionHeading: z.string().optional().describe('Section heading (e.g., "3.2 Method", "Abstract")'),
         bundleId: z.string().optional().describe('Bundle ID this evidence came from'),
         paperId: z.string().optional().describe('Paper identifier (e.g., arXiv:2601.02553)'),
@@ -70,28 +71,28 @@ const RagQueryOutputSchema = z.object({
   relatedEntities: z.array(z.string()).optional(),
   stats: z
     .object({
-      chunksRetrieved: z.number(),
-      entitiesFound: z.number().optional(),
-      graphExpansion: z.number().optional(),
-      contextCompletionHops: z.number().optional(),
+      chunksRetrieved: z.coerce.number(),
+      entitiesFound: z.coerce.number().optional(),
+      graphExpansion: z.coerce.number().optional(),
+      contextCompletionHops: z.coerce.number().optional(),
       igpStats: z
         .object({
-          originalCount: z.number(),
-          prunedCount: z.number(),
-          pruningRatio: z.number(),
-          iterations: z.number(),
-          durationMs: z.number(),
+          originalCount: z.coerce.number(),
+          prunedCount: z.coerce.number(),
+          pruningRatio: z.coerce.number(),
+          iterations: z.coerce.number(),
+          durationMs: z.coerce.number(),
         })
         .optional(),
       hierarchicalStats: z
         .object({
-          l1ByType: z.record(z.string(), z.number()),
-          l1TotalFound: z.number(),
-          l2l3ChunksFound: z.number(),
-          durationMs: z.number(),
+          l1ByType: z.record(z.string(), z.coerce.number()),
+          l1TotalFound: z.coerce.number(),
+          l2l3ChunksFound: z.coerce.number(),
+          durationMs: z.coerce.number(),
         })
         .optional(),
-      durationMs: z.number(),
+      durationMs: z.coerce.number(),
     })
     .optional(),
 });
@@ -115,11 +116,11 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
         'Use when: "RAG", "向量检索", "index", "语义问答", "索引文档仓库", "问问题", "ask question", "ChromaDB", "向量数据库".',
       inputSchema: {
         bundleId: z.string().optional().describe('Bundle ID to index or query (single mode, backward compatible)'),
-        bundleIds: z.array(z.string()).optional().describe('Multiple bundle IDs to query (Phase 1: cross-bundle retrieval)'),
+        bundleIds: coerceJson(z.array(z.string()).optional()).describe('Multiple bundle IDs to query (Phase 1: cross-bundle retrieval)'),
         crossBundleMode: z.enum(['single', 'specified', 'all']).optional().describe('Cross-bundle mode: single (default), specified (use bundleIds), all (query everything)'),
         index: z.boolean().optional().describe('Index bundle to vector DB (default: false). Skips if content already indexed.'),
         force: z.boolean().optional().describe('Force replace existing content with same hash. Use when: switching parser (MinerU→VLM), updating paper version, or re-indexing after bundle changes. Deletes old chunks before indexing new ones.'),
-        qualityThreshold: z.number().optional().describe(
+        qualityThreshold: z.coerce.number().optional().describe(
           'Minimum QA score (0-100) for indexing acceptance. ' +
           'If QA score < threshold, indexing is rejected and chunks are rolled back. ' +
           'Recommended: 60 for production quality assurance. ' +
@@ -127,7 +128,7 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
         ),
         question: z.string().optional().describe('Question to ask about the bundle'),
         mode: z.enum(['naive', 'local', 'hybrid']).optional().describe('Query mode (default: hybrid)'),
-        topK: z.number().optional().describe('Number of chunks to retrieve (default: 10)'),
+        topK: z.coerce.number().optional().describe('Number of chunks to retrieve (default: 10)'),
         repoId: z.string().optional().describe('Filter by repo ID'),
         expandToParent: z.boolean().optional().describe('Expand to parent chunks for more context (default: true)'),
         expandToSiblings: z.boolean().optional().describe('Expand to sibling chunks at same level (default: true)'),
@@ -341,7 +342,7 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
             textResponse += `   Found ${pc.docFileCount} markdown files in documentation repo.\n`;
             textResponse += `   Estimated indexing time: ~${pc.estimatedTimeMinutes} minutes.\n`;
             textResponse += `   To proceed, call again with \`confirmLargeDocIndex: true\`.\n`;
-            
+
             return {
               content: [{ type: 'text', text: textResponse }],
               structuredContent: {
@@ -350,7 +351,7 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
               },
             };
           }
-          
+
           if (indexResult.rejected) {
             // Rejected due to low quality
             textResponse += `❌ Rejected: ${indexResult.rejectionReason}\n`;
@@ -363,7 +364,7 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
             if (indexResult.qaSummary) {
               const qa = indexResult.qaSummary;
               textResponse += `   📊 QA: FAILED (score: ${indexResult.qualityScore})\n`;
-              
+
               if (qa.isCodeRepo) {
                 // Code repo specific display format
                 textResponse += `      CARD: ${qa.parseOk ? 'OK' : 'FAIL'} (completeness: ${qa.cardScore ?? 0}%)\n`;
@@ -402,7 +403,7 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
               const qa = indexResult.qaSummary;
               const statusEmoji = qa.passed ? 'PASSED' : 'WARNING';
               textResponse += `   📊 QA: ${statusEmoji} (score: ${indexResult.qualityScore})\n`;
-              
+
               if (qa.isCodeRepo) {
                 // Code repo specific display format
                 textResponse += `      CARD: ${qa.parseOk ? 'OK' : 'FAIL'} (completeness: ${qa.cardScore ?? 0}%)\n`;
@@ -440,7 +441,7 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
 
           if (queryResult.sources.length > 0) {
             textResponse += '\n📚 Sources:\n';
-            
+
             // Phase 1.4: Group sources by paperId for cross-bundle queries
             const sourcesByPaper = new Map<string, typeof queryResult.sources>();
             for (const source of queryResult.sources) {
@@ -458,27 +459,27 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
               if (sourcesByPaper.size > 1) {
                 textResponse += `   📄 ${paperId}:\n`;
               }
-              
+
               // Format each source with enhanced metadata
               for (const s of sources.slice(0, 5)) {
                 // Build source label: [paperId] Section X.Y, page N
                 let sourceLabel = '';
-                
+
                 // Add paperId prefix if available
                 if (s.paperId) {
                   sourceLabel += `[${s.paperId}]`;
                 }
-                
+
                 // Add section/heading info from metadata
                 if (s.sectionHeading) {
                   sourceLabel += ` ${s.sectionHeading}`;
                 }
-                
+
                 // Add page number
                 if (s.pageIndex) {
                   sourceLabel += `, page ${s.pageIndex}`;
                 }
-                
+
                 // Fallback: use sourceType and repoId if no paperId
                 if (!sourceLabel) {
                   sourceLabel = `[${s.sourceType}] ${s.repoId ?? s.filePath ?? s.chunkId}`;
@@ -486,7 +487,7 @@ export function registerRagQueryTool({ server, cfg }: ToolDependencies): void {
                     sourceLabel += ` (p.${s.pageIndex})`;
                   }
                 }
-                
+
                 const indent = sourcesByPaper.size > 1 ? '      ' : '   ';
                 textResponse += `${indent}${globalIndex}. ${sourceLabel}\n`;
                 globalIndex++;

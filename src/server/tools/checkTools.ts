@@ -10,9 +10,9 @@ const CheckOutputSchema = z.object({
   success: z.boolean(),
   result: z.string().optional(),
   error: z.string().optional(),
-  totalIssues: z.number().optional(),
-  issuesByCheck: z.record(z.string(), z.number()).optional(),
-  issuesBySeverity: z.record(z.string(), z.number()).optional(),
+  totalIssues: z.coerce.number().optional(),
+  issuesByCheck: z.record(z.string(), z.coerce.number()).optional(),
+  issuesBySeverity: z.record(z.string(), z.coerce.number()).optional(),
 });
 
 type CheckOutput = z.infer<typeof CheckOutputSchema>;

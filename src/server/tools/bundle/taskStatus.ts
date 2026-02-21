@@ -17,8 +17,8 @@ const TaskStatusOutputSchema = z.object({
     taskId: z.string(),
     fingerprint: z.string(),
     phase: z.string(),
-    progress: z.number(),
-    total: z.number().optional(),
+    progress: z.coerce.number(),
+    total: z.coerce.number().optional(),
     message: z.string(),
     startedAt: z.string(),
     updatedAt: z.string(),
@@ -32,13 +32,13 @@ const TaskStatusOutputSchema = z.object({
     startedAt: z.string().optional(),
     taskId: z.string().optional(),
     repos: z.array(z.string()).optional(),
-    elapsedSeconds: z.number().optional(),
+    elapsedSeconds: z.coerce.number().optional(),
   }).optional(),
   activeTasks: z.array(z.object({
     taskId: z.string(),
     fingerprint: z.string(),
     phase: z.string(),
-    progress: z.number(),
+    progress: z.coerce.number(),
     message: z.string(),
     repos: z.array(z.string()),
     startedAt: z.string(),
@@ -89,7 +89,7 @@ export function registerGetTaskStatusTool({ server, cfg }: ToolDependencies, cor
           if (task) {
             result = { found: true, task };
           }
-          
+
           const lock = await checkInProgressLock(cfg, fingerprint);
           if (lock) {
             const elapsedSeconds = lock.startedAt

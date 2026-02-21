@@ -11,8 +11,8 @@ import { wrapPreflightError } from '../../../mcp/errorKinds.js';
 
 
 const CleanupOrphansOutputSchema = z.object({
-  totalFound: z.number(),
-  totalCleaned: z.number(),
+  totalFound: z.coerce.number(),
+  totalCleaned: z.coerce.number(),
   details: z.array(
     z.object({
       storageDir: z.string(),
@@ -42,7 +42,7 @@ export function registerCleanupOrphansTool({ server, cfg }: ToolDependencies, co
       description: 'Remove incomplete or corrupted bundles (bundles without valid manifest.json). Safe to run anytime. Use when: "clean up broken bundles", "remove orphans", "清理孤儿bundle", "清除损坏的bundle".',
       inputSchema: {
         dryRun: z.boolean().default(true).describe('If true, only report orphans without deleting. Set to false to actually delete.'),
-        minAgeHours: z.number().default(1).describe('Only clean bundles older than N hours (safety margin to avoid race conditions).'),
+        minAgeHours: z.coerce.number().default(1).describe('Only clean bundles older than N hours (safety margin to avoid race conditions).'),
       },
       outputSchema: CleanupOrphansOutputSchema,
       annotations: { destructiveHint: true },

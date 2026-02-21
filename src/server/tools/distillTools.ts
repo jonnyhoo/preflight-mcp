@@ -19,7 +19,7 @@ const DistillOutputSchema = z.object({
     designHighlights: z.array(z.string()),
     quickStart: z.string(),
     keyAPIs: z.array(z.string()),
-    confidence: z.number(),
+    confidence: z.coerce.number(),
     warnings: z.array(z.string()),
   }).optional(),
   llmUsed: z.boolean().optional(),

@@ -34,11 +34,11 @@ const CreateBundleOutputSchema = z.object({
       headSha: z.string().optional(),
       notes: z.array(z.string()).optional(),
       baseUrl: z.string().optional(),
-      pageCount: z.number().optional(),
+      pageCount: z.coerce.number().optional(),
       usedLlmsTxt: z.boolean().optional(),
       pdfUrl: z.string().optional(),
       localPath: z.string().optional(),
-      fileSize: z.number().optional(),
+      fileSize: z.coerce.number().optional(),
     })
   ).optional(),
   warnings: z.array(z.string()).optional(),
@@ -48,13 +48,13 @@ const CreateBundleOutputSchema = z.object({
   fingerprint: z.string().optional(),
   requestedRepos: z.array(z.string()).optional(),
   startedAt: z.string().optional(),
-  elapsedSeconds: z.number().optional(),
+  elapsedSeconds: z.coerce.number().optional(),
   currentPhase: z.string().optional(),
-  currentProgress: z.number().optional(),
+  currentProgress: z.coerce.number().optional(),
   currentMessage: z.string().optional(),
   batchResult: z.boolean().optional().describe('True when batch PDF mode was used'),
-  bundleCount: z.number().optional().describe('Number of bundles created in batch'),
-  failedCount: z.number().optional().describe('Number of failed PDFs in batch'),
+  bundleCount: z.coerce.number().optional().describe('Number of bundles created in batch'),
+  failedCount: z.coerce.number().optional().describe('Number of failed PDFs in batch'),
   bundles: z.array(z.object({
     bundleId: z.string(),
     source: z.string().optional(),
@@ -63,7 +63,7 @@ const CreateBundleOutputSchema = z.object({
     source: z.string(),
     error: z.string(),
   })).optional().describe('Failed PDFs in batch mode'),
-  totalTimeMs: z.number().optional().describe('Total batch processing time'),
+  totalTimeMs: z.coerce.number().optional().describe('Total batch processing time'),
 });
 
 type CreateBundleOutput = z.infer<typeof CreateBundleOutputSchema>;
@@ -99,11 +99,11 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
         // Check for config warnings that LLM should know about
         const configWarnings = getConfigWarnings();
         const normalizedRepos = args.repos.map(normalizeCreateRepoInput);
-        
+
         // Check if this is a multi-PDF request that should create separate bundles
         const isPdfOnlyRequest = normalizedRepos.length > 0 && normalizedRepos.every((r) => r.kind === 'pdf');
         const hasMultiplePdfs = isPdfOnlyRequest && args.repos.length > 1;
-        
+
         // Multi-PDF: Create separate bundles for each PDF (batch parse, individual bundles)
         if (hasMultiplePdfs) {
           const pdfInputs = args.repos.map((r: any) => ({
@@ -113,15 +113,15 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
             vlmParser: r.vlmParser,
             ruleBasedParser: r.ruleBasedParser,
           }));
-          
+
           const batchResult = await createPdfBundlesBatch(cfg, pdfInputs, {
             ifExists: args.ifExists as any,
           });
-          
+
           server.sendResourceListChanged();
-          
+
           let textResponse = '';
-          
+
           // Show config warnings first
           if (configWarnings.length > 0) {
             textResponse += '⚠️ **Configuration Issues:**\n';
@@ -130,10 +130,10 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
             }
             textResponse += '\n';
           }
-          
+
           textResponse += `✅ **Batch PDF Bundle Creation Complete**\n`;
           textResponse += `Created: ${batchResult.bundles.length} bundles | Failed: ${batchResult.failed.length} | Time: ${Math.round(batchResult.totalTimeMs / 1000)}s\n\n`;
-          
+
           // List created bundles
           if (batchResult.bundles.length > 0) {
             textResponse += '**Created Bundles:**\n';
@@ -144,7 +144,7 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
             }
             textResponse += '\n';
           }
-          
+
           // List failures
           if (batchResult.failed.length > 0) {
             textResponse += '**Failed:**\n';
@@ -153,12 +153,12 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
             }
             textResponse += '\n';
           }
-          
+
         textResponse += '💡 **Next steps:**\n';
         textResponse += '- Use `preflight_get_overview` with a bundle ID to see title, abstract, and structure\n';
         textResponse += '- Use `preflight_search_and_read` to search specific content\n';
         textResponse += '- Use `preflight_rag` with `index: true` to enable RAG queries\n';
-          
+
           return {
             content: [{ type: 'text', text: textResponse }],
             structuredContent: {
@@ -174,12 +174,12 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
             },
           };
         }
-        
+
         // Check if all inputs are document files (PDF, Office, etc.)
         const localPaths = normalizedRepos
           .filter((r): r is Extract<(typeof normalizedRepos)[number], { kind: 'local' }> => r.kind === 'local' && !!r.path)
           .map((r) => r.path);
-        
+
         let documentPaths: string[] = [];
         for (const p of localPaths) {
           try {
@@ -191,21 +191,21 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
             // Path doesn't exist or can't be accessed, let createBundle handle it
           }
         }
-        
+
         // If all local inputs are document files, use createDocumentBundle
         if (documentPaths.length > 0 && documentPaths.length === localPaths.length && args.repos.length === localPaths.length) {
           const docResult = await createDocumentBundle(cfg, documentPaths, {
-            ifExists: args.ifExists === 'returnExisting' ? 'returnExisting' 
-                    : args.ifExists === 'updateExisting' ? 'update' 
+            ifExists: args.ifExists === 'returnExisting' ? 'returnExisting'
+                    : args.ifExists === 'updateExisting' ? 'update'
                     : 'error',
           });
-          
+
           const resources = {
             manifest: toBundleFileUri({ bundleId: docResult.bundleId, relativePath: 'manifest.json' }),
           };
-          
+
           server.sendResourceListChanged();
-          
+
           // Build response with config warnings first
           let textResponse = '';
           if (configWarnings.length > 0) {
@@ -215,11 +215,11 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
             }
             textResponse += '\n';
           }
-          
+
           textResponse += docResult.created
             ? `✅ Document bundle created: ${docResult.bundleId}\nParsed: ${docResult.parsed} document(s)${docResult.skipped > 0 ? `, skipped: ${docResult.skipped}` : ''}`
             : `✅ Document bundle already exists: ${docResult.bundleId}`;
-          
+
           // Read and include the parsed md content directly
           const { findBundleStorageDir, getBundlePathsForId } = await import('../../../bundle/service.js');
           const storageDir = await findBundleStorageDir(cfg.storageDirs, docResult.bundleId);
@@ -244,7 +244,7 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
               // docs dir not found, skip
             }
           }
-          
+
           const out: CreateBundleOutput = {
             bundleId: docResult.bundleId,
             resources,
@@ -259,7 +259,7 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
             structuredContent: out,
           };
         }
-        
+
         const summary = await createBundle(
           cfg,
           {
@@ -299,7 +299,7 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
         };
 
         let textResponse = '';
-        
+
         // Show config warnings first (critical for LLM to understand issues)
         if (configWarnings.length > 0) {
           textResponse += '⚠️ **Configuration Issues:**\n';
@@ -308,7 +308,7 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
           }
           textResponse += '\n';
         }
-        
+
         if (summary.warnings && summary.warnings.length > 0) {
           textResponse += '📢 **Network Issues Encountered:**\n';
           for (const warn of summary.warnings) {
@@ -339,10 +339,10 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
         // Unified Next steps for all bundle types
         textResponse += '\n---\n\n';
         textResponse += '💡 **Next steps:**\n';
-        
+
         // Detect bundle type for appropriate hints
         const isWebOnly = normalizedRepos.length > 0 && normalizedRepos.every((r) => r.kind === 'web');
-        
+
         if (isPdfOnly) {
           textResponse += '- Use `preflight_search_and_read` to search specific content\n';
           textResponse += '- Use `preflight_read_file` with the `.md` file to read full document\n';
@@ -366,10 +366,10 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
           const elapsedSec = err.startedAt
             ? Math.round((Date.now() - new Date(err.startedAt).getTime()) / 1000)
             : 0;
-          
+
           const tracker = getProgressTracker();
           const task = err.taskId ? tracker.getTask(err.taskId) : undefined;
-          
+
           const out: CreateBundleOutput = {
             status: 'in-progress' as const,
             message: `Bundle creation already in progress. Use preflight_get_task_status to check progress.`,
@@ -382,7 +382,7 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
             currentProgress: task?.progress,
             currentMessage: task?.message,
           };
-          
+
           return {
             content: [{ type: 'text', text: `⚠️ Bundle creation in progress (${elapsedSec}s elapsed). ${task ? `Current: ${task.phase} (${task.progress}%) - ${task.message}` : 'Use preflight_get_task_status to check progress.'}` }],
             structuredContent: out,

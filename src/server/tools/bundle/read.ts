@@ -12,6 +12,7 @@ import { findBundleStorageDir, getBundlePathsForId } from '../../../bundle/servi
 import { readManifest } from '../../../bundle/manifest.js';
 import { safeJoin } from '../../../mcp/uris.js';
 import { wrapPreflightError } from '../../../mcp/errorKinds.js';
+import { coerceJson } from '../coerce.js';
 import { BundleNotFoundError } from '../../../errors.js';
 import { extractOutlineWasm, type SymbolOutline } from '../../../ast/index.js';
 
@@ -24,14 +25,14 @@ const ReadFileOutputSchema = z.object({
   files: z.record(z.string(), z.string().nullable()).optional(),
   sections: z.array(z.string()).optional(),
   lineInfo: z.object({
-    totalLines: z.number(),
-    ranges: z.array(z.object({ start: z.number(), end: z.number() })),
+    totalLines: z.coerce.number(),
+    ranges: z.array(z.object({ start: z.coerce.number(), end: z.coerce.number() })),
   }).optional(),
   outline: z.array(z.object({
     kind: z.enum(['function', 'class', 'method', 'interface', 'type', 'enum', 'variable']),
     name: z.string(),
     signature: z.string().optional(),
-    range: z.object({ startLine: z.number(), endLine: z.number() }),
+    range: z.object({ startLine: z.coerce.number(), endLine: z.coerce.number() }),
     exported: z.boolean(),
     children: z.array(z.any()).optional(),
   })).optional(),
@@ -42,12 +43,12 @@ const ReadFileOutputSchema = z.object({
     outline: z.array(z.any()).optional(),
     content: z.string().optional(),
     language: z.string().optional(),
-    charCount: z.number(),
+    charCount: z.coerce.number(),
   })).optional(),
   coreStats: z.object({
-    totalFiles: z.number(),
-    totalChars: z.number(),
-    truncatedFiles: z.number(),
+    totalFiles: z.coerce.number(),
+    totalChars: z.coerce.number(),
+    truncatedFiles: z.coerce.number(),
   }).optional(),
 });
 
@@ -143,15 +144,15 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
           'core: ⭐ NEW - reads core source files (top imported + entry points) with outline and content.'
         ),
         coreOptions: z.object({
-          maxFiles: z.number().int().min(1).max(10).default(5).describe('Max core files to read.'),
+          maxFiles: z.coerce.number().int().min(1).max(10).default(5).describe('Max core files to read.'),
           includeOutline: z.boolean().default(true).describe('Include symbol outline for each file.'),
           includeContent: z.boolean().default(true).describe('Include full file content.'),
-          tokenBudget: z.number().int().optional().describe('Approximate token budget (chars/4). Files exceeding budget return outline only.'),
+          tokenBudget: z.coerce.number().int().optional().describe('Approximate token budget (chars/4). Files exceeding budget return outline only.'),
         }).optional().describe('Options for mode="core". Controls which files and how much content to return.'),
         includeReadme: z.boolean().optional().default(false).describe('Include repo README files in batch mode (can be large).'),
         includeDepsGraph: z.boolean().optional().default(false).describe('Include deps/dependency-graph.json in batch mode.'),
         withLineNumbers: z.boolean().optional().default(false).describe('If true, prefix each line with line number in "N|" format for evidence citation.'),
-        ranges: z.array(z.string()).optional().describe('Line ranges to read, e.g. ["20-80", "100-120"]. Each range is "start-end" (1-indexed, inclusive). If omitted, reads entire file.'),
+        ranges: coerceJson(z.array(z.string()).optional()).describe('Line ranges to read, e.g. ["20-80", "100-120"]. Each range is "start-end" (1-indexed, inclusive). If omitted, reads entire file.'),
         outline: z.boolean().optional().default(false).describe(
           'If true, return symbol outline instead of file content. ' +
           'Returns function/class/method/interface/type/enum with line ranges. ' +
@@ -231,7 +232,7 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
           // Outline mode
           if (args.outline) {
             const outlineResult = await extractOutlineWasm(args.file, normalizedContent);
-            
+
             if (!outlineResult) {
               return {
                 content: [{ type: 'text', text: `[${args.file}] Outline not supported for this file type. Supported: .ts, .tsx, .js, .jsx` }],
@@ -241,7 +242,7 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
                 },
               };
             }
-            
+
             const formatOutlineText = (symbols: SymbolOutline[], indent = ''): string[] => {
               const lines: string[] = [];
               for (let i = 0; i < symbols.length; i++) {
@@ -251,7 +252,7 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
                 const exportMark = sym.exported ? '⚡' : '';
                 const sig = sym.signature ? sym.signature : '';
                 lines.push(`${prefix}${exportMark}${sym.kind} ${sym.name}${sig} :${sym.range.startLine}-${sym.range.endLine}`);
-                
+
                 if (sym.children && sym.children.length > 0) {
                   const childIndent = indent + (isLast ? '    ' : '│   ');
                   lines.push(...formatOutlineText(sym.children, childIndent));
@@ -259,11 +260,11 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
               }
               return lines;
             };
-            
+
             const outlineText = formatOutlineText(outlineResult.outline);
             const totalSymbols = outlineResult.outline.length;
             const header = `[${args.file}] Outline (${totalSymbols} top-level symbols, ${outlineResult.language}):\n`;
-            
+
             return {
               content: [{ type: 'text', text: header + outlineText.join('\n') }],
               structuredContent: {
@@ -278,20 +279,20 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
           // Symbol-based reading
           if (args.symbol) {
             const outlineResult = await extractOutlineWasm(args.file, normalizedContent);
-            
+
             if (!outlineResult) {
               return {
                 content: [{ type: 'text', text: `[${args.file}] Symbol lookup not supported for this file type. Supported: .ts, .tsx, .js, .jsx, .py` }],
                 structuredContent: { bundleId: args.bundleId, file: args.file },
               };
             }
-            
+
             const parts = args.symbol.split('.');
             const targetName = parts[0]!;
             const methodName = parts[1];
-            
+
             let foundSymbol: SymbolOutline | undefined;
-            
+
             for (const sym of outlineResult.outline) {
               if (sym.name === targetName) {
                 if (methodName && sym.children) {
@@ -306,7 +307,7 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
                 }
               }
             }
-            
+
             if (!foundSymbol) {
               const available = outlineResult.outline.map(s => {
                 if (s.children && s.children.length > 0) {
@@ -314,21 +315,21 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
                 }
                 return `${s.name} (${s.kind})`;
               }).join(', ');
-              
+
               return {
                 content: [{ type: 'text', text: `[${args.file}] Symbol "${args.symbol}" not found.\n\nAvailable symbols: ${available}` }],
                 structuredContent: { bundleId: args.bundleId, file: args.file },
               };
             }
-            
+
             const contextLines = 2;
             const startLine = Math.max(1, foundSymbol.range.startLine - contextLines);
             const endLine = foundSymbol.range.endLine;
-            
+
             const { content, lineInfo } = formatContent(rawContent, true, [{ start: startLine, end: endLine }]);
-            
+
             const header = `[${args.file}:${startLine}-${endLine}] ${foundSymbol.kind} ${foundSymbol.name}${foundSymbol.signature || ''}\n\n`;
-            
+
             return {
               content: [{ type: 'text', text: header + content }],
               structuredContent: {
@@ -377,7 +378,7 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
 
         // Batch mode: read key files based on mode
         const mode = args.mode ?? 'light';
-        
+
         // MODE: CORE
         if (mode === 'core') {
           const coreOpts = (args.coreOptions ?? {}) as {
@@ -391,16 +392,16 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
           const includeContent = coreOpts.includeContent ?? true;
           const tokenBudget = coreOpts.tokenBudget;
           const charBudget = tokenBudget ? tokenBudget * 4 : undefined;
-          
+
           const coreFileCandidates: Array<{ path: string; reason: string; score: number }> = [];
-          
+
           const entryPointPatterns = [
             { pattern: /\/(index|main)\.(ts|js|tsx|jsx)$/i, reason: 'Entry point', score: 50 },
             { pattern: /\/app\.(ts|js|tsx|jsx)$/i, reason: 'App entry', score: 40 },
             { pattern: /\/server\.(ts|js)$/i, reason: 'Server entry', score: 40 },
             { pattern: /\/types\.(ts|d\.ts)$/i, reason: 'Type definitions', score: 30 },
           ];
-          
+
           const scanEntryPoints = async (dir: string, relPath: string): Promise<void> => {
             try {
               const entries = await fs.readdir(dir, { withFileTypes: true });
@@ -408,7 +409,7 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
                 if (entry.name.startsWith('.') || ['node_modules', '__pycache__', 'dist', 'build'].includes(entry.name)) continue;
                 const fullPath = path.join(dir, entry.name);
                 const entryRelPath = relPath ? `${relPath}/${entry.name}` : entry.name;
-                
+
                 if (entry.isFile()) {
                   for (const ep of entryPointPatterns) {
                     if (ep.pattern.test('/' + entryRelPath)) {
@@ -424,9 +425,9 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
               }
             } catch { /* ignore */ }
           };
-          
+
           await scanEntryPoints(paths.reposDir, 'repos');
-          
+
           coreFileCandidates.sort((a, b) => b.score - a.score);
           const seenPaths = new Set<string>();
           const uniqueCandidates = coreFileCandidates.filter(c => {
@@ -435,7 +436,7 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
             seenPaths.add(key);
             return true;
           }).slice(0, maxFiles);
-          
+
           const coreFilesResult: Array<{
             path: string;
             reason: string;
@@ -444,20 +445,20 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
             language?: string;
             charCount: number;
           }> = [];
-          
+
           let totalChars = 0;
           let truncatedFiles = 0;
-          
+
           for (const candidate of uniqueCandidates) {
             let actualPath = candidate.path;
             let absPath: string;
-            
+
             const pathsToTry = [
               candidate.path,
               `repos/${candidate.path}`,
               candidate.path.startsWith('repos/') ? candidate.path : null,
             ].filter(Boolean) as string[];
-            
+
             let fileContent: string | null = null;
             for (const tryPath of pathsToTry) {
               try {
@@ -467,18 +468,18 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
                 break;
               } catch { /* try next */ }
             }
-            
+
             if (!fileContent) continue;
-            
+
             const charCount = fileContent.length;
             const withinBudget = !charBudget || (totalChars + charCount <= charBudget);
-            
+
             const result: typeof coreFilesResult[number] = {
               path: actualPath,
               reason: candidate.reason,
               charCount,
             };
-            
+
             if (includeOutline) {
               const outlineResult = await extractOutlineWasm(actualPath, fileContent);
               if (outlineResult) {
@@ -486,17 +487,17 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
                 result.language = outlineResult.language;
               }
             }
-            
+
             if (includeContent && withinBudget) {
               result.content = fileContent;
               totalChars += charCount;
             } else if (includeContent && !withinBudget) {
               truncatedFiles++;
             }
-            
+
             coreFilesResult.push(result);
           }
-          
+
           const textParts: string[] = [];
           textParts.push(`[Mode: core] ${coreFilesResult.length} core files identified`);
           textParts.push(`Total: ${totalChars} chars (~${Math.round(totalChars / 4)} tokens)`);
@@ -504,10 +505,10 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
             textParts.push(`⚠️ ${truncatedFiles} file(s) exceeded token budget - showing outline only`);
           }
           textParts.push('');
-          
+
           for (const cf of coreFilesResult) {
             textParts.push(`=== ${cf.path} (${cf.reason}) ===`);
-            
+
             if (cf.outline && cf.outline.length > 0) {
               textParts.push(`[Outline - ${cf.outline.length} symbols]`);
               for (const sym of cf.outline.slice(0, 10)) {
@@ -518,7 +519,7 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
                 textParts.push(`  ... and ${cf.outline.length - 10} more symbols`);
               }
             }
-            
+
             if (cf.content) {
               textParts.push(`[Content - ${cf.charCount} chars]`);
               textParts.push('```' + (cf.language || ''));
@@ -527,7 +528,7 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
             }
             textParts.push('');
           }
-          
+
           const out: ReadFileOutput = {
             bundleId: args.bundleId,
             mode: 'core' as const,
@@ -538,28 +539,28 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
               truncatedFiles,
             },
           };
-          
+
           return {
             content: [{ type: 'text', text: textParts.join('\n') }],
             structuredContent: out,
           };
         }
-        
+
         // MODE: LIGHT / FULL
         const includeReadme = args.includeReadme ?? (mode === 'full');
         const includeDepsGraph = args.includeDepsGraph ?? (mode === 'full');
-        
+
         // Check if this is a document bundle (has docs/ directory)
         const manifest = await readManifest(paths.manifestPath);
         const isDocumentBundle = manifest.type === 'document';
-        
+
         if (isDocumentBundle) {
           // For document bundles, read docs/*.md AND root pdf_*.md files
           const files: Record<string, string | null> = {};
           const sections: string[] = ['manifest.json'];
-          
+
           files['manifest.json'] = JSON.stringify(manifest, null, 2);
-          
+
           // 1) Read docs/*.md if exists
           try {
             const docsDir = safeJoin(bundleRoot, 'docs');
@@ -580,7 +581,7 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
           } catch {
             // docs dir doesn't exist - that's okay
           }
-          
+
           // 2) Read root-level pdf_*.md files (PDF bundles store content here)
           try {
             const rootEntries = await fs.readdir(bundleRoot, { withFileTypes: true });
@@ -599,11 +600,11 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
           } catch {
             // root dir read failed - unlikely but handle gracefully
           }
-          
+
           const textParts: string[] = [];
           textParts.push(`[Document Bundle] ${sections.length} file(s)`);
           textParts.push('');
-          
+
           for (const [filePath, content] of Object.entries(files)) {
             if (content) {
               // For large docs, show first 500 lines
@@ -612,21 +613,21 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
               textParts.push(`=== ${filePath} ===\n${preview}`);
             }
           }
-          
+
           const out: ReadFileOutput = { bundleId: args.bundleId, mode, files, sections };
           return {
             content: [{ type: 'text', text: textParts.join('\n') || '(no files found)' }],
             structuredContent: out,
           };
         }
-        
+
         const coreFiles = ['OVERVIEW.md', 'START_HERE.md', 'AGENTS.md', 'manifest.json'];
         const keyFiles = [...coreFiles];
-        
+
         if (includeDepsGraph) {
           keyFiles.push('deps/dependency-graph.json');
         }
-        
+
         const files: Record<string, string | null> = {};
         const sections: string[] = [];
 
@@ -669,13 +670,13 @@ export function registerReadFileTool({ server, cfg }: ToolDependencies, coreOnly
         const textParts: string[] = [];
         textParts.push(`[Mode: ${mode}] Sections: ${sections.join(', ')}`);
         textParts.push('');
-        
+
         for (const [filePath, content] of Object.entries(files)) {
           if (content) {
             textParts.push(`=== ${filePath} ===\n${content}`);
           }
         }
-        
+
         if (mode === 'light') {
           textParts.push('');
           textParts.push('---');

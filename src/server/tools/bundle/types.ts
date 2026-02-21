@@ -3,6 +3,7 @@
  */
 
 import * as z from 'zod';
+import { coerceJson } from '../coerce.js';
 
 import type { RepoInput } from '../../../bundle/manifest.js';
 
@@ -18,7 +19,7 @@ export const SpaOptionsSchema = z.object({
   waitForSelector: z.string().optional()
     .describe('CSS selector to wait for before extraction. Example: "#content"'),
   /** Wait time after page load in ms (default: 2000) */
-  waitAfterLoad: z.number().int().min(0).max(30000).optional()
+  waitAfterLoad: z.coerce.number().int().min(0).max(30000).optional()
     .describe('Extra wait time after page load in ms. Default: 2000'),
 }).strict().optional();
 
@@ -28,10 +29,10 @@ export const SpaOptionsSchema = z.object({
  */
 export const WebCrawlConfigSchema = z.object({
   /** Maximum pages to crawl (default: 500) */
-  maxPages: z.number().int().min(1).max(5000).optional()
+  maxPages: z.coerce.number().int().min(1).max(5000).optional()
     .describe('Max pages to crawl. Default: 500'),
   /** Maximum crawl depth from baseUrl (default: 5) */
-  maxDepth: z.number().int().min(1).max(20).optional()
+  maxDepth: z.coerce.number().int().min(1).max(20).optional()
     .describe('Max depth from base URL. Default: 5'),
   /** URL patterns to include (e.g., ["/docs/", "/api/"]) */
   includePatterns: z.array(z.string()).optional()
@@ -157,7 +158,7 @@ export function normalizeCreateRepoInput(input: CreateRepoToolInput): Normalized
 }
 
 export const CreateBundleInputSchema = {
-  repos: z.array(CreateRepoInputSchema).min(1).describe(
+  repos: coerceJson(z.array(CreateRepoInputSchema).min(1)).describe(
     'Repositories to ingest into the bundle. Each item is one source descriptor: github=>repo, local=>repo+path, web=>url, pdf=>url or path, markdown=>path.'
   ),
   ifExists: z
@@ -176,8 +177,8 @@ export const UpdateBundleInputSchema = {
 
 export const ListBundlesInputSchema = {
   filterByTag: z.string().optional().describe('Filter by tag (e.g., "mcp", "agents", "web-scraping").'),
-  limit: z.number().int().min(1).max(200).default(50).describe('Max number of bundles to return.'),
-  maxItemsPerList: z.number().int().min(1).max(50).default(10).describe('Max repos/tags to include per bundle to keep output compact.'),
+  limit: z.coerce.number().int().min(1).max(200).default(50).describe('Max number of bundles to return.'),
+  maxItemsPerList: z.coerce.number().int().min(1).max(50).default(10).describe('Max repos/tags to include per bundle to keep output compact.'),
   cursor: z.string().optional().describe('Pagination cursor from previous call. Use to fetch next page.'),
 };
 
@@ -196,7 +197,7 @@ export const DeleteBundleInputSchema = {
 export const GetTaskStatusInputSchema = {
   taskId: z.string().optional().describe('Task ID to query (from BUNDLE_IN_PROGRESS error).'),
   fingerprint: z.string().optional().describe('Fingerprint to query (computed from repos).'),
-  repos: z.array(CreateRepoInputSchema).optional().describe('Repos to compute fingerprint from (alternative to fingerprint).'),
+  repos: coerceJson(z.array(CreateRepoInputSchema).optional()).describe('Repos to compute fingerprint from (alternative to fingerprint).'),
 };
 
 // ==========================================================================

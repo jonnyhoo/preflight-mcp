@@ -26,8 +26,8 @@ const ListBundlesOutputSchema = z.object({
   truncation: z.object({
     truncated: z.boolean(),
     nextCursor: z.string().optional(),
-    totalCount: z.number().optional(),
-    returnedCount: z.number().optional(),
+    totalCount: z.coerce.number().optional(),
+    returnedCount: z.coerce.number().optional(),
   }).optional(),
 });
 
@@ -57,11 +57,11 @@ export function registerListBundlesTool({ server, cfg }: ToolDependencies, coreO
     async (args): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: ListBundlesOutput }> => {
       const effectiveDir = await getEffectiveStorageDir(cfg);
       const allIds = await listBundles(effectiveDir);
-      
+
       const { parseCursorOrDefault, createNextCursor, shouldPaginate } = await import('../../../mcp/cursor.js');
       const TOOL_NAME = 'preflight_list_bundles';
       const { offset } = parseCursorOrDefault(args.cursor, TOOL_NAME);
-      
+
       allIds.sort();
       const ids = allIds.slice(offset, offset + args.limit);
 
@@ -132,7 +132,7 @@ export function registerListBundlesTool({ server, cfg }: ToolDependencies, coreO
       const lines: string[] = [];
       lines.push(`## Bundles (${filtered.length}${hasMore ? '+' : ''})`);
       lines.push('');
-      
+
       for (const b of filtered) {
         lines.push(`### ${b.displayName}`);
         lines.push(`- **ID**: \`${b.bundleId}\``);
@@ -144,12 +144,12 @@ export function registerListBundlesTool({ server, cfg }: ToolDependencies, coreO
         }
         lines.push('');
       }
-      
+
       if (hasMore) {
         lines.push('---');
         lines.push(`📄 More bundles available (total: ${allIds.length}). Use cursor to fetch next page.`);
       }
-      
+
       const textOutput = filtered.length > 0 ? lines.join('\n') : '(no bundles found)';
 
       return {

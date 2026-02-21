@@ -9,6 +9,7 @@
  * @module server/tools/arxivTools
  */
 import * as z from 'zod';
+import { coerceJson } from './coerce.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ToolDependencies } from './types.js';
@@ -104,7 +105,7 @@ const ArxivSearchInputSchema = {
 
 **Field prefixes (RECOMMENDED for precision):**
 - ti:"neural networks" - Search in title only
-- abs:"transformer" - Search in abstract only  
+- abs:"transformer" - Search in abstract only
 - au:"bengio" - Search by author name
 - cat:cs.AI - Filter by category
 
@@ -119,7 +120,7 @@ const ArxivSearchInputSchema = {
 
 **Tip:** Without field prefix, arXiv treats spaces as OR (very broad). Always use ti: for precise searches.`
   ),
-  maxResults: z.number().int().min(1).max(MAX_RESULTS_PER_REQUEST).default(50).optional().describe(
+  maxResults: z.coerce.number().int().min(1).max(MAX_RESULTS_PER_REQUEST).default(50).optional().describe(
     `Max results to return (1-${MAX_RESULTS_PER_REQUEST}, default 50). Use cursor for pagination.`
   ),
   sortBy: z.enum(['submittedDate', 'lastUpdatedDate', 'relevance']).default('submittedDate').optional().describe(
@@ -131,7 +132,7 @@ const ArxivSearchInputSchema = {
   cursor: z.string().optional().describe(
     'Pagination cursor from previous response. Pass nextCursor to get next page.'
   ),
-  daysBack: z.number().int().min(0).max(30).default(0).optional().describe(
+  daysBack: z.coerce.number().int().min(0).max(30).default(0).optional().describe(
     'Filter papers from last N days. 0 = no filter (default), 1 = today only, 7 = last week. Ignored if fromDate/toDate provided.'
   ),
   fromDate: z.string().optional().describe(
@@ -140,7 +141,7 @@ const ArxivSearchInputSchema = {
   toDate: z.string().optional().describe(
     'End date for filtering (YYYY-MM-DD format). If same as fromDate, filters single day.'
   ),
-  idList: z.array(z.string()).optional().describe(
+  idList: coerceJson(z.array(z.string()).optional()).describe(
     `Fetch specific papers by arXiv ID. When provided, query is ignored. Examples: ["2301.07041", "2312.12456v2"]`
   ),
   brief: z.boolean().default(false).optional().describe(
@@ -271,12 +272,12 @@ function parseAtomFeed(xmlText: string): ArxivSearchResult {
       const hrefMatch = link.match(/href="([^"]+)"/i);
       const typeMatch = link.match(/type="([^"]+)"/i);
       const titleMatch = link.match(/title="([^"]+)"/i);
-      
+
       if (hrefMatch) {
         const href = hrefMatch[1]!;
         const type = typeMatch ? typeMatch[1] : '';
         const linkTitle = titleMatch ? titleMatch[1] : '';
-        
+
         if (type === 'application/pdf' || linkTitle === 'pdf') {
           pdfUrl = href;
         } else if (type === 'text/html' && !abstractUrl) {
@@ -380,7 +381,7 @@ async function searchArxiv(
 
   // Build URL params
   const params = new URLSearchParams();
-  
+
   if (idList && idList.length > 0) {
     // When using id_list, search_query can be empty
     params.set('id_list', idList.join(','));
@@ -437,11 +438,11 @@ async function translatePapers(
   }
 
   const translations = new Map<string, { title: string; summary: string }>();
-  
+
   // Process in batches
   for (let i = 0; i < papers.length; i += batchSize) {
     const batch = papers.slice(i, i + batchSize);
-    
+
     const prompt = `Translate the following academic paper titles and abstracts to Chinese. Output JSON array with same order.
 
 Input:
@@ -455,16 +456,16 @@ IMPORTANT: Output ONLY the JSON array, no markdown code blocks.`;
 
     try {
       const response = await callLLM(prompt, 'You are a professional academic translator. Translate accurately and concisely.', llmConfig, { temperature: 0.1 });
-      
+
       // Parse JSON from response
       let jsonStr = response.content.trim();
       // Remove markdown code blocks if present
       if (jsonStr.startsWith('```')) {
         jsonStr = jsonStr.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
       }
-      
+
       const parsed = JSON.parse(jsonStr) as Array<{ title: string; summary: string }>;
-      
+
       batch.forEach((paper, idx) => {
         if (parsed[idx]) {
           translations.set(paper.id, parsed[idx]!);
@@ -477,13 +478,13 @@ IMPORTANT: Output ONLY the JSON array, no markdown code blocks.`;
         translations.set(paper.id, { title: paper.title, summary: paper.summary.slice(0, 100) });
       });
     }
-    
+
     // Small delay between batches to avoid rate limits
     if (i + batchSize < papers.length) {
       await new Promise(resolve => setTimeout(resolve, 500));
     }
   }
-  
+
   return translations;
 }
 
@@ -514,7 +515,7 @@ function formatPapersForOutput(
     });
     return JSON.stringify(data, null, 2);
   }
-  
+
   if (format === 'csv') {
     const header = 'ID,Title,TitleCN,Summary,Authors,Published,Category,PDF';
     const rows = papers.map(p => {
@@ -533,7 +534,7 @@ function formatPapersForOutput(
     });
     return [header, ...rows].join('\n');
   }
-  
+
   // Markdown format (default)
   const lines: string[] = [
     `# arXiv Papers${dateRange ? ` (${dateRange})` : ''}`,
@@ -545,7 +546,7 @@ function formatPapersForOutput(
     '---',
     '',
   ];
-  
+
   papers.forEach((p, idx) => {
     const trans = translations?.get(p.id);
     lines.push(`## ${idx + 1}. ${p.title}`);
@@ -566,7 +567,7 @@ function formatPapersForOutput(
     lines.push('---');
     lines.push('');
   });
-  
+
   return lines.join('\n');
 }
 
@@ -577,28 +578,28 @@ async function downloadArxivPdf(paperId: string, outputDir: string): Promise<str
   const pdfUrl = `https://arxiv.org/pdf/${paperId}.pdf`;
   const fileName = `${paperId.replace('/', '_')}.pdf`;
   const filePath = path.join(outputDir, fileName);
-  
+
   // Ensure output directory exists
   fs.mkdirSync(outputDir, { recursive: true });
-  
+
   // Check if already downloaded
   if (fs.existsSync(filePath)) {
     return filePath;
   }
-  
+
   await waitForRateLimit();
-  
+
   const response = await fetch(pdfUrl, {
     headers: { 'User-Agent': 'Preflight-MCP/1.0 (arXiv download tool)' },
   });
-  
+
   if (!response.ok) {
     throw new Error(`Failed to download ${paperId}: ${response.status}`);
   }
-  
+
   const buffer = Buffer.from(await response.arrayBuffer());
   fs.writeFileSync(filePath, buffer);
-  
+
   return filePath;
 }
 
@@ -675,7 +676,7 @@ export function registerArxivTools({ server }: ToolDependencies): void {
         let todayCount = 0;
         let yesterdayCount = 0;
         const dateCounts: Record<string, number> = {};
-        
+
         for (const paper of result.papers) {
           const pubDate = paper.published.split('T')[0] || 'unknown';
           dateCounts[pubDate] = (dateCounts[pubDate] || 0) + 1;
@@ -694,7 +695,7 @@ export function registerArxivTools({ server }: ToolDependencies): void {
           }
         }
         text += `Found: ${result.totalResults} total, showing ${result.papers.length} (from ${startIndex + 1})\n`;
-        
+
         // Show date breakdown
         if (result.papers.length > 0) {
           const sortedDates = Object.entries(dateCounts).sort((a, b) => b[0].localeCompare(a[0]));
@@ -707,7 +708,7 @@ export function registerArxivTools({ server }: ToolDependencies): void {
           if (sortedDates.length > 5) text += ` (+${sortedDates.length - 5} more dates)`;
           text += `\n`;
         }
-        
+
         if (result.hasMore) {
           text += `📄 More results available - use cursor: "${result.nextCursor}"\n`;
         }
@@ -729,12 +730,12 @@ export function registerArxivTools({ server }: ToolDependencies): void {
         if (outputFile && result.papers.length > 0) {
           const dateRange = fromDate ? (toDate && toDate !== fromDate ? `${fromDate} ~ ${toDate}` : fromDate) : undefined;
           const fileContent = formatPapersForOutput(result.papers, format || 'markdown', translations, query, dateRange);
-          
+
           // Ensure directory exists
           const dir = path.dirname(outputFile);
           fs.mkdirSync(dir, { recursive: true });
           fs.writeFileSync(outputFile, fileContent, 'utf8');
-          
+
           text += `📁 Saved to: ${outputFile}\n\n`;
         }
 
@@ -808,7 +809,7 @@ export function registerArxivTools({ server }: ToolDependencies): void {
       title: 'Download arXiv Papers',
       description: arxivDownloadDescription,
       inputSchema: {
-        idList: z.array(z.string()).min(1).describe(
+        idList: coerceJson(z.array(z.string()).min(1)).describe(
           'List of arXiv paper IDs to download. Examples: ["2601.20732", "2312.12456"]'
         ),
         outputDir: z.string().describe(
