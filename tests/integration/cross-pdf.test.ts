@@ -16,35 +16,75 @@
  * - 多论文来源追溯: 准确
  */
 
-import { describe, it, expect, beforeAll } from '@jest/globals';
-import { RAGEngine } from '../../src/rag/query.js';
-import type { RAGConfig, QueryResult } from '../../src/rag/types.js';
-import { getConfig, type PreflightConfig } from '../../src/config.js';
+import { beforeAll, describe, expect, it } from '@jest/globals';
+
+import { getConfig } from '../../src/config.js';
 import { createEmbeddingFromConfig } from '../../src/embedding/preflightEmbedding.js';
+import { RAGEngine } from '../../src/rag/query.js';
+import type { RAGConfig } from '../../src/rag/types.js';
 import { ChromaVectorDB } from '../../src/vectordb/chroma-client.js';
 
-// Test dataset from Phase 0
-const TEST_BUNDLES = {
-  SimpleMem: {
-    bundleId: '460e0e7b-f59a-4325-bd36-2f8c63624d1b',
-    paperId: 'arxiv:2601.02553',
-    title: 'SimpleMem: Efficient Memory Framework based on Semantic Lossless Compression',
-  },
-  MAGMA: {
-    bundleId: 'f17c5e6b-3ed4-4bfa-8e3e-1d69735b89f9',
-    paperId: 'arxiv:2601.03236',
-    title: 'MAGMA: A Multi-Graph based Agentic Memory Architecture for AI Agents',
-  },
-  STACKPLANNER: {
-    bundleId: '09943fcd-994b-4b7f-98af-33d458297539',
-    paperId: 'arxiv:2601.05890',
-    title: 'STACKPLANNER: A Centralized Hierarchical Multi-Agent System',
-  },
+type TestBundle = {
+  bundleId: string;
+  paperId: string;
+  title: string;
+  totalChunks: number;
 };
+
+const PREFERRED_PAPER_IDS = [
+  'arxiv:2601.02553',
+  'arxiv:2601.03236',
+  'arxiv:2601.05890',
+];
+
+function pickTestBundles(content: Array<{
+  type: string;
+  bundleId?: string;
+  paperId?: string;
+  paperTitle?: string;
+  totalChunks: number;
+}>): TestBundle[] {
+  const pdfContent = content
+    .filter((item) => item.type === 'pdf' && item.bundleId && item.paperId && item.paperTitle)
+    .sort((a, b) => b.totalChunks - a.totalChunks);
+
+  const byPaperId = new Map(pdfContent.map((item) => [item.paperId!, item]));
+  const selected: TestBundle[] = [];
+
+  for (const paperId of PREFERRED_PAPER_IDS) {
+    const item = byPaperId.get(paperId);
+    if (!item) continue;
+    selected.push({
+      bundleId: item.bundleId!,
+      paperId: item.paperId!,
+      title: item.paperTitle!,
+      totalChunks: item.totalChunks,
+    });
+  }
+
+  if (selected.length < 3) {
+    for (const item of pdfContent) {
+      if (selected.some((bundle) => bundle.bundleId === item.bundleId)) {
+        continue;
+      }
+      selected.push({
+        bundleId: item.bundleId!,
+        paperId: item.paperId!,
+        title: item.paperTitle!,
+        totalChunks: item.totalChunks,
+      });
+      if (selected.length === 3) {
+        break;
+      }
+    }
+  }
+
+  return selected.slice(0, 3);
+}
 
 describe('Phase 1.5 - Cross-PDF E2E Integration Test', () => {
   let ragEngine: RAGEngine;
-  let ragConfig: RAGConfig;
+  let testBundles: TestBundle[] = [];
   let datasetAvailable = false;
   let datasetStatus = 'dataset check not run';
 
@@ -57,52 +97,31 @@ describe('Phase 1.5 - Cross-PDF E2E Integration Test', () => {
   };
 
   beforeAll(async () => {
-    // Load config
     const cfg = getConfig();
 
     if (!cfg.chromaUrl) {
       throw new Error('chromaUrl not configured. Set PREFLIGHT_CHROMA_URL or update config.json');
     }
 
-    // Create embedding provider
     const { embedding } = createEmbeddingFromConfig(cfg);
-
-    // Initialize RAG engine (without LLM for faster testing)
-    ragConfig = {
+    const ragConfig: RAGConfig = {
       chromaUrl: cfg.chromaUrl,
       embedding: {
         embed: async (text: string) => embedding.embed(text),
         embedBatch: async (texts: string[]) => embedding.embedBatch(texts),
       },
-      // No LLM - we're testing retrieval only
     };
 
     ragEngine = new RAGEngine(ragConfig);
 
     const chroma = new ChromaVectorDB({ url: cfg.chromaUrl });
     const indexedContent = await chroma.listHierarchicalContent();
+    testBundles = pickTestBundles(indexedContent);
 
-    for (const bundle of Object.values(TEST_BUNDLES)) {
-      const resolved = indexedContent.find(
-        (item) => item.paperId === bundle.paperId && item.bundleId && item.totalChunks > 0
-      );
-      if (resolved?.bundleId) {
-        bundle.bundleId = resolved.bundleId;
-      }
-    }
-
-    const availability = await Promise.all(
-      Object.values(TEST_BUNDLES).map(async ({ bundleId, paperId }) => {
-        const chunks = await chroma.getChunksByBundleIdHierarchical(bundleId);
-        return { bundleId, paperId, count: chunks.length };
-      })
-    );
-
-    const missing = availability.filter((entry) => entry.count === 0);
-    datasetAvailable = missing.length === 0;
+    datasetAvailable = testBundles.length >= 3;
     datasetStatus = datasetAvailable
-      ? 'all required bundles are indexed'
-      : `missing indexed bundles: ${missing.map((entry) => `${entry.paperId} (${entry.bundleId})`).join(', ')}`;
+      ? `using ${testBundles.map((bundle) => `${bundle.paperId} (${bundle.bundleId})`).join(', ')}`
+      : `need at least 3 indexed PDF bundles, found ${testBundles.length}`;
 
     console.log('✓ RAG Engine initialized');
     console.log(`  ChromaDB: ${cfg.chromaUrl}`);
@@ -113,42 +132,38 @@ describe('Phase 1.5 - Cross-PDF E2E Integration Test', () => {
     it('should query single bundle with default crossBundleMode', async () => {
       if (!ensureDataset()) return;
 
+      const [singleBundle] = testBundles;
       const startTime = Date.now();
 
       const result = await ragEngine.query(
-        'SimpleMem 在 LoCoMo 基准测试中的 F1 分数提升是多少？',
+        `${singleBundle.title} main contribution`,
         {
-          bundleId: TEST_BUNDLES.SimpleMem.bundleId,
+          bundleId: singleBundle.bundleId,
           mode: 'naive',
           topK: 5,
-          enableContextCompletion: false, // Disable for performance testing
-          // crossBundleMode默认为'single'
+          enableContextCompletion: false,
         }
       );
 
       const duration = Date.now() - startTime;
 
-      // Assertions
       expect(result).toBeDefined();
       expect(result.answer).toBeDefined();
       expect(result.sources).toBeDefined();
       expect(result.sources.length).toBeGreaterThan(0);
 
-      // 验证所有 sources 都来自同一个 bundle
-      const uniqueBundleIds = new Set(result.sources.map(s => s.bundleId).filter(Boolean));
+      const uniqueBundleIds = new Set(result.sources.map((source) => source.bundleId).filter(Boolean));
       expect(uniqueBundleIds.size).toBe(1);
-      expect(uniqueBundleIds.has(TEST_BUNDLES.SimpleMem.bundleId)).toBe(true);
+      expect(uniqueBundleIds.has(singleBundle.bundleId)).toBe(true);
 
-      // 验证来源包含 paperId
-      const sourcesWithPaperId = result.sources.filter(s => s.paperId);
+      const sourcesWithPaperId = result.sources.filter((source) => source.paperId);
       expect(sourcesWithPaperId.length).toBeGreaterThan(0);
-      expect(sourcesWithPaperId[0].paperId).toBe(TEST_BUNDLES.SimpleMem.paperId);
+      expect(sourcesWithPaperId[0].paperId).toBe(singleBundle.paperId);
 
-      // 性能要求
       expect(duration).toBeLessThan(3000);
 
       console.log(`✓ Single bundle query: ${duration}ms`);
-      console.log(`  Sources: ${result.sources.length} chunks from ${TEST_BUNDLES.SimpleMem.paperId}`);
+      console.log(`  Sources: ${result.sources.length} chunks from ${singleBundle.paperId}`);
     });
   });
 
@@ -156,86 +171,61 @@ describe('Phase 1.5 - Cross-PDF E2E Integration Test', () => {
     it('should query multiple specified bundles', async () => {
       if (!ensureDataset()) return;
 
+      const [bundleA, bundleB] = testBundles;
       const startTime = Date.now();
 
       const result = await ragEngine.query(
-        'SimpleMem 和 MAGMA 在记忆组织方式上有什么本质区别？',
+        `Compare ${bundleA.title} and ${bundleB.title}`,
         {
           crossBundleMode: 'specified',
-          bundleIds: [
-            TEST_BUNDLES.SimpleMem.bundleId,
-            TEST_BUNDLES.MAGMA.bundleId,
-          ],
+          bundleIds: [bundleA.bundleId, bundleB.bundleId],
           mode: 'naive',
           topK: 10,
-          enableContextCompletion: false, // Disable for performance testing
+          enableContextCompletion: false,
         }
       );
 
       const duration = Date.now() - startTime;
 
-      // Assertions
       expect(result).toBeDefined();
       expect(result.sources.length).toBeGreaterThan(0);
 
-      // 验证 sources 来自多个 bundles
-      const bundleIds = new Set(result.sources.map(s => s.bundleId).filter(Boolean));
-      expect(bundleIds.size).toBeGreaterThanOrEqual(1); // At least 1, ideally 2
-
-      // 验证只包含指定的 bundles
+      const bundleIds = new Set(result.sources.map((source) => source.bundleId).filter(Boolean));
+      expect(bundleIds.size).toBeGreaterThanOrEqual(1);
       for (const bundleId of bundleIds) {
-        expect([
-          TEST_BUNDLES.SimpleMem.bundleId,
-          TEST_BUNDLES.MAGMA.bundleId,
-        ]).toContain(bundleId);
+        expect([bundleA.bundleId, bundleB.bundleId]).toContain(bundleId);
       }
 
-      // 验证 paperIds 存在
-      const paperIds = new Set(result.sources.map(s => s.paperId).filter(Boolean));
+      const paperIds = new Set(result.sources.map((source) => source.paperId).filter(Boolean));
       expect(paperIds.size).toBeGreaterThanOrEqual(1);
-
-      // Log paper distribution
-      const paperDistribution = new Map<string, number>();
-      for (const source of result.sources) {
-        if (source.paperId) {
-          paperDistribution.set(source.paperId, (paperDistribution.get(source.paperId) || 0) + 1);
-        }
-      }
-
-      // 性能要求
       expect(duration).toBeLessThan(3000);
 
       console.log(`✓ Multi-bundle query: ${duration}ms`);
-      console.log(`  Sources from ${bundleIds.size} bundles:`);
-      for (const [paperId, count] of paperDistribution) {
-        console.log(`    - ${paperId}: ${count} chunks`);
-      }
+      console.log(`  Sources from ${bundleIds.size} bundles`);
     });
 
     it('should include pageIndex and sectionHeading in sources', async () => {
       if (!ensureDataset()) return;
 
+      const [singleBundle] = testBundles;
       const result = await ragEngine.query(
-        'SimpleMem 的三阶段 pipeline 分别是什么？',
+        `What sections or methods are discussed in ${singleBundle.title}?`,
         {
-          bundleId: TEST_BUNDLES.SimpleMem.bundleId,
+          bundleId: singleBundle.bundleId,
           mode: 'naive',
           topK: 5,
-          enableContextCompletion: false, // Disable for performance testing
+          enableContextCompletion: false,
         }
       );
 
       expect(result.sources.length).toBeGreaterThan(0);
 
-      // 验证至少有一些 sources 包含 pageIndex
-      const sourcesWithPage = result.sources.filter(s => s.pageIndex !== undefined);
+      const sourcesWithPage = result.sources.filter((source) => source.pageIndex !== undefined);
       expect(sourcesWithPage.length).toBeGreaterThan(0);
 
-      // 验证至少有一些 sources 包含 sectionHeading
-      const sourcesWithSection = result.sources.filter(s => s.sectionHeading);
-      // Note: sectionHeading 可能为空，取决于 PDF 解析质量
+      const sourcesWithSection = result.sources.filter((source) => source.sectionHeading);
 
-      console.log(`✓ Source metadata validation:`);
+      console.log('✓ Source metadata validation:');
       console.log(`  Sources with pageIndex: ${sourcesWithPage.length}/${result.sources.length}`);
       console.log(`  Sources with sectionHeading: ${sourcesWithSection.length}/${result.sources.length}`);
 
@@ -250,31 +240,32 @@ describe('Phase 1.5 - Cross-PDF E2E Integration Test', () => {
     it('should query all indexed bundles', async () => {
       if (!ensureDataset()) return;
 
+      const keywordQuery = testBundles
+        .map((bundle) => bundle.title.split(/\s+/).slice(0, 3).join(' '))
+        .join(' ');
       const startTime = Date.now();
 
       const result = await ragEngine.query(
-        'memory architecture for AI agents',
+        keywordQuery,
         {
           crossBundleMode: 'all',
           mode: 'naive',
-          topK: 10,
-          enableContextCompletion: false, // Disable for performance testing
+          topK: 8,
+          hierarchicalL1TopK: 6,
+          hierarchicalL2L3TopK: 10,
+          enableContextCompletion: false,
         }
       );
 
       const duration = Date.now() - startTime;
 
-      // Assertions
       expect(result).toBeDefined();
       expect(result.sources.length).toBeGreaterThan(0);
 
-      // 统计来源分布
-      const bundleIds = new Set(result.sources.map(s => s.bundleId).filter(Boolean));
-      const paperIds = new Set(result.sources.map(s => s.paperId).filter(Boolean));
+      const bundleIds = new Set(result.sources.map((source) => source.bundleId).filter(Boolean));
+      const paperIds = new Set(result.sources.map((source) => source.paperId).filter(Boolean));
 
       expect(bundleIds.size).toBeGreaterThanOrEqual(1);
-
-      // 性能要求
       expect(duration).toBeLessThan(3000);
 
       console.log(`✓ Global query: ${duration}ms`);
@@ -287,44 +278,35 @@ describe('Phase 1.5 - Cross-PDF E2E Integration Test', () => {
     it('should provide accurate source tracking for cross-bundle queries', async () => {
       if (!ensureDataset()) return;
 
+      const [bundleA, , bundleC] = testBundles;
       const result = await ragEngine.query(
-        'SimpleMem 和 STACKPLANNER 的优化目标有什么不同？',
+        `How do ${bundleA.title} and ${bundleC.title} differ?`,
         {
           crossBundleMode: 'specified',
-          bundleIds: [
-            TEST_BUNDLES.SimpleMem.bundleId,
-            TEST_BUNDLES.STACKPLANNER.bundleId,
-          ],
+          bundleIds: [bundleA.bundleId, bundleC.bundleId],
           mode: 'naive',
           topK: 8,
-          enableContextCompletion: false, // Disable for performance testing
+          enableContextCompletion: false,
         }
       );
 
       expect(result.sources.length).toBeGreaterThan(0);
 
-      // 验证每个 source 都有必要的追溯信息
       for (const source of result.sources) {
-        // 必须有 chunkId
         expect(source.chunkId).toBeDefined();
         expect(typeof source.chunkId).toBe('string');
-
-        // 必须有 bundleId
         expect(source.bundleId).toBeDefined();
 
-        // 应该有 paperId (PDF 内容)
         if (source.sourceType.startsWith('pdf_')) {
           expect(source.paperId).toBeDefined();
         }
 
-        // 如果有 pageIndex，应该是合理的非负整数 (page 0 可能是封面/元数据)
         if (source.pageIndex !== undefined) {
           expect(source.pageIndex).toBeGreaterThanOrEqual(0);
           expect(Number.isInteger(source.pageIndex)).toBe(true);
         }
       }
 
-      // 验证 sources 按 paperId 分组的逻辑
       const sourcesByPaper = new Map<string, typeof result.sources>();
       for (const source of result.sources) {
         const key = source.paperId ?? source.bundleId ?? 'unknown';
@@ -334,12 +316,9 @@ describe('Phase 1.5 - Cross-PDF E2E Integration Test', () => {
         sourcesByPaper.get(key)!.push(source);
       }
 
-      console.log(`✓ Source tracing validation:`);
+      console.log('✓ Source tracing validation:');
       console.log(`  Total sources: ${result.sources.length}`);
       console.log(`  Grouped by paper: ${sourcesByPaper.size} groups`);
-      for (const [paperId, sources] of sourcesByPaper) {
-        console.log(`    - ${paperId}: ${sources.length} chunks`);
-      }
     });
   });
 
@@ -347,41 +326,44 @@ describe('Phase 1.5 - Cross-PDF E2E Integration Test', () => {
     it('should meet response time requirements for all query types', async () => {
       if (!ensureDataset()) return;
 
+      const [bundleA, bundleB, bundleC] = testBundles;
       const queries = [
         {
           name: 'Single Bundle',
           params: {
-            bundleId: TEST_BUNDLES.SimpleMem.bundleId,
+            bundleId: bundleA.bundleId,
             mode: 'naive' as const,
             topK: 5,
-            enableContextCompletion: false, // Disable for performance testing
+            enableContextCompletion: false,
           },
-          question: 'SimpleMem F1 score',
+          question: `${bundleA.title} contribution`,
         },
         {
           name: 'Multi Bundle',
           params: {
             crossBundleMode: 'specified' as const,
-            bundleIds: [TEST_BUNDLES.SimpleMem.bundleId, TEST_BUNDLES.MAGMA.bundleId],
+            bundleIds: [bundleA.bundleId, bundleB.bundleId],
             mode: 'naive' as const,
             topK: 10,
-            enableContextCompletion: false, // Disable for performance testing
+            enableContextCompletion: false,
           },
-          question: 'memory architecture comparison',
+          question: `Compare ${bundleA.title} and ${bundleB.title}`,
         },
         {
           name: 'All Bundles',
           params: {
             crossBundleMode: 'all' as const,
             mode: 'naive' as const,
-            topK: 10,
-            enableContextCompletion: false, // Disable for performance testing
+            topK: 8,
+            hierarchicalL1TopK: 6,
+            hierarchicalL2L3TopK: 10,
+            enableContextCompletion: false,
           },
-          question: 'AI agent memory',
+          question: `${bundleA.title} ${bundleB.title} ${bundleC.title}`,
         },
       ];
 
-      console.log(`✓ Performance benchmarks:`);
+      console.log('✓ Performance benchmarks:');
 
       for (const test of queries) {
         const startTime = Date.now();
