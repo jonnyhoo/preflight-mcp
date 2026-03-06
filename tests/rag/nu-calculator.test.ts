@@ -1,6 +1,6 @@
 /**
  * Tests for NU Calculator (Normalized Uncertainty).
- * 
+ *
  * Tests:
  * 1. Deterministic prompt → NU ≈ 0
  * 2. Uncertain prompt → NU > 0.5
@@ -11,6 +11,8 @@ import { describe, it, expect } from '@jest/globals';
 import { NUCalculator, computeNU } from '../../src/rag/pruning/nu-calculator.js';
 import { getVerifierLLMConfig } from '../../src/distill/llm-client.js';
 
+const RUN_LIVE_RAG_TESTS = process.env.PREFLIGHT_RUN_LIVE_RAG_TESTS === 'true';
+
 // ============================================================================
 // Test Configuration
 // ============================================================================
@@ -19,10 +21,11 @@ import { getVerifierLLMConfig } from '../../src/distill/llm-client.js';
  * Check if verifier LLM is configured and supports logprobs.
  */
 function isLogprobsAvailable(): boolean {
+  if (!RUN_LIVE_RAG_TESTS) return false;
   try {
     const config = getVerifierLLMConfig();
     if (!config.enabled || !config.apiKey) return false;
-    
+
     // Check if API base is known to support logprobs
     return NUCalculator.supportsLogprobs(config.apiBase);
   } catch {
@@ -53,7 +56,7 @@ describe('NUCalculator', () => {
       }
 
       const calculator = new NUCalculator();
-      
+
       // Deterministic prompt: "What is 1+1? Answer:"
       // Expected: Model is very certain about the answer "2"
       const result = await calculator.computeNU(
@@ -84,7 +87,7 @@ describe('NUCalculator', () => {
       }
 
       const calculator = new NUCalculator();
-      
+
       // Uncertain prompt: "Guess a random number"
       // Expected: Model is uncertain about which number to generate
       const result = await calculator.computeNU(
@@ -115,7 +118,7 @@ describe('NUCalculator', () => {
       }
 
       const calculator = new NUCalculator();
-      
+
       const startTime = Date.now();
       await calculator.computeNU(
         'What is the capital of France?',
@@ -139,10 +142,10 @@ describe('NUCalculator', () => {
       }
 
       const calculator = new NUCalculator();
-      
+
       // Empty prompt should still work (model generates from scratch)
       const result = await calculator.computeNU('', { maxTokens: 5 });
-      
+
       expect(result.nu).toBeGreaterThanOrEqual(0);
       expect(result.nu).toBeLessThanOrEqual(1);
       expect(result.tokenCount).toBeGreaterThan(0);
@@ -155,13 +158,13 @@ describe('NUCalculator', () => {
       }
 
       const calculator = new NUCalculator();
-      
+
       // Very short generation (1 token)
       const result = await calculator.computeNU(
         'Say "Yes" or "No": ',
         { maxTokens: 1, topK: 5 }
       );
-      
+
       expect(result.nu).toBeGreaterThanOrEqual(0);
       expect(result.tokenCount).toBeGreaterThanOrEqual(1);
     }, 10000);
@@ -169,14 +172,14 @@ describe('NUCalculator', () => {
     it('should fail gracefully when logprobs not supported', async () => {
       // Force use of main LLM (which may not support logprobs)
       const calculator = new NUCalculator();
-      
+
       // This test is expected to fail if main LLM doesn't support logprobs
       // We just verify it throws a meaningful error
       try {
         // Use a mock that simulates no logprobs support
         // In real scenario, this would be the LongCat API
         await calculator.computeNU('test', { maxTokens: 5 });
-        
+
         // If it succeeds, verify we got valid data
         // (means the verifier LLM is working)
         console.log('✓ Logprobs available via verifier LLM');

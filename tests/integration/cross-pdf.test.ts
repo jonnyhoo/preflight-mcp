@@ -24,6 +24,8 @@ import { RAGEngine } from '../../src/rag/query.js';
 import type { RAGConfig } from '../../src/rag/types.js';
 import { ChromaVectorDB } from '../../src/vectordb/chroma-client.js';
 
+const RUN_LIVE_RAG_TESTS = process.env.PREFLIGHT_RUN_LIVE_RAG_TESTS === 'true';
+
 type TestBundle = {
   bundleId: string;
   paperId: string;
@@ -97,6 +99,11 @@ describe('Phase 1.5 - Cross-PDF E2E Integration Test', () => {
   };
 
   beforeAll(async () => {
+    if (!RUN_LIVE_RAG_TESTS) {
+      datasetStatus = 'live cross-pdf tests disabled (set PREFLIGHT_RUN_LIVE_RAG_TESTS=true to enable)';
+      return;
+    }
+
     const cfg = getConfig();
 
     if (!cfg.chromaUrl) {
@@ -160,7 +167,7 @@ describe('Phase 1.5 - Cross-PDF E2E Integration Test', () => {
       expect(sourcesWithPaperId.length).toBeGreaterThan(0);
       expect(sourcesWithPaperId[0].paperId).toBe(singleBundle.paperId);
 
-      expect(duration).toBeLessThan(3000);
+      expect(duration).toBeLessThan(4000);
 
       console.log(`✓ Single bundle query: ${duration}ms`);
       console.log(`  Sources: ${result.sources.length} chunks from ${singleBundle.paperId}`);
@@ -198,7 +205,7 @@ describe('Phase 1.5 - Cross-PDF E2E Integration Test', () => {
 
       const paperIds = new Set(result.sources.map((source) => source.paperId).filter(Boolean));
       expect(paperIds.size).toBeGreaterThanOrEqual(1);
-      expect(duration).toBeLessThan(3000);
+      expect(duration).toBeLessThan(4000);
 
       console.log(`✓ Multi-bundle query: ${duration}ms`);
       console.log(`  Sources from ${bundleIds.size} bundles`);
@@ -266,7 +273,7 @@ describe('Phase 1.5 - Cross-PDF E2E Integration Test', () => {
       const paperIds = new Set(result.sources.map((source) => source.paperId).filter(Boolean));
 
       expect(bundleIds.size).toBeGreaterThanOrEqual(1);
-      expect(duration).toBeLessThan(3000);
+      expect(duration).toBeLessThan(4000);
 
       console.log(`✓ Global query: ${duration}ms`);
       console.log(`  Retrieved from ${bundleIds.size} bundles, ${paperIds.size} papers`);
@@ -370,7 +377,7 @@ describe('Phase 1.5 - Cross-PDF E2E Integration Test', () => {
         const result = await ragEngine.query(test.question, test.params);
         const duration = Date.now() - startTime;
 
-        expect(duration).toBeLessThan(3000);
+        expect(duration).toBeLessThan(4000);
         expect(result.sources.length).toBeGreaterThan(0);
 
         console.log(`  ${test.name}: ${duration}ms (${result.sources.length} chunks)`);

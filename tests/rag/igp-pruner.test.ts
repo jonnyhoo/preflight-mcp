@@ -14,6 +14,8 @@ import type { ChunkWithScore } from '../../src/rag/pruning/ig-ranker.js';
 import { NUCalculator } from '../../src/rag/pruning/nu-calculator.js';
 import { getVerifierLLMConfig } from '../../src/distill/llm-client.js';
 
+const RUN_LIVE_RAG_TESTS = process.env.PREFLIGHT_RUN_LIVE_RAG_TESTS === 'true';
+
 // ============================================================================
 // Test Configuration
 // ============================================================================
@@ -25,6 +27,9 @@ let logprobsProbe: Promise<boolean> | null = null;
  * without immediate provider-side throttling.
  */
 async function isLogprobsAvailable(): Promise<boolean> {
+  if (!RUN_LIVE_RAG_TESTS) {
+    return false;
+  }
   if (logprobsProbe) {
     return logprobsProbe;
   }
