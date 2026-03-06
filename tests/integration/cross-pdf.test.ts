@@ -80,6 +80,17 @@ describe('Phase 1.5 - Cross-PDF E2E Integration Test', () => {
     ragEngine = new RAGEngine(ragConfig);
 
     const chroma = new ChromaVectorDB({ url: cfg.chromaUrl });
+    const indexedContent = await chroma.listHierarchicalContent();
+
+    for (const bundle of Object.values(TEST_BUNDLES)) {
+      const resolved = indexedContent.find(
+        (item) => item.paperId === bundle.paperId && item.bundleId && item.totalChunks > 0
+      );
+      if (resolved?.bundleId) {
+        bundle.bundleId = resolved.bundleId;
+      }
+    }
+
     const availability = await Promise.all(
       Object.values(TEST_BUNDLES).map(async ({ bundleId, paperId }) => {
         const chunks = await chroma.getChunksByBundleIdHierarchical(bundleId);
