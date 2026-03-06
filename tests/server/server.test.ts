@@ -6,13 +6,17 @@ import { tmpdir } from 'node:os';
 // Mock the MCP SDK before importing server
 const mockRegisterTool = jest.fn();
 const mockRegisterResource = jest.fn();
+const mockRegisterPrompt = jest.fn();
 const mockSendResourceListChanged = jest.fn();
+const mockConnect = jest.fn();
 
 jest.unstable_mockModule('@modelcontextprotocol/sdk/server/mcp.js', () => ({
   McpServer: jest.fn().mockImplementation(() => ({
     registerTool: mockRegisterTool,
     registerResource: mockRegisterResource,
+    registerPrompt: mockRegisterPrompt,
     sendResourceListChanged: mockSendResourceListChanged,
+    connect: mockConnect,
   })),
   ResourceTemplate: jest.fn().mockImplementation((uri: string, opts: unknown) => ({
     uri,
@@ -39,11 +43,13 @@ describe('MCP Server', () => {
     testStorageDir = await fs.mkdtemp(path.join(tmpdir(), 'preflight-server-test-'));
     process.env.PREFLIGHT_STORAGE_DIR = testStorageDir;
     process.env.PREFLIGHT_HTTP_ENABLED = 'false';
-    
+
     // Reset mocks
     mockRegisterTool.mockClear();
     mockRegisterResource.mockClear();
+    mockRegisterPrompt.mockClear();
     mockSendResourceListChanged.mockClear();
+    mockConnect.mockClear();
   });
 
   afterEach(async () => {
@@ -57,7 +63,7 @@ describe('MCP Server', () => {
       // Note: startServer() runs the registration but we can't easily test
       // the full server lifecycle due to stdio transport. Instead, we verify
       // the tool registration calls.
-      
+
       // Expected tool names based on server.ts implementation (coreOnly mode)
       // Note: LSP tools are conditional on cfg.lsp.enabled
       const expectedTools = [
@@ -79,7 +85,7 @@ describe('MCP Server', () => {
 
       // Verify we have defined the expected tools (10 core + optional lsp)
       expect(expectedTools.length).toBeGreaterThanOrEqual(10);
-      
+
       // Each tool should have a unique name
       const uniqueTools = new Set(expectedTools);
       expect(uniqueTools.size).toBe(expectedTools.length);
@@ -113,10 +119,27 @@ describe('MCP Server', () => {
     });
   });
 
+  describe('Prompt Registration', () => {
+    it('keeps compatibility prompts registered alongside instructions', async () => {
+      await startServer();
+
+      expect(mockRegisterPrompt).toHaveBeenCalled();
+      expect(mockRegisterPrompt.mock.calls.map((call) => call[0])).toEqual(
+        expect.arrayContaining([
+          'preflight_router',
+          'preflight_menu',
+          'preflight_analyze_guide',
+          'preflight_search_guide',
+          'preflight_manage_guide',
+        ])
+      );
+    });
+  });
+
   describe('Error Handling', () => {
     it('BundleNotFoundError includes helpful hints', async () => {
       const { BundleNotFoundError } = await import('../../src/errors.js');
-      
+
       // Test with UUID-like ID
       const uuidError = new BundleNotFoundError('025c6dcb-1234-5678-9abc-def012345678');
       expect(uuidError.message).toContain('Bundle not found');
@@ -174,10 +197,10 @@ describe('MCP Server', () => {
   describe('Progress Tracking', () => {
     it('getProgressTracker returns singleton tracker', async () => {
       const { getProgressTracker } = await import('../../src/jobs/progressTracker.js');
-      
+
       const tracker1 = getProgressTracker();
       const tracker2 = getProgressTracker();
-      
+
       expect(tracker1).toBe(tracker2);
     });
 
@@ -233,7 +256,7 @@ describe('Tool Input/Output Schemas', () => {
 
   it('preflight_read_file supports multiple modes', () => {
     const modes = ['light', 'full', 'core'];
-    
+
     expect(modes).toContain('light');
     expect(modes).toContain('full');
     expect(modes).toContain('core');
