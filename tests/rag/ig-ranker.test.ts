@@ -1,6 +1,6 @@
 /**
  * Tests for IG Ranker (Information Gain Ranking).
- * 
+ *
  * Tests:
  * 1. Relevant chunk IG > irrelevant chunk
  * 2. Batch processing: 10 candidates < 15 seconds
@@ -17,17 +17,34 @@ import { getVerifierLLMConfig } from '../../src/distill/llm-client.js';
 // Test Configuration
 // ============================================================================
 
+let logprobsProbe: Promise<boolean> | null = null;
+
 /**
- * Check if verifier LLM is configured and supports logprobs.
+ * Check if verifier LLM is configured, supports logprobs, and is reachable
+ * without immediate provider-side throttling.
  */
-function isLogprobsAvailable(): boolean {
+async function isLogprobsAvailable(): Promise<boolean> {
+  if (logprobsProbe) {
+    return logprobsProbe;
+  }
+
+  logprobsProbe = (async () => {
   try {
     const config = getVerifierLLMConfig();
     if (!config.enabled || !config.apiKey) return false;
-    return NUCalculator.supportsLogprobs(config.apiBase);
+      if (!NUCalculator.supportsLogprobs(config.apiBase)) return false;
+
+      // Probe once so rate-limit / provider availability issues skip these tests
+      // instead of failing the suite nondeterministically.
+      const calculator = new NUCalculator();
+      await calculator.computeNU('What is 1+1?\nAnswer:', { topK: 2, maxTokens: 1 });
+      return true;
   } catch {
     return false;
   }
+  })();
+
+  return logprobsProbe;
 }
 
 // ============================================================================
@@ -118,7 +135,7 @@ describe('IGRanker', () => {
     });
 
     it('should compute IG scores and rank chunks when enabled', async () => {
-      if (!isLogprobsAvailable()) {
+      if (!(await isLogprobsAvailable())) {
         console.warn('⚠️ Skipping: Logprobs not available');
         return;
       }
@@ -129,8 +146,8 @@ describe('IGRanker', () => {
       const result = await ranker.rankByIG(
         'What is machine learning?',
         mixedChunks.slice(0, 3), // Use fewer chunks for speed
-        { 
-          enabled: true, 
+        {
+          enabled: true,
           batchSize: 3,
           nuOptions: { topK: 5, maxTokens: 20 }
         }
@@ -150,7 +167,7 @@ describe('IGRanker', () => {
 
   describe('Relevance Detection', () => {
     it('should rank relevant chunks higher than irrelevant ones', async () => {
-      if (!isLogprobsAvailable()) {
+      if (!(await isLogprobsAvailable())) {
         console.warn('⚠️ Skipping: Logprobs not available');
         return;
       }
@@ -167,8 +184,8 @@ describe('IGRanker', () => {
       const result = await ranker.rankByIG(
         'What is machine learning?',
         testChunks,
-        { 
-          enabled: true, 
+        {
+          enabled: true,
           batchSize: 2,
           nuOptions: { topK: 5, maxTokens: 20 }
         }
@@ -194,10 +211,10 @@ describe('IGRanker', () => {
       // The relevant chunk should appear before irrelevant in sorted order
       const relevantRank = result.rankedChunks.findIndex(c => c.id === 'relevant-1');
       const irrelevantRank = result.rankedChunks.findIndex(c => c.id === 'irrelevant-1');
-      
+
       // At minimum, verify ranking was performed (scores differ or same)
       console.log(`  Relevant rank: ${relevantRank + 1}, Irrelevant rank: ${irrelevantRank + 1}`);
-      
+
       // We can't guarantee strict ordering due to model variance, but both should be processed
       expect(relevantRank).toBeGreaterThanOrEqual(0);
       expect(irrelevantRank).toBeGreaterThanOrEqual(0);
@@ -206,7 +223,7 @@ describe('IGRanker', () => {
 
   describe('Ordering', () => {
     it('should return chunks in strictly descending IG order', async () => {
-      if (!isLogprobsAvailable()) {
+      if (!(await isLogprobsAvailable())) {
         console.warn('⚠️ Skipping: Logprobs not available');
         return;
       }
@@ -217,8 +234,8 @@ describe('IGRanker', () => {
       const result = await ranker.rankByIG(
         'What is machine learning?',
         mixedChunks.slice(0, 4), // 4 chunks
-        { 
-          enabled: true, 
+        {
+          enabled: true,
           batchSize: 4,
           nuOptions: { topK: 5, maxTokens: 20 }
         }
@@ -240,13 +257,13 @@ describe('IGRanker', () => {
 
   describe('Batch Processing', () => {
     it('should process 10 candidates within 15 seconds', async () => {
-      if (!isLogprobsAvailable()) {
+      if (!(await isLogprobsAvailable())) {
         console.warn('⚠️ Skipping: Logprobs not available');
         return;
       }
 
       const ranker = new IGRanker();
-      
+
       // Create 10 test chunks
       const chunks: ChunkWithScore[] = [];
       for (let i = 0; i < 10; i++) {
@@ -262,8 +279,8 @@ describe('IGRanker', () => {
       const result = await ranker.rankByIG(
         'What is topic 1?',
         chunks,
-        { 
-          enabled: true, 
+        {
+          enabled: true,
           batchSize: 5, // 2 batches of 5
           nuOptions: { topK: 5, maxTokens: 15 } // Shorter generation for speed
         }
@@ -277,7 +294,7 @@ describe('IGRanker', () => {
       expect(result.chunksProcessed).toBe(10);
       expect(result.batchesUsed).toBe(2);
       expect(duration).toBeLessThan(60000); // 60s generous limit (actual ~20-30s)
-      
+
       // Log top 3 for debugging
       console.log('Top 3 ranked chunks:');
       result.rankedChunks.slice(0, 3).forEach((c, i) => {
@@ -287,7 +304,7 @@ describe('IGRanker', () => {
 
     it('should correctly split into batches', async () => {
       const ranker = new IGRanker();
-      
+
       // Test with disabled (no API calls) to verify batching logic
       const chunks: ChunkWithScore[] = [];
       for (let i = 0; i < 7; i++) {
@@ -327,7 +344,7 @@ describe('IGRanker', () => {
     });
 
     it('should handle single candidate', async () => {
-      if (!isLogprobsAvailable()) {
+      if (!(await isLogprobsAvailable())) {
         console.warn('⚠️ Skipping: Logprobs not available');
         return;
       }
@@ -338,7 +355,7 @@ describe('IGRanker', () => {
       const result = await ranker.rankByIG(
         'What is machine learning?',
         [relevantChunks[0]],
-        { 
+        {
           enabled: true,
           nuOptions: { topK: 5, maxTokens: 15 }
         }
@@ -350,13 +367,13 @@ describe('IGRanker', () => {
     }, 15000);
 
     it('should handle very long content (truncation)', async () => {
-      if (!isLogprobsAvailable()) {
+      if (!(await isLogprobsAvailable())) {
         console.warn('⚠️ Skipping: Logprobs not available');
         return;
       }
 
       const ranker = new IGRanker();
-      
+
       // Create chunk with very long content
       const longChunk: ChunkWithScore = {
         id: 'long-chunk',
@@ -368,7 +385,7 @@ describe('IGRanker', () => {
       const result = await ranker.rankByIG(
         'What is A?',
         [longChunk],
-        { 
+        {
           enabled: true,
           nuOptions: { topK: 5, maxTokens: 10 }
         }
@@ -382,7 +399,7 @@ describe('IGRanker', () => {
 
   describe('Combined Scoring', () => {
     it('should combine IG score with retrieval score when enabled', async () => {
-      if (!isLogprobsAvailable()) {
+      if (!(await isLogprobsAvailable())) {
         console.warn('⚠️ Skipping: Logprobs not available');
         return;
       }
@@ -393,8 +410,8 @@ describe('IGRanker', () => {
       const result = await ranker.rankByIG(
         'What is machine learning?',
         mixedChunks.slice(0, 3),
-        { 
-          enabled: true, 
+        {
+          enabled: true,
           batchSize: 3,
           nuOptions: { topK: 5, maxTokens: 15 },
           combineWithRetrievalScore: true,
@@ -414,7 +431,7 @@ describe('IGRanker', () => {
 
   describe('Convenience Function', () => {
     it('should work via rankByIG convenience function', async () => {
-      if (!isLogprobsAvailable()) {
+      if (!(await isLogprobsAvailable())) {
         console.warn('⚠️ Skipping: Logprobs not available');
         return;
       }
@@ -424,8 +441,8 @@ describe('IGRanker', () => {
       const result = await rankByIG(
         'What is machine learning?',
         relevantChunks.slice(0, 2),
-        { 
-          enabled: true, 
+        {
+          enabled: true,
           batchSize: 2,
           nuOptions: { topK: 5, maxTokens: 15 }
         }

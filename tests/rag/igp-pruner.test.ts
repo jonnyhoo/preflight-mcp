@@ -1,6 +1,6 @@
 /**
  * Tests for IGP Pruner (Iterative Graph Pruning).
- * 
+ *
  * Tests:
  * 1. Disabled behavior: Returns chunks unchanged
  * 2. Enabled behavior: Reduces chunk count
@@ -18,17 +18,32 @@ import { getVerifierLLMConfig } from '../../src/distill/llm-client.js';
 // Test Configuration
 // ============================================================================
 
+let logprobsProbe: Promise<boolean> | null = null;
+
 /**
- * Check if verifier LLM is configured and supports logprobs.
+ * Check if verifier LLM is configured, supports logprobs, and is reachable
+ * without immediate provider-side throttling.
  */
-function isLogprobsAvailable(): boolean {
+async function isLogprobsAvailable(): Promise<boolean> {
+  if (logprobsProbe) {
+    return logprobsProbe;
+  }
+
+  logprobsProbe = (async () => {
   try {
     const config = getVerifierLLMConfig();
     if (!config.enabled || !config.apiKey) return false;
-    return NUCalculator.supportsLogprobs(config.apiBase);
+      if (!NUCalculator.supportsLogprobs(config.apiBase)) return false;
+
+      const calculator = new NUCalculator();
+      await calculator.computeNU('What is 1+1?\nAnswer:', { topK: 2, maxTokens: 1 });
+      return true;
   } catch {
     return false;
   }
+  })();
+
+  return logprobsProbe;
 }
 
 // ============================================================================
@@ -146,7 +161,7 @@ describe('IGPPruner', () => {
 
   describe('TopK Strategy', () => {
     it('should keep only topK chunks when enabled', async () => {
-      if (!isLogprobsAvailable()) {
+      if (!(await isLogprobsAvailable())) {
         console.warn('⚠️ Skipping: Logprobs not available');
         return;
       }
@@ -157,8 +172,8 @@ describe('IGPPruner', () => {
       const result = await pruner.prune(
         'What is topic 1?',
         chunks,
-        { 
-          enabled: true, 
+        {
+          enabled: true,
           strategy: 'topK',
           topK: 5,
           nuOptions: { topK: 5, maxTokens: 15 },
@@ -190,7 +205,7 @@ describe('IGPPruner', () => {
 
   describe('Ratio Strategy', () => {
     it('should keep specified ratio of chunks', async () => {
-      if (!isLogprobsAvailable()) {
+      if (!(await isLogprobsAvailable())) {
         console.warn('⚠️ Skipping: Logprobs not available');
         return;
       }
@@ -201,8 +216,8 @@ describe('IGPPruner', () => {
       const result = await pruner.prune(
         'What is topic 1?',
         chunks,
-        { 
-          enabled: true, 
+        {
+          enabled: true,
           strategy: 'ratio',
           keepRatio: 0.3, // Keep 30%
           nuOptions: { topK: 5, maxTokens: 15 },
@@ -218,7 +233,7 @@ describe('IGPPruner', () => {
     }, 90000);
 
     it('should always keep at least 1 chunk', async () => {
-      if (!isLogprobsAvailable()) {
+      if (!(await isLogprobsAvailable())) {
         console.warn('⚠️ Skipping: Logprobs not available');
         return;
       }
@@ -229,8 +244,8 @@ describe('IGPPruner', () => {
       const result = await pruner.prune(
         'test query',
         chunks,
-        { 
-          enabled: true, 
+        {
+          enabled: true,
           strategy: 'ratio',
           keepRatio: 0.01, // Very small ratio
           nuOptions: { topK: 5, maxTokens: 10 },
@@ -244,7 +259,7 @@ describe('IGPPruner', () => {
 
   describe('Pruning Quality', () => {
     it('should compute and sort by IG scores', async () => {
-      if (!isLogprobsAvailable()) {
+      if (!(await isLogprobsAvailable())) {
         console.warn('⚠️ Skipping: Logprobs not available');
         return;
       }
@@ -255,8 +270,8 @@ describe('IGPPruner', () => {
       const result = await pruner.prune(
         'What is machine learning?',
         chunks,
-        { 
-          enabled: true, 
+        {
+          enabled: true,
           strategy: 'topK',
           topK: 2, // Keep only top 2
           nuOptions: { topK: 5, maxTokens: 20 },
@@ -271,10 +286,10 @@ describe('IGPPruner', () => {
 
       // Top 2 should be kept
       expect(result.prunedCount).toBe(2);
-      
+
       // Chunks should have IG scores assigned
       expect(result.chunks.every(c => typeof c.igScore === 'number')).toBe(true);
-      
+
       // Chunks should be sorted by IG (descending)
       if (result.chunks.length >= 2) {
         expect(result.chunks[0].igScore).toBeGreaterThanOrEqual(result.chunks[1].igScore);
@@ -284,7 +299,7 @@ describe('IGPPruner', () => {
 
   describe('Iterative Pruning', () => {
     it('should support multiple iterations', async () => {
-      if (!isLogprobsAvailable()) {
+      if (!(await isLogprobsAvailable())) {
         console.warn('⚠️ Skipping: Logprobs not available');
         return;
       }
@@ -295,8 +310,8 @@ describe('IGPPruner', () => {
       const result = await pruner.prune(
         'What is topic 1?',
         chunks,
-        { 
-          enabled: true, 
+        {
+          enabled: true,
           strategy: 'ratio',
           keepRatio: 0.6, // Keep 60% each iteration
           maxIterations: 2, // 6 → 4 → 2-3
@@ -315,7 +330,7 @@ describe('IGPPruner', () => {
 
   describe('Performance', () => {
     it('should complete in reasonable time', async () => {
-      if (!isLogprobsAvailable()) {
+      if (!(await isLogprobsAvailable())) {
         console.warn('⚠️ Skipping: Logprobs not available');
         return;
       }
@@ -327,8 +342,8 @@ describe('IGPPruner', () => {
       const result = await pruner.prune(
         'What is topic 1?',
         chunks,
-        { 
-          enabled: true, 
+        {
+          enabled: true,
           strategy: 'topK',
           topK: 3,
           nuOptions: { topK: 5, maxTokens: 15 },
@@ -369,7 +384,7 @@ describe('IGPPruner', () => {
 
   describe('Threshold Strategy (Paper Algorithm 1)', () => {
     it('should use threshold strategy by default', async () => {
-      if (!isLogprobsAvailable()) {
+      if (!(await isLogprobsAvailable())) {
         console.warn('⚠️ Skipping: Logprobs not available');
         return;
       }
@@ -381,7 +396,7 @@ describe('IGPPruner', () => {
       const result = await pruner.prune(
         'What is topic 1?',
         chunks,
-        { 
+        {
           enabled: true,
           // No strategy specified - should default to 'threshold'
           nuOptions: { topK: 5, maxTokens: 15 },
@@ -400,7 +415,7 @@ describe('IGPPruner', () => {
     }, 60000);
 
     it('should filter negative-IG chunks with threshold=0', async () => {
-      if (!isLogprobsAvailable()) {
+      if (!(await isLogprobsAvailable())) {
         console.warn('⚠️ Skipping: Logprobs not available');
         return;
       }
@@ -411,7 +426,7 @@ describe('IGPPruner', () => {
       const result = await pruner.prune(
         'What is topic 1?',
         chunks,
-        { 
+        {
           enabled: true,
           strategy: 'threshold',
           threshold: 0, // Filter negative-utility
@@ -436,14 +451,14 @@ describe('IGP QueryOptions Integration', () => {
   it('should have correct default options', async () => {
     // Import types to verify structure
     const { DEFAULT_QUERY_OPTIONS } = await import('../../src/rag/types.js');
-    
+
     expect(DEFAULT_QUERY_OPTIONS.igpOptions).toBeDefined();
     expect(DEFAULT_QUERY_OPTIONS.igpOptions.enabled).toBe(false);
   });
 
   it('should accept valid IGP options structure', async () => {
     const { DEFAULT_QUERY_OPTIONS } = await import('../../src/rag/types.js');
-    
+
     // Create a valid options object
     const options = {
       ...DEFAULT_QUERY_OPTIONS,
