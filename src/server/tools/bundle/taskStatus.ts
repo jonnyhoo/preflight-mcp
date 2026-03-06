@@ -5,7 +5,7 @@
 import * as z from 'zod';
 
 import type { ToolDependencies } from '../types.js';
-import { GetTaskStatusInputSchema, shouldRegisterTool } from './types.js';
+import { GetTaskStatusInputSchema, normalizeCreateRepoInput, shouldRegisterTool } from './types.js';
 import { checkInProgressLock, computeCreateInputFingerprint } from '../../../bundle/service.js';
 import { getProgressTracker, type TaskProgress } from '../../../jobs/progressTracker.js';
 import { wrapPreflightError } from '../../../mcp/errorKinds.js';
@@ -74,7 +74,7 @@ export function registerGetTaskStatusTool({ server, cfg }: ToolDependencies, cor
         let fingerprint = args.fingerprint;
         if (!fingerprint && args.repos?.length) {
           fingerprint = computeCreateInputFingerprint({
-            repos: args.repos,
+            repos: args.repos.map(normalizeCreateRepoInput),
           });
         }
 

@@ -6,7 +6,7 @@ import fs from 'node:fs/promises';
 import * as z from 'zod';
 
 import type { ToolDependencies } from '../types.js';
-import { CreateBundleInputSchema, shouldRegisterTool } from './types.js';
+import { CreateBundleInputSchema, normalizeCreateRepoInput, shouldRegisterTool } from './types.js';
 import { createBundle, createDocumentBundle, createPdfBundlesBatch } from '../../../bundle/service.js';
 import { isParseableDocument } from '../../../bundle/document-ingest.js';
 import { getProgressTracker } from '../../../jobs/progressTracker.js';
@@ -98,9 +98,10 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
       try {
         // Check for config warnings that LLM should know about
         const configWarnings = getConfigWarnings();
+        const normalizedRepos = args.repos.map(normalizeCreateRepoInput);
         
         // Check if this is a multi-PDF request that should create separate bundles
-        const isPdfOnlyRequest = args.repos.length > 0 && args.repos.every((r: any) => r.kind === 'pdf');
+        const isPdfOnlyRequest = normalizedRepos.length > 0 && normalizedRepos.every((r) => r.kind === 'pdf');
         const hasMultiplePdfs = isPdfOnlyRequest && args.repos.length > 1;
         
         // Multi-PDF: Create separate bundles for each PDF (batch parse, individual bundles)
@@ -175,9 +176,9 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
         }
         
         // Check if all inputs are document files (PDF, Office, etc.)
-        const localPaths = args.repos
-          .filter((r: any) => r.kind === 'local' && r.path)
-          .map((r: any) => r.path as string);
+        const localPaths = normalizedRepos
+          .filter((r): r is Extract<(typeof normalizedRepos)[number], { kind: 'local' }> => r.kind === 'local' && !!r.path)
+          .map((r) => r.path);
         
         let documentPaths: string[] = [];
         for (const p of localPaths) {
@@ -262,12 +263,12 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
         const summary = await createBundle(
           cfg,
           {
-            repos: args.repos,
+            repos: normalizedRepos,
           },
           { ifExists: args.ifExists }
         );
 
-        const isPdfOnly = args.repos.length > 0 && args.repos.every((r: any) => r.kind === 'pdf');
+        const isPdfOnly = normalizedRepos.length > 0 && normalizedRepos.every((r) => r.kind === 'pdf');
         const pdfMdFiles = isPdfOnly
           ? summary.repos
               .filter((r) => r.kind === 'pdf')
@@ -340,7 +341,7 @@ export function registerCreateBundleTool({ server, cfg }: ToolDependencies, core
         textResponse += '💡 **Next steps:**\n';
         
         // Detect bundle type for appropriate hints
-        const isWebOnly = args.repos.length > 0 && args.repos.every((r: any) => r.kind === 'web');
+        const isWebOnly = normalizedRepos.length > 0 && normalizedRepos.every((r) => r.kind === 'web');
         
         if (isPdfOnly) {
           textResponse += '- Use `preflight_search_and_read` to search specific content\n';

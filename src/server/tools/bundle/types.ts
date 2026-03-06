@@ -4,6 +4,8 @@
 
 import * as z from 'zod';
 
+import type { RepoInput } from '../../../bundle/manifest.js';
+
 // ==========================================================================
 // Input Schemas
 // ==========================================================================
@@ -48,51 +50,116 @@ export const WebCrawlConfigSchema = z.object({
     .describe('Options for SPA rendering (when useSpa=true)'),
 }).strict().optional();
 
-export const CreateRepoInputSchema = z.union([
-  z.object({
-    kind: z.literal('github'),
-    repo: z.string().describe('GitHub repo in "owner/repo" format. Example: "facebook/react"'),
-    ref: z.string().optional().describe('Git branch or tag. Example: "main", "v18.0.0"'),
-  }),
-  z.object({
-    kind: z.literal('local'),
-    repo: z
-      .string()
-      .describe('Logical identifier in "owner/repo" format for indexing (not necessarily GitHub). If you don’t have one, use "local/<folder>". Example: "local/reverse-mcp-server"'),
-    path: z.string().describe('Absolute path to local directory. Example: "C:\\Projects\\myproject" or "/home/user/myproject"'),
-    ref: z.string().optional().describe('Optional version label. Example: "v1.0", "dev"'),
-  }),
-  z.object({
-    kind: z.literal('web'),
-    url: z.string().url().describe('Documentation site URL to crawl. Example: "https://docs.example.com"'),
-    config: WebCrawlConfigSchema.describe('Optional crawl configuration'),
-  }),
-  z.object({
-    kind: z.literal('pdf'),
-    url: z.string().url().optional().describe('PDF URL to download and parse. Example: "https://arxiv.org/pdf/2512.14982"'),
-    path: z.string().optional().describe('Local file path to PDF. Example: "C:\\\\docs\\\\paper.pdf" or "/home/user/paper.pdf"'),
-    name: z.string().optional().describe('Display name for the document. Example: "Prompt Repetition Paper"'),
-    vlmParser: z.boolean().optional().describe(
-      'Use VLM Parser (parallel Vision-Language Model) instead of default MinerU. ' +
-      'Requires vlmConfigs in config.json. Fails immediately if endpoint unavailable (no fallback).'
-    ),
-    ruleBasedParser: z.boolean().optional().describe(
-      'Use simple rule-based PDF extraction (no API required). ' +
-      'Lower quality but always available. Use as last resort when MinerU/VLM unavailable.'
-    ),
-  }).refine(
-    (data) => data.url || data.path,
-    { message: 'Either url or path must be provided for PDF input' }
+export const CreateRepoInputSchema = z.object({
+  kind: z.enum(['github', 'local', 'web', 'pdf', 'markdown']).describe(
+    'Source kind. Required fields by kind: github=>repo, local=>repo+path, web=>url, pdf=>url or path, markdown=>path.'
   ),
-  z.object({
-    kind: z.literal('markdown'),
-    path: z.string().describe('Absolute path to local directory containing markdown files. Example: "C:\\\\docs\\\\iching" or "/home/user/docs"'),
-    name: z.string().optional().describe('Display name for the document collection. Example: "I Ching Wilhelm Translation"'),
-  }),
-]);
+  repo: z
+    .string()
+    .optional()
+    .describe('GitHub repo or logical local repo id in "owner/repo" format. For local repos, use something like "local/my-project".'),
+  ref: z.string().optional().describe('Git branch, tag, commit, or version label. Example: "main", "v1.0.0", "dev"'),
+  path: z.string().optional().describe('Absolute local path. Used for local repos, local PDFs, or markdown folders.'),
+  url: z.string().url().optional().describe('Remote URL. Used for web docs or PDF URLs.'),
+  config: WebCrawlConfigSchema.describe('Optional crawl configuration for web sources'),
+  name: z.string().optional().describe('Optional display name for PDF or markdown inputs.'),
+  vlmParser: z.boolean().optional().describe(
+    'PDF only. Use VLM Parser (parallel Vision-Language Model) instead of default MinerU. ' +
+    'Requires vlmConfigs in config.json. Fails immediately if endpoint unavailable (no fallback).'
+  ),
+  ruleBasedParser: z.boolean().optional().describe(
+    'PDF only. Use simple rule-based PDF extraction (no API required). ' +
+    'Lower quality but always available. Use as last resort when MinerU/VLM unavailable.'
+  ),
+}).strict().superRefine((data, ctx) => {
+  const requireField = (field: 'repo' | 'path' | 'url', message: string) => {
+    if (!data[field]) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [field],
+        message,
+      });
+    }
+  };
+
+  switch (data.kind) {
+    case 'github':
+      requireField('repo', 'GitHub inputs require repo in "owner/repo" format.');
+      break;
+    case 'local':
+      requireField('repo', 'Local inputs require repo in logical "owner/repo" format, e.g. "local/my-project".');
+      requireField('path', 'Local inputs require an absolute path.');
+      break;
+    case 'web':
+      requireField('url', 'Web inputs require a documentation site URL.');
+      break;
+    case 'pdf':
+      if (!data.url && !data.path) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['url'],
+          message: 'PDF inputs require either url or path.',
+        });
+      }
+      break;
+    case 'markdown':
+      requireField('path', 'Markdown inputs require an absolute directory path.');
+      break;
+  }
+});
+
+export type CreateRepoToolInput = z.infer<typeof CreateRepoInputSchema>;
+
+export type NormalizedCreateRepoInput =
+  | Exclude<RepoInput, { kind: 'pdf' }>
+  | (Extract<RepoInput, { kind: 'pdf' }> & {
+      vlmParser?: boolean;
+      ruleBasedParser?: boolean;
+    });
+
+export function normalizeCreateRepoInput(input: CreateRepoToolInput): NormalizedCreateRepoInput {
+  switch (input.kind) {
+    case 'github':
+      return {
+        kind: 'github',
+        repo: input.repo!,
+        ...(input.ref ? { ref: input.ref } : {}),
+      };
+    case 'local':
+      return {
+        kind: 'local',
+        repo: input.repo!,
+        path: input.path!,
+        ...(input.ref ? { ref: input.ref } : {}),
+      };
+    case 'web':
+      return {
+        kind: 'web',
+        url: input.url!,
+        ...(input.config ? { config: input.config } : {}),
+      };
+    case 'pdf':
+      return {
+        kind: 'pdf',
+        ...(input.url ? { url: input.url } : {}),
+        ...(input.path ? { path: input.path } : {}),
+        ...(input.name ? { name: input.name } : {}),
+        ...(input.vlmParser !== undefined ? { vlmParser: input.vlmParser } : {}),
+        ...(input.ruleBasedParser !== undefined ? { ruleBasedParser: input.ruleBasedParser } : {}),
+      };
+    case 'markdown':
+      return {
+        kind: 'markdown',
+        path: input.path!,
+        ...(input.name ? { name: input.name } : {}),
+      };
+  }
+}
 
 export const CreateBundleInputSchema = {
-  repos: z.array(CreateRepoInputSchema).min(1).describe('Repositories to ingest into the bundle.'),
+  repos: z.array(CreateRepoInputSchema).min(1).describe(
+    'Repositories to ingest into the bundle. Each item is one source descriptor: github=>repo, local=>repo+path, web=>url, pdf=>url or path, markdown=>path.'
+  ),
   ifExists: z
     .enum(['error', 'returnExisting', 'updateExisting', 'createNew'])
     .default('error')
