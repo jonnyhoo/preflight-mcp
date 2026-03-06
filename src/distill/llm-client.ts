@@ -71,7 +71,7 @@ export function getLLMConfig(): LLMConfig {
 export function getVerifierLLMConfig(): LLMConfig {
   const cfg = getConfig();
   const mainConfig = getLLMConfig();
-  
+
   // If verifier LLM is explicitly configured, use it
   if (cfg.verifierLlmEnabled) {
     return {
@@ -81,7 +81,7 @@ export function getVerifierLLMConfig(): LLMConfig {
       enabled: true,
     };
   }
-  
+
   // Otherwise fall back to main LLM (cross-validation still works, just same model)
   return mainConfig;
 }
@@ -98,6 +98,26 @@ export interface LLMCallOptions {
   maxTokens?: number;
   /** Temperature for sampling (0 = greedy, default: 0.3) */
   temperature?: number;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseRetryAfterMs(value: string | null): number | undefined {
+  if (!value) return undefined;
+
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return seconds * 1000;
+  }
+
+  const dateMs = Date.parse(value);
+  if (!Number.isNaN(dateMs)) {
+    return Math.max(0, dateMs - Date.now());
+  }
+
+  return undefined;
 }
 
 export async function callLLM(
@@ -132,19 +152,45 @@ export async function callLLM(
     requestBody.top_logprobs = options.topLogprobs ?? 5; // Default K=5
   }
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${config.apiKey}`,
-    },
-    body: JSON.stringify(requestBody),
-  });
+  const maxAttempts = options?.logprobs ? 3 : 2;
+  let res: Response | undefined;
 
-  if (!res.ok) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (res.ok) {
+      break;
+    }
+
     const text = await res.text();
-    logger.error(`LLM API error: ${res.status} ${text}`);
-    throw new Error(`LLM API error: ${res.status}`);
+    const status = res.status;
+    const shouldRetry = attempt < maxAttempts && (status === 429 || status >= 500);
+
+    if (!shouldRetry) {
+      logger.error(`LLM API error: ${status} ${text}`);
+      throw new Error(`LLM API error: ${status}`);
+    }
+
+    const retryDelayMs =
+      parseRetryAfterMs(res.headers.get('retry-after')) ??
+      attempt * (options?.logprobs ? 1500 : 1000);
+
+    logger.warn(
+      `LLM API transient error: ${status}; retrying in ${retryDelayMs}ms ` +
+      `(attempt ${attempt + 1}/${maxAttempts})`
+    );
+    await sleep(retryDelayMs);
+  }
+
+  if (!res?.ok) {
+    throw new Error('LLM API error: unknown');
   }
 
   // Response type with logprobs
